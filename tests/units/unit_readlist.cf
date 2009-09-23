@@ -1,0 +1,25 @@
+
+
+body common control
+
+{
+bundlesequence  => { "example" };
+}
+
+###########################################################
+
+bundle agent example
+
+{     
+vars:
+
+  "mylist" ilist => { readintlist("/tmp/listofint","#.*","[\n]",10,400) };
+
+reports:
+
+  cfengine_3::
+
+    "List entry: $(mylist)";
+
+}
+

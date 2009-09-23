@@ -1,0 +1,80 @@
+Format-Specification:
+    http://wiki.debian.org/Proposals/CopyrightFormat?action=recall&rev=196
+Upstream-Maintainer: Mark Burgess <Mark.Burgess@iu.hio.no>
+Upstream-Source: http://www.cfengine.org/download.php
+Upstream-Name: cfengine
+
+X-Repackaging-Reasoning:
+  Upstream sources are repackaged to remove a file which contains a pdf but
+  not the source to generate it:
+    + docs/ContributorStatement.pdf
+  .
+  Repackaging is done via debian/repack.sh and can be replayed using "uscan -f"
+
+Files: *
+Copyright: 2008, Cfengine AS
+License: GPL-3
+
+Files: pub/getopt*
+Copyright: 1987-1994, Free Software Foundation, Inc.
+License LGPL-2+
+
+Files: pub/snprintf.c
+Copyright: 1999, Mark Martinec
+License: Frontier Artistic License
+
+Files: debian/*
+Copyright: 2009, Antonio Radici <antonio@dyne.org>
+License: GPL-3
+
+Files: debian/repack.sh
+Copyright: 2008, Damyan Ivanov <dmn@debian.org>
+License: Artistic | GPL-1+
+
+License: GPL-3
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License.
+    On Debian GNU/Linux systems, the complete text of version 3 of the GNU
+    General Public License can be found in `/usr/share/common-licenses/GPL-3'
+
+    In addition, as a special exception, the author of this program gives
+    permission to link the code of its release with the OpenSSL project's
+    "OpenSSL" library (or with modified versions of it that use the same
+    license as the "OpenSSL" library), and distribute the linked executables.
+    You must obey the GNU General Public License in all respects for all of
+    the code used other than "OpenSSL".  If you modify this file, you may
+    extend this exception to your version of the file, but you are not
+    obligated to do so.  If you do not wish to do so, delete this exception
+    statement from your version.
+
+License: LGPL-2+
+    This library is free software; you can redistribute it and/or modify it under
+    the terms of the GNU Library General Public License as published by the Free
+    Software Foundation; either version 2 of the License, or (at your option) any
+    later version.
+    A copy of the LGPL-2 can be found at /usr/share/common-licenses/LGPL-2 on
+    any Debian system.
+
+License: Frontier Artistic License
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the "Frontier Artistic License".
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty
+    of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+    A copy of the Frontier Artistic License can be found at 
+    http://spinwardstars.com/frontier/fal.html
+
+License: Artistic
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the Artistic License, which comes with Perl.
+    On Debian GNU/Linux systems, the complete text of the Artistic License
+    can be found in `/usr/share/common-licenses/Artistic'
+
+License: GPL-1+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 1, or (at your option)
+    any later version.
+    On Debian GNU/Linux systems, the complete text of the GNU General
+    Public License can be found in `/usr/share/common-licenses/GPL'
