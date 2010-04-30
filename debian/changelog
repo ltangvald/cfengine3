@@ -1,3 +1,22 @@
+cfengine3 (3.0.4+dfsg-1) unstable; urgency=low
+
+   * debian/watch: modified to catch the newest versions
+   * debian/control:
+      + removed DMUA
+      + bumped Standards-Version to 3.8.4 (no changed needed)
+   * debian/patches:
+      + all patches refreshed
+      + rename-doesnt-fail: removed, it is incorporated upstream
+      + added some more typos to patches/fix-error-typos
+  * Switch to dpkg-source 3.0 (quilt) format
+      + debian/control: removed quilt from B-D
+      + debian/rules: removed patch/unpatch and quilt include
+      + debian/README.source removed
+  * debian/cfengin3.lintian-overrides:
+      + overridden a spelling error (it is not)
+
+ -- Antonio Radici <antonio@debian.org>  Fri, 30 Apr 2010 08:11:20 +0100
+
 cfengine3 (3.0.2+dfsg-2) unstable; urgency=low
 
   * debian/control: 
