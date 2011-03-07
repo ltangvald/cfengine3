@@ -89,12 +89,15 @@ int res;
 
 res = DoCloseDB(dbp);
 
-if (res)
+if (!res)
    {
-   if (!RemoveDBHandle(dbp))
-      {
-      FatalError("CloseDB: Could not find DB handle in open pool\n");
-      }
+   CfOut(cf_error, "", "CloseDB: Could not close DB handle.");
+   CfOut(cf_error, "", "CloseDB: Trying to remove handle from open pool anyway.");
+   }
+
+if (!RemoveDBHandle(dbp))
+   {
+   CfOut(cf_error, "", "CloseDB: Could not find DB handle in open pool.");
    }
 
 return res;
@@ -105,7 +108,7 @@ return res;
 static int DoCloseDB(CF_DB *dbp)
 {
 #ifdef TCDB
-return TCDB_CloseDB(dbp);;
+return TCDB_CloseDB(dbp);
 #elif defined QDB
 return QDB_CloseDB(dbp);
 #else
@@ -253,125 +256,124 @@ return DeleteComplexKeyDB(dbp,key,strlen(key)+1);
 
 void CloseAllDB(void)
 /* Closes all open DB handles */
-{
-  CF_DB *dbp = NULL;
+
+{ CF_DB *dbp = NULL;
   int i = 0;
 
-  Debug("CloseAllDB()\n");
-  
-  while(true)
-    {
-    if(!GetDBHandle(&dbp))
+Debug("CloseAllDB()\n");
+
+while (true)
+   {
+   if (!GetDBHandle(&dbp))
       {
       FatalError("CloseAllDB: Could not pop next DB handle");
       }
-  
-    if(dbp == NULL)
+   
+   if (dbp == NULL)
       {
       break;
       }
-
-    if(!CloseDB(dbp))
+   
+   if (!CloseDB(dbp))
       {
       CfOut(cf_error, "", "!! CloseAllDB: Could not close DB with this handle");
       }
+   
+   i++;
+   }
 
-      i++;
-    }
-  
-  Debug("Closed %d open DB handles\n", i);
+Debug("Closed %d open DB handles\n", i);
 }
 
 /*****************************************************************************/
 
 static int SaveDBHandle(CF_DB *dbp)
-{
-  int i;
+
+{ int i;
   
-  if (!ThreadLock(cft_dbhandle))
-    {
+if (!ThreadLock(cft_dbhandle))
+   {
+   return false;
+   }
+
+// find first free slot
+i = 0;
+while(OPENDB[i] != NULL)
+   {
+   i++;
+   if(i == MAX_OPENDB)
+      {
+      ThreadUnlock(cft_dbhandle);
+      CfOut(cf_error,"","!! Too many open databases");
       return false;
-    }
+      }
+   }
 
-  // find first free slot
-  i = 0;
-  while(OPENDB[i] != NULL)
-    {
-      i++;
-      if(i == MAX_OPENDB)
-	{
-	  ThreadUnlock(cft_dbhandle);
-	  CfOut(cf_error,"","!! Too many open databases");
-	  return false;
-	}
-    }
-  
-  OPENDB[i] = dbp;
+OPENDB[i] = dbp;
 
-  ThreadUnlock(cft_dbhandle);
-  return true;
-
+ThreadUnlock(cft_dbhandle);
+return true;
 }
 
 /*****************************************************************************/
 
 static int RemoveDBHandle(CF_DB *dbp)
 /* Remove a specific DB handle */
-{
-  int i;
 
-  if (!ThreadLock(cft_dbhandle))
-    {
+{ int i;
+
+if (!ThreadLock(cft_dbhandle))
+   {
+   return false;
+   }
+
+i = 0;
+
+while(OPENDB[i] != dbp)
+   {
+   i++;
+   if(i == MAX_OPENDB)
+      {
+      ThreadUnlock(cft_dbhandle);
+      CfOut(cf_error,"","!! Database handle was not found");
       return false;
-    }
+      }
+   }
 
-  i = 0;
+// free slot
+OPENDB[i] = NULL;
 
-  while(OPENDB[i] != dbp)
-    {
-      i++;
-      if(i == MAX_OPENDB)
-	{
-	  ThreadUnlock(cft_dbhandle);
-	  CfOut(cf_error,"","!! Database handle was not found");
-	  return false;
-	}
-    }
-
-  // free slot
-  OPENDB[i] = NULL;
-
-  ThreadUnlock(cft_dbhandle);
-  return true;
+ThreadUnlock(cft_dbhandle);
+return true;
 }
 
 /*****************************************************************************/
 
 static int GetDBHandle(CF_DB **dbp)
 /* Return the first unused DB handle in the parameter - NULL if empty */
-{
-  int i;
 
-  if (!ThreadLock(cft_dbhandle))
+{ int i;
+
+if (!ThreadLock(cft_dbhandle))
+   {
+   return false;
+   }
+
+i = 0;
+
+while (OPENDB[i] == NULL)
     {
-      return false;
+    i++;
+    if(i == MAX_OPENDB)
+       {
+       ThreadUnlock(cft_dbhandle);
+       *dbp = NULL;
+       return true;
+       }
     }
 
-  i = 0;
-  
-  while(OPENDB[i] == NULL)
-    {
-      i++;
-      if(i == MAX_OPENDB)
-	{
-	  ThreadUnlock(cft_dbhandle);
-	  *dbp = NULL;
-	  return true;
-	}
-    }
+*dbp = OPENDB[i];
 
-  *dbp = OPENDB[i];
-
-  ThreadUnlock(cft_dbhandle);
-  return true;
+ThreadUnlock(cft_dbhandle);
+return true;
 }

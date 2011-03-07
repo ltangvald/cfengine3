@@ -53,6 +53,10 @@ int LOOKUP = false;
 int VIEWS = true;
 int IGNORE_MISSING_INPUTS = false;
 int IGNORE_MISSING_BUNDLES = false;
+int FIPS_MODE = false;
+int ALWAYS_VALIDATE = false;
+
+unsigned int CFTEST_CLASS = 0;
 
 struct utsname VSYSNAME;
 
@@ -70,16 +74,19 @@ int AM_BACKGROUND_PROCESS = false;
 int CF_PERSISTENCE = 10;
 
 char *THIS_BUNDLE = NULL;
-char THIS_AGENT[CF_MAXVARSIZE];
+char THIS_AGENT[CF_MAXVARSIZE] = {0};
 enum cfagenttype THIS_AGENT_TYPE;
-char SYSLOGHOST[CF_MAXVARSIZE];
+char SYSLOGHOST[CF_MAXVARSIZE] = {0};
 unsigned short SYSLOGPORT = 514;
 int FACILITY = 0;
-time_t PROMISETIME;
+time_t PROMISETIME = 0;
+time_t CF_LOCKHORIZON = CF_MONTH;
 
 int LICENSES = 0;
-char EXPIRY[32];
+char EXPIRY[CF_SMALLBUF] = {0};
+char LICENSE_COMPANY[CF_SMALLBUF] = {0};
 int INSTALL_SKIP = false;
+int KEYTTL = 0;
 
 // These are used to measure graph complexity in know/agent
 
@@ -92,11 +99,13 @@ struct Rlist *MOUNTEDFSLIST = NULL;
 struct Rlist *SERVERLIST = NULL;
 struct PromiseIdent *PROMISE_ID_LIST = NULL;
 struct Item *PROCESSTABLE = NULL;
+struct Item *PROCESSREFRESH = NULL;
 struct Item *ROTATED = NULL;
 struct Item *FSTABLIST = NULL;
 struct Item *ABORTBUNDLEHEAP = NULL;
 struct Item *DONELIST = NULL;
 struct Rlist *CBUNDLESEQUENCE = NULL;
+struct Rlist *SERVER_KEYSEEN = NULL;
 
 #ifdef HAVE_LIBVIRT
 virConnectPtr CFVC[cfv_none];
@@ -109,7 +118,7 @@ int FSTAB_EDITS;
 int ABORTBUNDLE = false;
 int BOOTSTRAP = false;
 
-char HASHDB[CF_BUFSIZE];
+char HASHDB[CF_BUFSIZE] = {0};
 
 /*****************************************************************************/
 /* Measurements                                                              */
@@ -127,7 +136,7 @@ double Q_MIN;
 /* Internal data structures                                                  */
 /*****************************************************************************/
 
-struct PromiseParser P;
+struct PromiseParser P = {0};
 struct Bundle *BUNDLES = NULL;
 struct Body *BODIES = NULL;
 struct Scope *VSCOPE = NULL;
@@ -149,13 +158,22 @@ int LASTSEEN = false;
 
 struct Topic *TOPIC_MAP = NULL;
 
-char POLICY_SERVER[CF_BUFSIZE];
+char POLICY_SERVER[CF_BUFSIZE] = {0};
 
-char WEBDRIVER[CF_MAXVARSIZE];
-char BANNER[2*CF_BUFSIZE];
-char FOOTER[CF_BUFSIZE];
-char STYLESHEET[CF_BUFSIZE];
-char AGGREGATION[CF_BUFSIZE];
+char WEBDRIVER[CF_MAXVARSIZE] = {0};
+char DOCROOT[CF_MAXVARSIZE] = {0};
+char BANNER[2*CF_BUFSIZE] = {0};
+char FOOTER[CF_BUFSIZE] = {0};
+char STYLESHEET[CF_BUFSIZE] = {0};
+char AGGREGATION[CF_BUFSIZE] = {0};
+struct Topic *TOPICHASH[CF_HASHTABLESIZE];
+
+char SQL_DATABASE[CF_MAXVARSIZE] = {0};
+char SQL_OWNER[CF_MAXVARSIZE] = {0};
+char SQL_PASSWD[CF_MAXVARSIZE] = {0};
+char SQL_SERVER[CF_MAXVARSIZE] = {0};
+char SQL_CONNECT_NAME[CF_MAXVARSIZE] = {0};
+enum cfdbtype SQL_TYPE = cfd_notype;
 
 /*****************************************************************************/
 /* Windows version constants                                                 */
@@ -246,6 +264,7 @@ char *CF_AGENTTYPES[] = /* see enum cfagenttype */
    CF_KNOWC,
    CF_REPORTC,
    CF_KEYGEN,
+   CF_HUBC,
    "<notype>",
    };
 
@@ -263,32 +282,32 @@ int D2 = false;
 int AUDIT = false;
 int LOGGING = false;
 
-char  VFQNAME[CF_MAXVARSIZE];
-char  VUQNAME[CF_MAXVARSIZE];
-char  VDOMAIN[CF_MAXVARSIZE];
+char  VFQNAME[CF_MAXVARSIZE] = {0};
+char  VUQNAME[CF_MAXVARSIZE] = {0};
+char  VDOMAIN[CF_MAXVARSIZE] = {0};
 
-char  VYEAR[5];
-char  VDAY[3];
-char  VMONTH[4];
-char  VHR[3];
-char  VMINUTE[3];
-char  VSEC[3];
-char  VSHIFT[12];
-char  VLIFECYCLE[12];
+char  VYEAR[5] = {0};
+char  VDAY[3] = {0};
+char  VMONTH[4] = {0};
+char  VHR[3] = {0};
+char  VMINUTE[3] = {0};
+char  VSEC[3] = {0};
+char  VSHIFT[12] = {0};
+char  VLIFECYCLE[12] = {0};
 
 char PADCHAR = ' ';
 char PURGE = 'n';
 
 int ERRORCOUNT = 0;
-char VPREFIX[CF_MAXVARSIZE];
-char VINPUTFILE[CF_BUFSIZE];
+char VPREFIX[CF_MAXVARSIZE] = {0};
+char VINPUTFILE[CF_BUFSIZE] = {0};
 
-char CONTEXTID[32];
-char CFPUBKEYFILE[CF_BUFSIZE];
-char CFPRIVKEYFILE[CF_BUFSIZE];
-char AVDB[CF_MAXVARSIZE];
-char CFWORKDIR[CF_BUFSIZE];
-char PIDFILE[CF_BUFSIZE];
+char CONTEXTID[32] = {0};
+char CFPUBKEYFILE[CF_BUFSIZE] = {0};
+char CFPRIVKEYFILE[CF_BUFSIZE] = {0};
+char AVDB[CF_MAXVARSIZE] = {0};
+char CFWORKDIR[CF_BUFSIZE] = {0};
+char PIDFILE[CF_BUFSIZE] = {0};
 
 char *DEFAULT_COPYTYPE = NULL;
 
@@ -305,6 +324,9 @@ pthread_mutex_t MUTEX_DBHANDLE = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 pthread_mutex_t MUTEX_POLICY = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 pthread_mutex_t MUTEX_GETADDR = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 pthread_mutex_t MUTEX_DB_LASTSEEN = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
+pthread_mutex_t MUTEX_DB_REPORT = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
+pthread_mutex_t MUTEX_VSCOPE = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
+pthread_mutex_t MUTEX_SERVER_KEYSEEN = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
 #else
 # if defined HAVE_PTHREAD_H && (defined HAVE_LIBPTHREAD || defined BUILDTIN_GCC_THREAD)
 pthread_mutex_t MUTEX_SYSCALL = PTHREAD_MUTEX_INITIALIZER;
@@ -315,12 +337,14 @@ pthread_mutex_t MUTEX_DBHANDLE = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t MUTEX_POLICY = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t MUTEX_GETADDR = PTHREAD_MUTEX_INITIALIZER;
 pthread_mutex_t MUTEX_DB_LASTSEEN = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t MUTEX_DB_REPORT = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t MUTEX_VSCOPE = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t MUTEX_SERVER_KEYSEEN = PTHREAD_MUTEX_INITIALIZER;
 # endif
 #endif
 
 unsigned short PORTNUMBER = 0;
-char VIPADDRESS[18];
-int  CF_TIMEOUT = 10;
+char VIPADDRESS[18] = {0};
 int  CFSIGNATURE = 0;
 
 char *PROTOCOL[] =
@@ -343,15 +367,11 @@ char *PROTOCOL[] =
    "SVAR",
    "CONTEXT",
    "SCONTEXT",
+   "SQUERY",
    NULL
    };
 
 struct Item *IPADDRESSES = NULL;
-struct Item *VHEAP = NULL;
-struct Item *VNEGHEAP = NULL;
-struct Item *VDELCLASSES = NULL;
-struct Item *VADDCLASSES=NULL;           /* Action sequence defs  */
-struct Rlist *PRIVCLASSHEAP = NULL;
 
 int PR_KEPT = 0;
 int PR_REPAIRED = 0;
@@ -361,8 +381,19 @@ double VAL_KEPT = 0;
 double VAL_REPAIRED = 0;
 double VAL_NOTKEPT = 0;
 
-char FILE_SEPARATOR;
-char FILE_SEPARATOR_STR[2];
+char FILE_SEPARATOR = {0};
+char FILE_SEPARATOR_STR[2] = {0};
+
+
+/*******************************************************************/
+/* Context Management                                              */
+/*******************************************************************/
+
+struct AlphaList VHEAP;
+struct AlphaList VADDCLASSES;
+struct Item *VNEGHEAP = NULL;
+struct Item *VDELCLASSES = NULL;
+struct Rlist *PRIVCLASSHEAP = NULL;
 
 /*******************************************************************/
 /*                                                                 */
@@ -401,6 +432,9 @@ int CF_DIGEST_SIZES[10] =
      0
      };
 
+enum cfhashes CF_DEFAULT_DIGEST;
+int CF_DEFAULT_DIGEST_LEN;
+
 /***********************************************************/
 
 struct Audit *AUDITPTR;
@@ -408,13 +442,13 @@ struct Audit *VAUDIT = NULL;
 FILE *VLOGFP = NULL; 
 CF_DB  *AUDITDBP = NULL;
 
-char GRAPHDIR[CF_BUFSIZE];
-char CFLOCK[CF_BUFSIZE];
-char SAVELOCK[CF_BUFSIZE]; 
-char CFLOG[CF_BUFSIZE];
-char CFLAST[CF_BUFSIZE]; 
-char LOCKDB[CF_BUFSIZE];
-char LOGFILE[CF_MAXVARSIZE];
+char GRAPHDIR[CF_BUFSIZE] = {0};
+char CFLOCK[CF_BUFSIZE] = {0};
+char SAVELOCK[CF_BUFSIZE] = {0}; 
+char CFLOG[CF_BUFSIZE] = {0};
+char CFLAST[CF_BUFSIZE] = {0}; 
+char LOCKDB[CF_BUFSIZE] = {0};
+char LOGFILE[CF_MAXVARSIZE] = {0};
 
 char *SIGNALS[highest_signal];
 char *VSETUIDLOG = NULL;
@@ -422,12 +456,12 @@ char *VSETUIDLOG = NULL;
 time_t CFSTARTTIME;
 time_t CFINITSTARTTIME;
 dev_t ROOTDEVICE = 0;
-char  STR_CFENGINEPORT[16];
+char  STR_CFENGINEPORT[16] = {0};
 unsigned short SHORT_CFENGINEPORT;
-int RPCTIMEOUT = 60;          /* seconds */
+time_t CONNTIMEOUT = 10;	   /* seconds */
+time_t RECVTIMEOUT = 30;	   /* seconds */
+int RPCTIMEOUT = 60;			/* seconds */
 pid_t ALARM_PID = -1;
-int SENSIBLEFILECOUNT = 2;
-int SENSIBLEFSSIZE = 1000;
 int SKIPIDENTIFY = false;
 int ALL_SINGLECOPY = false;
 int FULLENCRYPT = false;
@@ -438,7 +472,7 @@ int VIFELAPSED = 1;
 int VEXPIREAFTER = 120;
 int UNDERSCORE_CLASSES=false;
 int CHECKSUMUPDATES = false;
-char BINDINTERFACE[CF_BUFSIZE];
+char BINDINTERFACE[CF_BUFSIZE] = {0};
 int MINUSF = false;
 int EXCLAIM = true;
 
@@ -497,9 +531,9 @@ char *TCPNAMES[CF_NETATTR] =
 
 char *OBS[CF_OBSERVABLES][2] =
     {
-    "users","Users logged in",
-    "rootprocs","Privileged system processes",
-    "otherprocs","Non-privileged process",
+    "users","Users with active processes",
+    "rootprocs","Sum privileged system processes",
+    "otherprocs","Sum non-privileged process",
     "diskfree","Free disk on / partition",
     "loadavg","% kernel load utilization",
     "netbiosns_in","netbios name lookups (in)",
@@ -590,5 +624,5 @@ char *OBS[CF_OBSERVABLES][2] =
     "spare","unused",
     };
 
-char *UNITS[CF_OBSERVABLES];
-time_t DATESTAMPS[CF_OBSERVABLES];
+char *UNITS[CF_OBSERVABLES] = {0};
+time_t DATESTAMPS[CF_OBSERVABLES] = {0};

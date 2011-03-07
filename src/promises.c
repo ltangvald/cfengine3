@@ -129,12 +129,13 @@ if (pcopy->promiser == NULL || (pp->promisee != NULL && pcopy->promisee == NULL)
    FatalError("memory");
    }
 
-pcopy->bundletype = pp->bundletype;
+pcopy->bundletype = strdup(pp->bundletype);
 pcopy->audit = pp->audit;
 pcopy->lineno = pp->lineno;
 pcopy->petype = pp->petype;      /* rtype of promisee - list or scalar recipient? */
 pcopy->bundle = strdup(pp->bundle);
 pcopy->ref = pp->ref;
+pcopy->ref_alloc = pp->ref_alloc;
 pcopy->agentsubtype = pp->agentsubtype;
 pcopy->done = pp->done;
 pcopy->conlist = NULL;
@@ -147,8 +148,6 @@ pcopy->conn = pp->conn;
 pcopy->edcontext = pp->edcontext;
 
 Debug("Copying promise constraints\n\n");
-
-
 
 /* No further type checking should be necessary here, already done by CheckConstraintTypeMatch */
 
@@ -190,7 +189,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
       {
       if (strcmp(bp->type,cp->lval) != 0)
          {
-         CfOut(cf_error,"","Body type mismatch for body reference \"%s\" in promise at line %d of %s\n",bodyname,pp->lineno,(pp->audit)->filename);
+         CfOut(cf_error,"","Body type mismatch for body reference \"%s\" in promise at line %d of %s (%s != %s)\n",bodyname,pp->lineno,(pp->audit)->filename,bp->type,cp->lval);
          ERRORCOUNT++;
          }
       
@@ -232,7 +231,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
          if (fp != NULL)
             {
-            CfOut(cf_error,"","body \"%s()\" was undeclared, but used in a promise near line %d of %s",bodyname,pp->lineno,(pp->audit)->filename);
+            CfOut(cf_error,"","An apparent body \"%s()\" was undeclared or could have incorrect args, but used in a promise near line %d of %s (possible unquoted literal value)",bodyname,pp->lineno,(pp->audit)->filename);
             }
          else
             {
@@ -247,6 +246,11 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
       }
    else
       {
+      if (cp->isbody && !IsBundle(BUNDLES,bodyname))
+         {
+         CfOut(cf_error,"","Apparent body \"%s()\" was undeclared, but used in a promise near line %d of %s (possible unquoted literal value)",bodyname,pp->lineno,(pp->audit)->filename);
+         }
+      
       rnew = CopyRvalItem(cp->rval,cp->type);
       scp = AppendConstraint(&(pcopy->conlist),cp->lval,rnew,cp->type,cp->classes,false);
       }
@@ -303,14 +307,14 @@ if (pcopy->promiser == NULL || pcopy->classes == NULL)
    FatalError("memory");
    }
 
-pcopy->bundletype = pp->bundletype;
+pcopy->bundletype = strdup(pp->bundletype);
 pcopy->done = pp->done;
 pcopy->donep = pp->donep;
 pcopy->audit = pp->audit;
 pcopy->lineno = pp->lineno;
 pcopy->bundle = strdup(pp->bundle);
 pcopy->ref = pp->ref;
-
+pcopy->ref_alloc = pp->ref_alloc;
 pcopy->agentsubtype = pp->agentsubtype;
 pcopy->conlist = NULL;
 pcopy->next = NULL;
@@ -320,7 +324,9 @@ pcopy->this_server = pp->this_server;
 pcopy->conn = pp->conn;
 pcopy->edcontext = pp->edcontext;
 
+
 /* No further type checking should be necessary here, already done by CheckConstraintTypeMatch */
+
 
 for (cp = pp->conlist; cp != NULL; cp=cp->next)
    {
@@ -337,6 +343,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
       {
       returnval = EvaluateFinalRval(scopeid,cp->rval,cp->type,false,pp);   
       final = ExpandDanglers(scopeid,returnval,pp);
+      DeleteRvalItem(returnval.item,returnval.rtype);
       }
 
    AppendConstraint(&(pcopy->conlist),cp->lval,final.item,final.rtype,cp->classes,false);
@@ -355,11 +362,8 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
             {
             DereferenceComment(pcopy);
             }
-         
-
          }
       }
-
    }
 
 return pcopy;
@@ -411,13 +415,14 @@ if (pcopy->promiser == NULL || pcopy->classes == NULL)
    FatalError("memory");
    }
 
-pcopy->bundletype = pp->bundletype;
+pcopy->bundletype = strdup(pp->bundletype);
 pcopy->done = pp->done;
 pcopy->donep = pp->donep;
 pcopy->audit = pp->audit;
 pcopy->lineno = pp->lineno;
 pcopy->bundle = strdup(pp->bundle);
 pcopy->ref = pp->ref;
+pcopy->ref_alloc = pp->ref_alloc;
 pcopy->agentsubtype = pp->agentsubtype;
 pcopy->conlist = NULL;
 pcopy->next = NULL;
@@ -491,12 +496,14 @@ if (pp->promisee != NULL)
    {
    fprintf(stdout,"%s promise by \'%s\' -> ",pp->agentsubtype,pp->promiser);
    ShowRval(stdout,pp->promisee,pp->petype);
-   fprintf(stdout," if context is %s\n\n",pp->classes);
+   fprintf(stdout," if context is %s\n",pp->classes);
    }
 else
    {
-   fprintf(stdout,"%s promise by \'%s\' (implicit) if context is %s\n\n",pp->agentsubtype,pp->promiser,pp->classes);
+   fprintf(stdout,"%s promise by \'%s\' (implicit) if context is %s\n",pp->agentsubtype,pp->promiser,pp->classes);
    }
+
+fprintf(stdout,"in bundle %s of type %s\n",pp->bundle,pp->bundletype);
 
 for (cp = pp->conlist; cp != NULL; cp = cp->next)
    {
@@ -598,7 +605,7 @@ if (pp->this_server != NULL)
    free(pp->this_server);
    ThreadUnlock(cft_policy);
    }
- 
+
 if (pp->next != NULL)
    {
    DeletePromises(pp->next);
@@ -630,7 +637,7 @@ if ((pp = (struct Promise *)malloc(sizeof(struct Promise))) == NULL)
 
 pp->audit = AUDITPTR;
 pp->lineno = 0;
-pp->bundle =  strdup("independent");
+pp->bundle =  strdup("internal_bundle");
 pp->promiser = strdup(promiser);
 
 ThreadUnlock(cft_policy);
@@ -638,7 +645,6 @@ ThreadUnlock(cft_policy);
 pp->promisee = NULL;
 pp->petype = CF_NOPROMISEE;
 pp->classes = NULL;
-pp->conlist = NULL;
 pp->done = false;
 pp->donep = &(pp->done);
 
@@ -651,7 +657,13 @@ pp->cache = NULL;
 pp->bundletype = NULL;
 pp->agentsubtype = typename;   /* cache this, not copy strdup(typename);*/
 pp->ref = NULL;                /* cache a reference if given*/
+pp->ref_alloc = 'n';
 pp->next = NULL;
+
+
+pp->conlist = NULL;  // this fn is used for internal promises only
+AppendConstraint(&(pp->conlist), "handle", strdup("internal_promise"),CF_SCALAR,NULL,false);
+
 return pp;
 }
 
@@ -660,12 +672,12 @@ return pp;
 void DeletePromise(struct Promise *pp)
 
 {
-Debug("DeletePromise(%s->[%c])\n",pp->promiser,pp->petype);
-
 if (pp == NULL)
    {
    return;
    }
+
+Debug("DeletePromise(%s->[%c])\n",pp->promiser,pp->petype);
 
 ThreadLock(cft_policy);
 
@@ -680,6 +692,7 @@ if (pp->promisee != NULL)
    }
 
 free(pp->bundle);
+free(pp->bundletype);
 free(pp->classes);
 
 // ref and agentsubtype are only references, do not free
@@ -696,7 +709,7 @@ void DeleteDeRefPromise(char *scopeid,struct Promise *pp)
 
 { struct Constraint *cp;
 
-Debug("ExpandDerefPromise()\n");
+Debug("DeleteDeRefPromise()\n");
 
 free(pp->promiser);
 
@@ -776,11 +789,20 @@ md = EVP_get_digestbyname(FileHashName(type));
    
 EVP_DigestInit(&context,md);
 
-EVP_DigestUpdate(&context,pp->promiser,strlen(pp->promiser));
+// multiple packages (promisers) may share same package_list_update_ifelapsed lock
+if (!(salt && (strncmp(salt, PACK_UPIFELAPSED_SALT, sizeof(PACK_UPIFELAPSED_SALT) - 1) == 0)))
+   {
+   EVP_DigestUpdate(&context,pp->promiser,strlen(pp->promiser));
+   }
 
 if (pp->ref)
    {
    EVP_DigestUpdate(&context,pp->ref,strlen(pp->ref));
+   }
+
+if (pp->this_server)
+   {
+   EVP_DigestUpdate(&context,pp->this_server,strlen(pp->this_server));
    }
 
 if (salt)
@@ -797,14 +819,14 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
    for (i = 0; noRvalHash[i] != NULL; i++ )
       {
-      if(strcmp(cp->lval, noRvalHash[i]) == 0)
+      if (strcmp(cp->lval, noRvalHash[i]) == 0)
 	 {
          doHash = false;
          break;
 	 }
       }
    
-   if(!doHash)
+   if (!doHash)
       {
       continue;
       }

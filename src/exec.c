@@ -71,7 +71,6 @@ int CompareResult(char *filename,char *prev_file);
 void MailResult(char *file,char *to);
 int Dialogue(int sd,char *s);
 void Apoptosis(void);
-void DebugExecMemory(char *ref);
 
 /*******************************************************************/
 /* Command line options                                            */
@@ -287,6 +286,7 @@ if (SCHEDULE == NULL)
    AppendItem(&SCHEDULE,"Min25",NULL);   
    AppendItem(&SCHEDULE,"Min30",NULL);
    AppendItem(&SCHEDULE,"Min35",NULL);
+   AppendItem(&SCHEDULE,"Min40",NULL);
    AppendItem(&SCHEDULE,"Min45",NULL);
    AppendItem(&SCHEDULE,"Min50",NULL);
    AppendItem(&SCHEDULE,"Min55",NULL);
@@ -355,7 +355,7 @@ for (cp = ControlBodyConstraints(cf_executor); cp != NULL; cp=cp->next)
       {
       int hash,time = Str2Int(retval);
       snprintf(splay,CF_BUFSIZE,"%s+%s+%d",VFQNAME,VIPADDRESS,getuid());
-      hash = Hash(splay);
+      hash = GetHash(splay);
       SPLAYTIME = (int)(time*60*hash/CF_HASHTABLESIZE);
       }
 
@@ -396,7 +396,7 @@ dummyattr.transaction.expireafter = CF_EXEC_EXPIREAFTER;
 
 if (!ONCE)
    {
-   thislock = AcquireLock(pp->promiser,VUQNAME,CFSTARTTIME,dummyattr,pp);
+   thislock = AcquireLock(pp->promiser,VUQNAME,CFSTARTTIME,dummyattr,pp,false);
 
    if (thislock.lock == NULL)
       {
@@ -409,7 +409,7 @@ Apoptosis();
 
 #ifdef MINGW
 
-if(!NO_FORK)
+if (!NO_FORK)
   {
   CfOut(cf_verbose, "", "Windows does not support starting processes in the background - starting in foreground");
   }
@@ -428,11 +428,6 @@ if (!NO_FORK)
    }
    
 #endif  /* NOT MINGW */
-
-if (!ONCE)
-   {
-   MYTWIN = StartTwin(argc,argv);
-   }
 
 WritePID("cf-execd.pid");
 signal(SIGINT,HandleSignals);
@@ -507,27 +502,19 @@ else
          pthread_attr_setstacksize(&PTHREADDEFAULTS,(size_t)2048*1024);
 #endif
 
-         DebugExecMemory("Before thread");
-
          if (pthread_create(&tid,&PTHREADDEFAULTS,LocalExec,(void *)1) != 0)
             {
             CfOut(cf_inform,"pthread_create","Can't create thread!");
             LocalExec((void *)1);
             }
 
-         DebugExecMemory("after-thread-before-free");
-
          ThreadLock(cft_system);
          pthread_attr_destroy(&PTHREADDEFAULTS);
          ThreadUnlock(cft_system);
-         
-         DebugExecMemory("After free");
 #else
          LocalExec((void *)1);  
 #endif
          }
-
-      ReviveOther(argc,argv);
       }
    }
 
@@ -543,7 +530,7 @@ if (!ONCE)
 
 void Apoptosis()
 
-{ struct Promise pp;
+{ struct Promise pp = {0};
   struct Rlist *signals = NULL, *owners = NULL;
   char mypid[32],pidrange[32];
   char *psopts = GetProcessOptions();
@@ -593,7 +580,7 @@ AppendConstraint(&(pp.conlist),"process_select",strdup("true"),CF_SCALAR,"any",f
 AppendConstraint(&(pp.conlist),"process_owner",owners,CF_LIST,"any",false);
 AppendConstraint(&(pp.conlist),"ifelapsed",strdup("0"),CF_SCALAR,"any",false);
 AppendConstraint(&(pp.conlist),"process_count",strdup("true"),CF_SCALAR,"any",false);
-AppendConstraint(&(pp.conlist),"match_range",strdup("0,4"),CF_SCALAR,"any",false);
+AppendConstraint(&(pp.conlist),"match_range",strdup("0,2"),CF_SCALAR,"any",false);
 AppendConstraint(&(pp.conlist),"process_result",strdup("process_owner.process_count"),CF_SCALAR,"any",false);
 
 CfOut(cf_verbose,""," -> Looking for cf-execd processes owned by %s",mypid);
@@ -620,11 +607,6 @@ int ScheduleRun()
 { time_t now;
   char timekey[64];
   struct Item *ip;
-  
-DebugExecMemory("Run 0.1");
-
-SignalTwin();
-DebugExecMemory("Run 0.2");
 
 CfOut(cf_verbose,"","Sleeping...\n");
 sleep(CFPULSETIME);                /* 1 Minute resolution is enough */ 
@@ -632,28 +614,29 @@ now = time(NULL);
 
 // recheck license (in case of license updates or expiry)
 
-DebugExecMemory("0.3");
-
-/*
-if (EnterpriseExpiry(LIC_DAY,LIC_MONTH,LIC_YEAR)) 
+if (EnterpriseExpiry(LIC_DAY,LIC_MONTH,LIC_YEAR,LIC_COMPANY)) 
   {
   CfOut(cf_error,"","Cfengine - autonomous configuration engine. This enterprise license is invalid.\n");
   exit(1);
   }
-*/
-
-DebugExecMemory("Run 1");
 
 ThreadLock(cft_system);
-DeleteItemList(VHEAP);
-VHEAP = NULL;
-DeleteItemList(VADDCLASSES);
-VADDCLASSES = NULL;
+
+DeleteAlphaList(&VHEAP);
+InitAlphaList(&VHEAP);
+DeleteAlphaList(&VADDCLASSES);
+InitAlphaList(&VADDCLASSES);
+
 DeleteItemList(IPADDRESSES);
 IPADDRESSES = NULL;
+
 DeleteScope("this");
 DeleteScope("mon");
 DeleteScope("sys");
+NewScope("this");
+NewScope("mon");
+NewScope("sys");
+
 CfGetInterfaceInfo(cf_executor);
 Get3Environment();
 OSClasses();
@@ -662,8 +645,6 @@ snprintf(timekey,63,"%s",cf_ctime(&now));
 AddTimeClass(timekey); 
 ThreadUnlock(cft_system);
 
-DebugExecMemory("Run 1.1");
-
 for (ip = SCHEDULE; ip != NULL; ip = ip->next)
    {
    CfOut(cf_verbose,"","Checking schedule %s...\n",ip->name);
@@ -671,12 +652,10 @@ for (ip = SCHEDULE; ip != NULL; ip = ip->next)
    if (IsDefinedClass(ip->name))
       {
       CfOut(cf_verbose,"","Waking up the agent at %s ~ %s \n",timekey,ip->name);
-      DebugExecMemory("Run schedules");
       return true;
       }
    }
 
-DebugExecMemory("Run - unscheduled");
 return false;
 }
 
@@ -702,7 +681,7 @@ return buf;
 void *LocalExec(void *scheduled_run)
 
 { FILE *pp; 
-  char line[CF_BUFSIZE],filename[CF_BUFSIZE],*sp;
+  char line[CF_BUFSIZE],lineEscaped[sizeof(line)*2],filename[CF_BUFSIZE],*sp;
   char cmd[CF_BUFSIZE],esc_command[CF_BUFSIZE];
   int print,count = 0;
   void *threadName;
@@ -724,8 +703,6 @@ threadName = NULL;
 CfOut(cf_verbose,"","------------------------------------------------------------------\n\n");
 CfOut(cf_verbose,"","  LocalExec(%sscheduled) at %s\n", scheduled_run ? "" : "not ", cf_ctime(&starttime));
 CfOut(cf_verbose,"","------------------------------------------------------------------\n"); 
-
-DebugExecMemory("LocalExec 1");
 
 /* Need to make sure we have LD_LIBRARY_PATH here or children will die  */
 
@@ -781,7 +758,7 @@ else
          twin_exists = true;
          }
       
-      if (IsExecutable(cmd))
+      if (twin_exists && IsExecutable(cmd))
 	 {
          snprintf(cmd,CF_BUFSIZE-1,"\"%s/bin/cf-twin\" -f failsafe.cf && \"%s/bin/cf-agent%s\" -Dfrom_cfexecd%s",
                   CFWORKDIR,
@@ -799,8 +776,6 @@ else
 	 }
       }   
    }
-
-DebugExecMemory("LocalExec 2");
 
 strncpy(esc_command,MapName(cmd),CF_BUFSIZE-1);
    
@@ -848,31 +823,34 @@ while (!feof(pp) && CfReadLine(line,CF_BUFSIZE,pp))
    
    if (print)
       {
-      fprintf(fp,"%s\n",line);
+      // we must escape print format chars (%) from output
+
+      ReplaceStr(line,lineEscaped,sizeof(lineEscaped),"%","%%");
+
+      fprintf(fp,"%s\n",lineEscaped);
       count++;
       
       /* If we can't send mail, log to syslog */
       
       if (strlen(MAILTO) == 0)
          {
-         strncat(line,"\n",CF_BUFSIZE-1-strlen(line));
-         if ((strchr(line,'\n')) == NULL)
+	 strncat(lineEscaped,"\n",sizeof(lineEscaped)-1-strlen(lineEscaped));
+         if ((strchr(lineEscaped,'\n')) == NULL)
             {
-            line[CF_BUFSIZE-2] = '\n';
+	    lineEscaped[sizeof(lineEscaped)-2] = '\n';
             }
          
-         CfOut(cf_inform,"",line);
+         CfOut(cf_inform,"",lineEscaped);
          }
       
       line[0] = '\0';
+      lineEscaped[0] = '\0';
       }
    }
  
 cf_pclose(pp);
 Debug("Closing fp\n");
 fclose(fp);
-
-DebugExecMemory("LocalExec 3");
 
 if (ONCE)
    {
@@ -892,7 +870,6 @@ else
    unlink(filename);
    }
 
-DebugExecMemory("LocalExec 4");
 return NULL; 
 }
 
@@ -996,23 +973,11 @@ if (!ThreadLock(cft_count))
 
 unlink(prev_file);
 
-#ifdef MINGW
-
-if (!CopyFile(filename, prev_file, TRUE))
-  {
-  CfOut(cf_inform,"CopyFile","Could copy %s to %s",filename,prev_file);
-  rtn = 1;
-  }
-
-#else  /* NOT MINGW */
-
-if (symlink(filename, prev_file) == -1)
+ if(!LinkOrCopy(filename,prev_file,true))
    {
-   CfOut(cf_inform,"symlink","Could not link %s and %s",filename,prev_file);
-   rtn = 1;
+     CfOut(cf_inform,"","Could symlink or copy %s to %s",filename,prev_file);
+     rtn = 1;
    }
-   
-#endif  /* NOT MINGW */
 
 ThreadUnlock(cft_count);
 return(rtn);
@@ -1311,53 +1276,6 @@ while (recv(sd,&ch,1,0))
    }
 
 return ((f == '2') || (f == '3')); /* return code 200 or 300 from smtp*/
-}
-
-/******************************************************************/
-
-void DebugExecMemory(char *ref)
-
-{ char buffer[CF_EXPANDSIZE],line[CF_BUFSIZE],*sp;
- static int size = 0, mem;
-
-if (DEBUG)
-   {
-   sleep(1);
-
-   GetExecOutput("/bin/ps waux | grep cf-execd",buffer,true);
-   
-   strcpy(line,"(empty)");
-   
-   for (sp = buffer; sp < buffer + strlen(buffer); sp += strlen(line)+1)
-      {
-      sscanf(sp,"%[^\n]\n",line);
-      
-      if (strstr(line,"grep") || strstr(line,"sh") || strstr(line,"gdb"))
-         {
-         continue;
-         }
-      
-      mem = 0;
-      sscanf(line,"%*s%*s%*s%*s%*s%d",&mem);
-      
-      if (mem > size)
-         {
-         printf("MEMORY DEBUG> resident increased from %d to %d (delta %d) at checkpoint(%s)\n",size,mem,mem-size,ref);
-         size = mem;
-         
-         struct Scope *ptr;
-         
-         for (ptr = VSCOPE; ptr != NULL; ptr=ptr->next)
-            {
-            printf(" -- active SCOPE %s\n",ptr->scope);
-            }
-         }
-      else
-         {
-         //printf("MEMORY DEBUG> stat at checkpoint(%s): %d\n",ref,mem);
-         }
-      }
-   }
 }
 
 /* EOF */

@@ -21,7 +21,6 @@
 
 /* AIX requires this to be the first thing in the file. */
 
-
 #include "../src/conf.h"
 
 #if defined (_AIX) && !defined (REGEX_MALLOC)
@@ -29,7 +28,7 @@
 #endif
 
 
-#if defined(HAVE_REGEX_H) || defined(HAVE_LIBRX)
+#if defined(HAVE_REGEX_H) || defined(HAVE_LIBRX) || defined(HAVE_LIBPCRE)
 /* Nothing */
 #else
 
@@ -40,6 +39,7 @@
 
 /* We need this for `regex.h', and perhaps for the Emacs include files.  */
 #include <sys/types.h>
+#include <string.h>
 #include "gnuregex.h"
 
 /* The `emacs' switch turns on certain matching commands

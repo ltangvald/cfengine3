@@ -62,6 +62,7 @@ int MapBodyArgs(char *scopeid,struct Rlist *give,struct Rlist *take)
   enum cfdatatype dtg = cf_notype,dtt = cf_notype;
   char *lval;
   void *rval;
+  struct Rval returnval,extra;
   int len1,len2;
   
 Debug("MapBodyArgs(begin)\n");
@@ -104,9 +105,34 @@ for (rpg = give, rpt = take; rpg != NULL && rpt != NULL; rpg=rpg->next,rpt=rpt->
           break;
           
       case CF_FNCALL:
-          fp = (struct FnCall *)rpt->item;
+          fp = (struct FnCall *)rpg->item;
           dtg = FunctionReturnType(fp->name);
-          // Should not happen in this context?
+
+          returnval = EvaluateFunctionCall(fp,NULL);
+          
+          if (FNCALL_STATUS.status == FNCALL_FAILURE && THIS_AGENT_TYPE != cf_common)
+             {
+             // Unresolved variables
+             if (VERBOSE)
+                {
+                printf(" !! Embedded function argument does not resolve to a name - probably too many evaluation levels for ");
+                ShowFnCall(stdout,fp);
+                printf(" (try simplifying)\n");
+                }
+             }
+          else
+             {
+             DeleteFnCall(fp);
+             
+             rpg->item = returnval.item;
+             rpg->type = returnval.rtype;
+             
+             lval = (char *)rpt->item;
+             rval = rpg->item;
+
+             AddVariableHash(scopeid,lval,rval,CF_SCALAR,dtg,NULL,0);
+             }
+
           break;
           
       default:
@@ -169,6 +195,7 @@ for (rp = fp->args; rp != NULL; rp = rp->next)
 
    Debug("EXPARG: %s.%s\n",CONTEXTID,rval.item);
    AppendRlist(&newargs,rval.item,rval.rtype);
+   DeleteRvalItem(rval.item,rval.rtype);
    }
 
 return newargs;
@@ -178,9 +205,10 @@ return newargs;
 
 void DeleteExpArgs(struct Rlist *args)
 
-{ struct Rlist *rp;
+{
 
-DeleteRvalItem(args,CF_LIST);
+DeleteRlist(args);
+
 }
 
 /******************************************************************/

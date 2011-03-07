@@ -51,6 +51,13 @@ ap->rval = CopyRvalItem(rval,rtype);
 ap->dtype = dt;
 ap->rtype = rtype;
 
+if (ap->rval == NULL)
+   {
+   free(ap->lval);
+   free(ap);
+   return NULL;
+   }
+
 if (lval == NULL)
    {
    FatalError("Bad association in NewAssoc\n");
@@ -64,6 +71,11 @@ return ap;
 void DeleteAssoc(struct CfAssoc *ap)
 
 {
+if (ap == NULL)
+   {
+   return;
+   }
+
 Debug(" ----> Delete variable association %s\n",ap->lval);
 
 if (ap->lval)
@@ -72,14 +84,13 @@ if (ap->lval)
    }
 
 if (ap->rval)
-   {
+  { 
    DeleteRvalItem(ap->rval,ap->rtype);
    }
 
-if (ap != NULL)
-   {
-   free((char *)ap);
-   }
+
+free((char *)ap);
+
 }
 
 /*******************************************************************/
@@ -100,9 +111,9 @@ return NewAssoc(old->lval,old->rval,old->rtype,old->dtype);
 void ShowAssoc (struct CfAssoc *cp)
 
 {
- printf("ShowAssoc: lval = %s\n",cp->lval);
- printf("ShowAssoc: rval = ");
- ShowRval(stdout,cp->rval,cp->rtype);
+printf("ShowAssoc: lval = %s\n",cp->lval);
+printf("ShowAssoc: rval = ");
+ShowRval(stdout,cp->rval,cp->rtype);
  
- printf("\nShowAssoc: dtype = %s\n",CF_DATATYPES[cp->dtype]);
+printf("\nShowAssoc: dtype = %s\n",CF_DATATYPES[cp->dtype]);
 }

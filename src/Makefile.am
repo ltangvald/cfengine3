@@ -43,6 +43,7 @@ libpromises_la_SOURCES =                                                \
         exec_tools.c                                                    \
         nfs.c                                                           \
         item-lib.c                                                      \
+        alphalist.c                                                     \
         cf_sql.c                                                        \
         client_protocol.c                                               \
         client_code.c                                                   \
@@ -71,6 +72,7 @@ libpromises_la_SOURCES =                                                \
         granules.c                                                      \
         timeout.c                                                       \
         promises.c                                                      \
+        ontology.c							\
         constraints.c                                                   \
         iteration.c                                                     \
         rlist.c                                                         \
@@ -107,7 +109,7 @@ libpromises_la_SOURCES =                                                \
         unix.c
 
 
-sbin_PROGRAMS = cf-know cf-promises cf-agent cf-monitord cf-serverd cf-execd cf-runagent cf-key cf-report
+sbin_PROGRAMS = cf-know cf-promises cf-agent cf-monitord cf-serverd cf-execd cf-runagent cf-key cf-report cf-hub
 
 cf_promises_SOURCES =                                                   \
         cfpromises.c
@@ -143,15 +145,16 @@ cf_monitord_SOURCES =                                                   \
 cf_execd_SOURCES =                                                      \
         exec.c
 
+cf_hub_SOURCES =							\
+        hub.c
+
 cf_runagent_SOURCES =                                                   \
         runagent.c
 
 cf_know_SOURCES =                                                       \
         cfknow.c                                                        \
         graph.c                                                         \
-        manual.c                                                        \
-        ontology.c
-
+        manual.c  
 EXTRA_DIST = cf3lex.c cf3parse.c
 
 #

@@ -172,6 +172,10 @@ char *VPSCOMM[CF_CLASSATTR] =
 
 /*********************************************************************/
 
+// linux after rhel 3: ps -eo user,pid,ppid,pgid,%cpu,%mem,vsize,ni,rss,stat,nlwp,stime,time,args
+
+// solaris: ps -eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args
+
 char *VPSOPTS[CF_CLASSATTR] =
    {
    "",
@@ -179,9 +183,9 @@ char *VPSOPTS[CF_CLASSATTR] =
    "auxw",   /* sun4 */
    "auxw",   /* ultrix */
    "-ef",    /* hpux */
-   "-ef",    /* aix */
-   "auxw",   /* linux */
-   "-elf",   /* solaris */
+   "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,ni,stat,stime,time,args",    /* aix */
+   "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args",   /* linux */
+   "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args",   /* solaris */
    "-ef",    /* osf1 */
    "auxw",   /* digital */   
    "auxw",   /* sun3 */
@@ -189,14 +193,14 @@ char *VPSOPTS[CF_CLASSATTR] =
    "-ef",    /* irix */
    "-ef",    /* irix64 */
    "auxw",   /* freebsd */
-   "-elf",   /* solarisx86 */
+   "-eo user,pid,ppid,pgid,pcpu,pmem,vsz,pri,rss,nlwp,stime,time,args",   /* solarisx86 */
    "-ax",    /* bsd 4.3 */
    "auxw",   /* newsos4 */
    "auxw",   /* netbsd */
    "auxw",   /* AOS */
    "auxw",   /* BSDI */
    "auxw",   /* nextstep */
-   "-ef",    /* cray */
+   "-elyf",    /* cray */
    "auxw",   /* gnu */
    "-aW",    /* NT */
    "-ef",    /* Unixware */
@@ -204,7 +208,7 @@ char *VPSOPTS[CF_CLASSATTR] =
    "-ef",    /* sco */
    "auxw",   /* darwin */
    "-ef",    /* ux4800 */
-   "-ef",    /* qnx */
+   "-elyf",    /* qnx */
    "auxw",   /* dragonfly */
    "mingw-invalid", /* mingw */
    "?",      /* vmware*/

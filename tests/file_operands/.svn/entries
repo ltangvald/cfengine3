@@ -1,16 +1,16 @@
 10
 
 dir
-1043
-https://svn.iu.hio.no/projects/cfengine-3/trunk/tests/file_operands
-https://svn.iu.hio.no/projects/cfengine-3
+1755
+https://c.cfengine.com/svn/core/trunk/tests/file_operands
+https://c.cfengine.com/svn/core
 
 
 
-2010-04-24T09:41:24.055872Z
-955
+2011-01-23T11:02:53.274506Z
+1717
 mark
-
+has-props
 
 
 
@@ -28,20 +28,15 @@ mark
 
 Makefile.in
 file
+1756
 
 
 
-
-2010-06-06T16:31:49.074502Z
-7b1fd4402923ee209ce2ee22a93f319e
-2010-04-24T09:41:24.055872Z
-955
-mark
-
-
-
-
-
+2011-01-31T18:21:49.526093Z
+6fa246e5accc289e8cbe4a3370280dd5
+2011-01-31T19:54:56.732112Z
+1756
+eystein
 
 
 
@@ -58,7 +53,12 @@ mark
 
 
 
-10809
+
+
+
+
+
+12278
 
 Makefile.am
 file
@@ -66,7 +66,7 @@ file
 
 
 
-2010-06-06T16:31:49.074502Z
+2010-12-04T11:15:35.227379Z
 b6f744b300d85eab64a229bfab1b5a63
 2009-04-15T06:22:53.164364Z
 297
@@ -100,7 +100,7 @@ file
 
 
 
-2010-06-06T16:31:49.074502Z
+2010-12-04T11:15:35.227379Z
 d41d8cd98f00b204e9800998ecf8427e
 2009-04-15T06:22:53.164364Z
 297

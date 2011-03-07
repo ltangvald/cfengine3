@@ -31,19 +31,23 @@
 
 #include "cf3.defs.h"
 #include "cf3.extern.h"
-#include "cf3.server.h"
 
 /*****************************************************************************/
 
 void BeginAudit()
 
-{ struct Promise dummyp;
-  struct Attributes dummyattr;
+{ struct Promise dummyp = {0};
+  struct Attributes dummyattr = {0};
 
+if (THIS_AGENT_TYPE != cf_agent)
+   {
+   return;
+   }
+  
 memset(&dummyp,0,sizeof(dummyp));
 memset(&dummyattr,0,sizeof(dummyattr));
 
-ClassAuditLog(&dummyp,dummyattr,"Cfagent starting",CF_NOP);
+ClassAuditLog(&dummyp,dummyattr,"Cfagent starting",CF_NOP,"");
 }
 
 /*****************************************************************************/
@@ -53,8 +57,13 @@ void EndAudit()
 { double total;
   char *sp,rettype,string[CF_BUFSIZE];
   void *retval;
-  struct Promise dummyp;
-  struct Attributes dummyattr;
+  struct Promise dummyp = {0};
+  struct Attributes dummyattr = {0};
+
+if (THIS_AGENT_TYPE != cf_agent)
+   {
+   return;
+   }
 
 memset(&dummyp,0,sizeof(dummyp));
 memset(&dummyattr,0,sizeof(dummyattr));
@@ -101,7 +110,7 @@ if (total == 0)
    }
 else
    {   
-   snprintf(string,CF_BUFSIZE,"Outcome of version %s (%s-%d): Promises observed to be kept %.0f%%, Promises repaired %.0f%%, Promises not repaired %.0f\%%\n",
+   snprintf(string,CF_BUFSIZE,"Outcome of version %s (%s-%d): Promises observed to be kept %.0f%%, Promises repaired %.0f%%, Promises not repaired %.0f\%%",
             sp,
             THIS_AGENT,
             CFA_BACKGROUND,
@@ -115,15 +124,15 @@ else
 
 if (strlen(string) > 0)
    {
-   ClassAuditLog(&dummyp,dummyattr,string,CF_REPORT);
+   ClassAuditLog(&dummyp,dummyattr,string,CF_REPORT,"");
    }
 
-ClassAuditLog(&dummyp,dummyattr,"Cfagent closing",CF_NOP);
+ClassAuditLog(&dummyp,dummyattr,"Cfagent closing",CF_NOP,"");
 }
 
 /*****************************************************************************/
 
-void ClassAuditLog(struct Promise *pp,struct Attributes attr,char *str,char status)
+void ClassAuditLog(struct Promise *pp,struct Attributes attr,char *str,char status,char *reason)
 
 { time_t now = time(NULL);
   char date[CF_BUFSIZE],lock[CF_BUFSIZE],key[CF_BUFSIZE],operator[CF_BUFSIZE],id[CF_MAXVARSIZE];
@@ -133,7 +142,23 @@ void ClassAuditLog(struct Promise *pp,struct Attributes attr,char *str,char stat
   double keyval;
   int lineno = pp->lineno;
   char name[CF_BUFSIZE];
+  char *exceptions[] = { "vars", "classes", "insert_lines", "delete_lines", "replace_patterns", "field_edits", NULL };
+  int i;
 
+  // Don't log these items
+
+if (pp->agentsubtype == NULL)
+   {
+   return;
+   }
+  
+for (i = 0; exceptions[i] != NULL; i++)
+   {
+   if (strcmp(pp->agentsubtype,exceptions[i]) == 0)
+      {
+      return;
+      }
+   }
 
 Debug("ClassAuditLog(%s)\n",str);
 
@@ -149,7 +174,7 @@ switch(status)
 
        AddAllClasses(attr.classes.change,attr.classes.persist,attr.classes.timer);
        DeleteAllClasses(attr.classes.del_change);
-       NotePromiseCompliance(pp,0.5,cfn_repaired);
+       NotePromiseCompliance(pp,0.5,cfn_repaired,reason);
        SummarizeTransaction(attr,pp,attr.transaction.log_repaired);
        break;
        
@@ -157,7 +182,7 @@ switch(status)
 
        PR_NOTKEPT++;
        VAL_NOTKEPT += attr.transaction.value_notkept;
-       NotePromiseCompliance(pp,1.0,cfn_notkept);
+       NotePromiseCompliance(pp,1.0,cfn_notkept,reason);
        break;
        
    case CF_TIMEX:
@@ -166,7 +191,7 @@ switch(status)
        VAL_NOTKEPT += attr.transaction.value_notkept;
        AddAllClasses(attr.classes.timeout,attr.classes.persist,attr.classes.timer);
        DeleteAllClasses(attr.classes.del_notkept);
-       NotePromiseCompliance(pp,0.0,cfn_notkept);
+       NotePromiseCompliance(pp,0.0,cfn_notkept,reason);
        SummarizeTransaction(attr,pp,attr.transaction.log_failed);
        break;
 
@@ -176,7 +201,7 @@ switch(status)
        VAL_NOTKEPT += attr.transaction.value_notkept;
        AddAllClasses(attr.classes.failure,attr.classes.persist,attr.classes.timer);
        DeleteAllClasses(attr.classes.del_notkept);
-       NotePromiseCompliance(pp,0.0,cfn_notkept);
+       NotePromiseCompliance(pp,0.0,cfn_notkept,reason);
        SummarizeTransaction(attr,pp,attr.transaction.log_failed);
        break;
        
@@ -186,7 +211,7 @@ switch(status)
        VAL_NOTKEPT += attr.transaction.value_notkept;
        AddAllClasses(attr.classes.denied,attr.classes.persist,attr.classes.timer);
        DeleteAllClasses(attr.classes.del_notkept);
-       NotePromiseCompliance(pp,0.0,cfn_notkept);
+       NotePromiseCompliance(pp,0.0,cfn_notkept,reason);
        SummarizeTransaction(attr,pp,attr.transaction.log_failed);
        break;
        
@@ -196,7 +221,7 @@ switch(status)
        VAL_NOTKEPT += attr.transaction.value_notkept;
        AddAllClasses(attr.classes.interrupt,attr.classes.persist,attr.classes.timer);
        DeleteAllClasses(attr.classes.del_notkept);
-       NotePromiseCompliance(pp,0.0,cfn_notkept);
+       NotePromiseCompliance(pp,0.0,cfn_notkept,reason);
        SummarizeTransaction(attr,pp,attr.transaction.log_failed);
        break;
 
@@ -205,7 +230,7 @@ switch(status)
 
        AddAllClasses(attr.classes.kept,attr.classes.persist,attr.classes.timer);
        DeleteAllClasses(attr.classes.del_kept);
-       NotePromiseCompliance(pp,1.0,cfn_nop);
+       NotePromiseCompliance(pp,1.0,cfn_nop,reason);
        SummarizeTransaction(attr,pp,attr.transaction.log_kept);              
        PR_KEPT++;
        VAL_KEPT += attr.transaction.value_kept;
@@ -296,7 +321,9 @@ CloseDB(AUDITDBP);
 void AddAllClasses(struct Rlist *list,int persist,enum statepolicy policy)
 
 { struct Rlist *rp;
-
+  int slot;
+  char *string;
+ 
 if (list == NULL)
    {
    return;
@@ -304,26 +331,24 @@ if (list == NULL)
 
 for (rp = list; rp != NULL; rp=rp->next)
    {
-   if (!CheckParseClass("class addition",(char *)rp->item,CF_IDRANGE))
-      {
-      return;
-      }
-
    if (IsHardClass((char *)rp->item))
       {
-      CfOut(cf_error,""," !! You cannot use reserved hard class \"%s\" as post-condition class", rp->item);
+      CfOut(cf_error,""," !! You cannot use reserved hard class \"%s\" as post-condition class",CanonifyName(rp->item));
       }
+
+   string = (char *)(rp->item);
+   slot = (int)*string;
 
    if (persist > 0)
       {
-      CfOut(cf_verbose,""," ?> defining persistent promise result class %s\n",(char *)rp->item);
-      NewPersistentContext(rp->item,persist,policy);
-      IdempPrependItem(&VHEAP,CanonifyName((char *)rp->item),NULL);
+      CfOut(cf_verbose,""," ?> defining persistent promise result class %s\n",(char *)CanonifyName(rp->item));
+      NewPersistentContext(CanonifyName(rp->item),persist,policy);
+      IdempPrependItem(&(VHEAP.list[slot]),CanonifyName((char *)rp->item),NULL);
       }
    else
       {
-      CfOut(cf_verbose,""," ?> defining promise result class %s\n",(char *)rp->item);
-      IdempPrependItem(&VHEAP,CanonifyName((char *)rp->item),NULL);
+      CfOut(cf_verbose,""," ?> defining promise result class %s\n",(char *)CanonifyName(rp->item));
+      IdempPrependItem(&(VHEAP.list[slot]),CanonifyName((char *)rp->item),NULL);
       }
    }
 }
@@ -333,7 +358,9 @@ for (rp = list; rp != NULL; rp=rp->next)
 void DeleteAllClasses(struct Rlist *list)
 
 { struct Rlist *rp;
-
+  char *string;
+  int slot;
+ 
 if (list == NULL)
    {
    return;
@@ -351,11 +378,14 @@ for (rp = list; rp != NULL; rp=rp->next)
       CfOut(cf_error,""," !! You cannot cancel a reserved hard class \"%s\" in post-condition classes", rp->item);
       }
 
-   CfOut(cf_verbose,""," -> Cancelling class %s\n",(char *)rp->item);
-   DeletePersistentContext(rp->item);
-   DeleteItemLiteral(&VHEAP,CanonifyName((char *)rp->item));
-   DeleteItemLiteral(&VADDCLASSES,CanonifyName((char *)rp->item));
-   AppendItem(&VDELCLASSES,CanonifyName((char *)rp->item),NULL);
+   string = (char *)(rp->item);
+   slot = (int)*string;
+          
+   CfOut(cf_verbose,""," -> Cancelling class %s\n",string);
+   DeletePersistentContext(string);
+   DeleteItemLiteral(&(VHEAP.list[slot]),CanonifyName(string));
+   DeleteItemLiteral(&(VADDCLASSES.list[slot]),CanonifyName(string));
+   AppendItem(&VDELCLASSES,CanonifyName(string),NULL);
    }
 }
 
@@ -424,10 +454,16 @@ op[i] = '\0';
 void PromiseLog(char *s)
 
 { char filename[CF_BUFSIZE],start[CF_BUFSIZE],end[CF_BUFSIZE];
-  FILE *fout;
   time_t now = time(NULL);
+  FILE *fout;
 
-snprintf(filename,CF_BUFSIZE,"%s/promise.log",CFWORKDIR);
+if (s == NULL || strlen(s) ==  0)
+   {
+   return;
+   }
+  
+snprintf(filename,CF_BUFSIZE,"%s/%s",CFWORKDIR,CF_PROMISE_LOG);
+MapName(filename);
 
 if ((fout = fopen(filename,"a")) == NULL)
    {
@@ -435,12 +471,7 @@ if ((fout = fopen(filename,"a")) == NULL)
    return;
    }
 
-strcpy(start,cf_ctime(&CFSTARTTIME));
-Chop(start);
-strcpy(end,cf_ctime(&now));
-Chop(end);
-
-fprintf(fout,"%s -> %s: %s",start,end,s);
+fprintf(fout,"%ld,%ld: %s\n",CFSTARTTIME,now,s);
 fclose(fout);
 }
 

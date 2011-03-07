@@ -36,16 +36,18 @@
 
 struct Rlist *NewIterationContext(char *scopeid,struct Rlist *namelist)
 
-{ struct Rlist *this,*rp,*deref_listoflists = NULL;
+{ struct Rlist *this,*rp,*rps,*deref_listoflists = NULL;
   char *lval,rtype;
   void *returnval;
   enum cfdatatype dtype;
   struct Scope *ptr = NULL;
   struct CfAssoc *new;
+  struct Rval newret;
 
 Debug("\n*\nNewIterationContext(from %s)\n*\n",scopeid);
 
 CopyScope("this",scopeid);
+
 ptr=GetScope("this");
 
 if (namelist == NULL)
@@ -57,7 +59,7 @@ if (namelist == NULL)
 for (rp = namelist; rp != NULL; rp = rp->next)
    {
    dtype = GetVariable(scopeid,rp->item,&returnval,&rtype);
-
+   
    if (dtype == cf_notype)
       {
       CfOut(cf_error,""," !! Couldn't locate variable %s apparently in %s\n",rp->item,scopeid);
@@ -67,11 +69,33 @@ for (rp = namelist; rp != NULL; rp = rp->next)
    
    /* Make a copy of list references in scope only, without the names */
 
+   if (rtype == CF_LIST)
+      {
+      for (rps = (struct Rlist *)returnval; rps != NULL; rps=rps->next)
+         {
+         if (rps->type == CF_FNCALL)
+            {
+            struct FnCall *fp = (struct FnCall *)rps->item;
+            newret = EvaluateFunctionCall(fp,NULL);
+            DeleteFnCall(fp);
+            rps->item = newret.item;
+            rps->type = newret.rtype;
+            }
+         }
+      }
+
    if (new = NewAssoc(rp->item,returnval,rtype,dtype))
       {
       this = OrthogAppendRlist(&deref_listoflists,new,CF_LIST);
       rp->state_ptr = new->rval;
-      Debug("SETTING state to %s\n",rp->state_ptr->item);
+      
+      while (rp->state_ptr && strcmp(rp->state_ptr->item,CF_NULL_VALUE) == 0)
+         {
+         if (rp->state_ptr)
+            {
+            rp->state_ptr = rp->state_ptr->next;
+            }
+         }
       }
    }
 
@@ -87,8 +111,6 @@ void DeleteIterationContext(struct Rlist *deref)
 {
 DeleteScope("this");
 
-/* Cannot use DeleteRlist(deref) as we are referencing memory from hashtable */
-
 if (deref != NULL)
    {
    DeleteReferenceRlist(deref);
@@ -101,7 +123,8 @@ int IncrementIterationContext(struct Rlist *iterator,int level)
 
 { struct Rlist *rp,*state_ptr,*state;
   struct CfAssoc *cp;
-
+  void *vp = NULL;
+  
 if (iterator == NULL)
    {
    return false;
@@ -112,6 +135,11 @@ if (iterator == NULL)
 
 cp = (struct CfAssoc *)iterator->item;
 state = iterator->state_ptr;
+
+if (state == NULL)
+   {
+   return false;
+   }
 
 /* Go ahead and increment */
 
@@ -129,6 +157,7 @@ if (state->next == NULL)
          {
          /* Not at end yet, so reset this wheel */
          iterator->state_ptr = cp->rval;
+         iterator->state_ptr = iterator->state_ptr->next;         
          return true;
          }
       else
@@ -147,7 +176,30 @@ else
    {
    /* Update the current wheel */
    iterator->state_ptr = state->next;
+
    Debug(" <- Incrementing wheel (%s) to \"%s\"\n",cp->lval,iterator->state_ptr->item);
+
+   while (iterator->state_ptr && strcmp(iterator->state_ptr->item,CF_NULL_VALUE) == 0)
+      {
+      if (IncrementIterationContext(iterator->next,level+1))
+         {
+         /* Not at end yet, so reset this wheel (next because we always start with cf_null now) */
+         iterator->state_ptr = cp->rval;
+         iterator->state_ptr = iterator->state_ptr->next;         
+         return true;
+         }
+      else
+         {
+         /* Reached last variable wheel - pass up */
+         break;
+         }
+      }
+
+   if (EndOfIteration(iterator))
+      {
+      return false;
+      }
+
    return true;
    }
 }
@@ -168,8 +220,13 @@ if (iterator == NULL)
 for (rp = iterator; rp != NULL; rp = rp->next)
    {
    state = rp->state_ptr;
-   
-   if (state->next != NULL)
+
+   if (state == NULL)
+      {
+      continue;
+      }
+
+   if (state && state->next != NULL)
       {
       return false;
       }
@@ -178,19 +235,45 @@ for (rp = iterator; rp != NULL; rp = rp->next)
 return true;
 }
 
+/*****************************************************************************/
+
+int NullIterators(struct Rlist *iterator)
+
+{ struct Rlist *rp,*state;
+
+if (iterator == NULL)
+   {
+   return false;
+   }
+
+/* When all the wheels are at NULL, we have reached the end*/
+
+for (rp = iterator; rp != NULL; rp = rp->next)
+   {
+   state = rp->state_ptr;
+
+   if (state && strcmp(state->item,CF_NULL_VALUE) == 0)
+      {
+      return true;
+      }
+   }
+
+return false;
+}
+
 /*******************************************************************/
 
 void DeleteReferenceRlist(struct Rlist *list)
 
+/* Delete all contents, hash table in scope has own copy */
 {
 if (list == NULL)
    {
    return;
    }
 
-DeleteAssoc(list->item);
+DeleteAssoc((struct CfAssoc *)list->item);
 
-/* Delete infrastructure assuming content remains allocated */
 
 DeleteReferenceRlist(list->next);
 free((char *)list);

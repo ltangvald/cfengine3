@@ -32,6 +32,9 @@
 #include "cf3.defs.h"
 #include "cf3.extern.h"
 
+int SHOWHOSTS = false;
+
+void ShowLastSeenHosts(void);
 int main (int argc,char *argv[]);
 
 /*******************************************************************/
@@ -47,6 +50,7 @@ char *ID = "The cfengine's generator makes key pairs for remote authentication.\
       { "verbose",no_argument,0,'v' },
       { "version",no_argument,0,'V' },
       { "output-file",required_argument,0,'f'},
+      { "show-hosts",no_argument,0,'s'}, 	
       { NULL,0,0,'\0' }
       };
 
@@ -57,6 +61,7 @@ char *ID = "The cfengine's generator makes key pairs for remote authentication.\
       "Output verbose information about the behaviour of the agent",
       "Output the version of the software",
       "Specify an alternative output file than the default (localhost)",
+      "Show lastseen hostnames and IP addresses",   	
       NULL
       };
 
@@ -70,112 +75,15 @@ CheckOpts(argc,argv);
 THIS_AGENT_TYPE = cf_keygen;
 
 GenericInitialize(argc,argv,"keygenerator");
-KeepPromises();
+
+if (SHOWHOSTS)
+   {
+   ShowLastSeenHosts();
+   return 0; 	
+   }
+
+KeepKeyPromises();
 return 0;
-}
-
-/*****************************************************************************/
-/* Level 1                                                                   */
-/*****************************************************************************/
-
-void KeepPromises()
-
-{ unsigned long err;
-  RSA *pair;
-  FILE *fp;
-  struct stat statbuf;
-  int fd;
-  static char *passphrase = "Cfengine passphrase";
-  const EVP_CIPHER *cipher;
-  char vbuff[CF_BUFSIZE];
-
-NewScope("common");
-  
-cipher = EVP_des_ede3_cbc();
-
-if (cfstat(CFPUBKEYFILE,&statbuf) != -1)
-   {
-   CfOut(cf_cmdout,"","A key file already exists at %s\n",CFPUBKEYFILE);
-   return;
-   }
-
-if (cfstat(CFPRIVKEYFILE,&statbuf) != -1)
-   {
-   CfOut(cf_cmdout,"","A key file already exists at %s\n",CFPRIVKEYFILE);
-   return;
-   }
-
-printf("Making a key pair for cfengine, please wait, this could take a minute...\n"); 
-
-pair = RSA_generate_key(2048,35,NULL,NULL);
-
-if (pair == NULL)
-   {
-   err = ERR_get_error();
-   CfOut(cf_error,"","Unable to generate key: %s\n",ERR_reason_error_string(err));
-   return;
-   }
-
-if (DEBUG)
-   {
-   RSA_print_fp(stdout,pair,0);
-   }
- 
-fd = open(CFPRIVKEYFILE,O_WRONLY | O_CREAT | O_TRUNC, 0600);
-
-if (fd < 0)
-   {
-   CfOut(cf_error,"open","Open %s failed: %s.",CFPRIVKEYFILE,strerror(errno));
-   return;
-   }
- 
-if ((fp = fdopen(fd, "w")) == NULL )
-   {
-   CfOut(cf_error,"fdopen","Couldn't open private key %s.",CFPRIVKEYFILE);
-   close(fd);
-   return;
-   }
-
-CfOut(cf_verbose,"","Writing private key to %s\n",CFPRIVKEYFILE);
- 
-if (!PEM_write_RSAPrivateKey(fp,pair,cipher,passphrase,strlen(passphrase),NULL,NULL))
-   {
-   err = ERR_get_error();
-   CfOut(cf_error,"","Couldn't write private key: %s\n",ERR_reason_error_string(err));
-   return;
-   }
-
-fclose(fp);
- 
-fd = open(CFPUBKEYFILE,O_WRONLY | O_CREAT | O_TRUNC, 0600);
-
-if (fd < 0)
-   {
-   CfOut(cf_error,"open","Unable to open public key %s.",CFPUBKEYFILE);
-   return;
-   }
- 
-if ((fp = fdopen(fd, "w")) == NULL )
-   {
-   CfOut(cf_error,"fdopen","Open %s failed.",CFPUBKEYFILE);
-   close(fd);
-   return;
-   }
-
-CfOut(cf_verbose,"","Writing public key to %s\n",CFPUBKEYFILE);
- 
-if (!PEM_write_RSAPublicKey(fp,pair))
-   {
-   err = ERR_get_error();
-   CfOut(cf_error,"","Unable to write public key: %s\n",ERR_reason_error_string(err));
-   return;
-   }
-
-fclose(fp);
- 
-snprintf(vbuff,CF_BUFSIZE,"%s/randseed",CFWORKDIR);
-RAND_write_file(vbuff);
-cf_chmod(vbuff,0644); 
 }
 
 /*****************************************************************************/
@@ -190,7 +98,7 @@ void CheckOpts(int argc,char **argv)
   int c;
   char ld_library_path[CF_BUFSIZE];
 
-while ((c=getopt_long(argc,argv,"d:vf:VM",OPTIONS,&optindex)) != EOF)
+while ((c=getopt_long(argc,argv,"d:vf:VMs",OPTIONS,&optindex)) != EOF)
   {
   switch ((char) c)
       {
@@ -223,7 +131,9 @@ while ((c=getopt_long(argc,argv,"d:vf:VM",OPTIONS,&optindex)) != EOF)
       case 'v':
           VERBOSE = true;
           break;
-          
+      case 's':
+          SHOWHOSTS = true;
+          break;    
       case 'h': Syntax("cf-key - cfengine's key generator",OPTIONS,HINTS,ID);
           exit(0);
 
@@ -236,4 +146,64 @@ while ((c=getopt_long(argc,argv,"d:vf:VM",OPTIONS,&optindex)) != EOF)
       }
   }
 }
+/*****************************************************************************/
+void ShowLastSeenHosts()
 
+{ CF_DB *dbp;
+  CF_DBC *dbcp;
+  char *key;
+  void *value;
+  char name[CF_BUFSIZE],hostname[CF_BUFSIZE],address[CF_MAXVARSIZE];
+  struct CfKeyHostSeen entry;
+  int ret,ksize,vsize;
+  int count = 0;
+
+snprintf(name,CF_BUFSIZE-1,"%s/%s",CFWORKDIR,CF_LASTDB_FILE);
+MapName(name);
+
+if (!OpenDB(name,&dbp))
+   {
+   return;
+   }
+
+/* Acquire a cursor for the database. */
+
+if (!NewDBCursor(dbp,&dbcp))
+   {
+   CfOut(cf_inform,""," !! Unable to scan last-seen database");
+   CloseDB(dbp);
+   return;
+   }
+
+ /* Initialize the key/data return pair. */
+
+memset(&entry, 0, sizeof(entry));
+
+printf("%15.15s %-25.25s %15.15s \n","IP","Name","Key");
+ /* Walk through the database and print out the key/data pairs. */
+while(NextDB(dbp,dbcp,&key,&ksize,&value,&vsize))
+   {
+   if (value != NULL)
+      {
+      memcpy(&entry,value,sizeof(entry));
+      strncpy(hostname,(char *)key,ksize);
+      strncpy(address,(char *)entry.address,ksize); 
+      ++count;  
+      }
+   else
+      {
+      continue;
+      }
+   CfOut(cf_verbose,""," -> Reporting on %s",hostname);
+      
+   printf("%15.15s %-25.25s %s \n",
+     	     address,	     
+	     IPString2Hostname(address),
+             hostname+1);
+   }
+printf("Total Entries: %d\n",count);
+DeleteDBCursor(dbp,dbcp);
+CloseDB(dbp);
+}
+
+/*eof*/

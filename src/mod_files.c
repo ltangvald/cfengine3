@@ -80,7 +80,8 @@ struct BodySyntax CF_EDITCOL_BODY[] =
    {"field_operation",cf_opts,"prepend,append,alphanum,delete,set","Menu option policy for editing subfields"},
    {"field_separator",cf_str,CF_ANYSTRING,"The regular expression used to separate fields in a line"},
    {"field_value",cf_str,CF_ANYSTRING,"Set field value to a fixed value"},
-   {"select_field",cf_int,"1,99999999","Integer index of the field required 1..n"},
+   {"select_field",cf_int,"0,99999999","Integer index of the field required 0..n (default starts from 1)"},
+   {"start_fields_from_zero",cf_opts,CF_BOOL,"If set, the default field numbering starts from 0"},
    {"value_separator",cf_str,CF_CHARRANGE,"Character separator for subfields inside the selected field"},
    {NULL,cf_notype,NULL,NULL}
    };
@@ -196,7 +197,7 @@ struct BodySyntax CF_ACL_BODY[] =
 
 struct BodySyntax CF_CHANGEMGT_BODY[] =
    {
-   {"hash",cf_opts,"md5,sha1,sha256,sha384,sha512,best","Hash files for change detection"},
+   {"hash",cf_opts,"md5,sha1,sha224,sha256,sha384,sha512,best","Hash files for change detection"},
    {"report_changes",cf_opts,"all,stats,content,none","Specify criteria for change warnings"},
    {"update_hashes",cf_opts,CF_BOOL,"Update hash values immediately after change warning"},
    {"report_diffs",cf_opts,CF_BOOL,"Generate reports summarizing the major differences between individual text files"},
@@ -276,11 +277,11 @@ struct BodySyntax CF_FILEFILTER_BODY[] =
    {"ctime",cf_irange,CF_TIMERANGE,"Range of change times (ctime) for acceptable files"},
    {"mtime",cf_irange,CF_TIMERANGE,"Range of modification times (mtime) for acceptable files"},
    {"atime",cf_irange,CF_TIMERANGE,"Range of access times (atime) for acceptable files"},
-   {"exec_regex",cf_str,CF_PATHRANGE,"Matches file if this regular expression matches any full line returned by the command"},
+   {"exec_regex",cf_str,CF_ANYSTRING,"Matches file if this regular expression matches any full line returned by the command"},
    {"exec_program",cf_str,CF_PATHRANGE,"Execute this command on each file and match if the exit status is zero"},
    {"file_types",cf_olist,"plain,reg,symlink,dir,socket,fifo,door,char,block","List of acceptable file types from menu choices"},
    {"issymlinkto",cf_slist,"","List of regular expressions to match file objects"},
-   {"file_result",cf_str,"[(leaf_name|path_name|file_types|mode|size|owner|group|atime|ctime|mtime|issymlinkto|exec_regex|exec_program|bsdflags)[|&!.]*]*","Logical expression combining classes defined by file search criteria"},
+   {"file_result",cf_str,"[!*(leaf_name|path_name|file_types|mode|size|owner|group|atime|ctime|mtime|issymlinkto|exec_regex|exec_program|bsdflags)[|&.]*]*","Logical expression combining classes defined by file search criteria"},
    {NULL,cf_notype,NULL,NULL}
    };
 
@@ -313,7 +314,7 @@ struct BodySyntax CF_COPYFROM_BODY[] =
    {"copy_backup",cf_opts,"true,false,timestamp","Menu option policy for file backup/version control"},
    {"encrypt",cf_opts,CF_BOOL,"true/false use encrypted data stream to connect to remote host"},
    {"check_root",cf_opts,CF_BOOL,"true/false check permissions on the root directory when depth_search"},
-   {"copylink_patterns",cf_slist,"","List of patterns matching files that should be linked instead of copied"},
+   {"copylink_patterns",cf_slist,"","List of patterns matching files that should be copied instead of linked"},
    {"copy_size",cf_irange,"0,inf","Integer range of file sizes that may be copied"},
    {"findertype",cf_opts,"MacOSX","Menu option for default finder type on MacOSX"},
    {"linkcopy_patterns",cf_slist,"","List of patterns matching files that should be replaced with symbolic links"},
@@ -322,8 +323,9 @@ struct BodySyntax CF_COPYFROM_BODY[] =
    {"force_ipv4",cf_opts,CF_BOOL,"true/false force use of ipv4 on ipv6 enabled network"},
    {"portnumber",cf_int,"1024,99999","Port number to connect to on server host"},
    {"preserve",cf_opts,CF_BOOL,"true/false whether to preserve file permissions on copied file"},
-   {"purge",cf_opts,CF_BOOL,"true/false purge files on client that do not match files on server when depth_search"},
+   {"purge",cf_opts,CF_BOOL,"true/false purge files on client that do not match files on server when a depth_search is used"},
    {"stealth",cf_opts,CF_BOOL,"true/false whether to preserve time stamps on copied file"},
+   {"timeout",cf_int,"1,3600","Connection timeout, seconds"},
    {"trustkey",cf_opts,CF_BOOL,"true/false trust public keys from remote server if previously unknown"},
    {"type_check",cf_opts,CF_BOOL,"true/false compare file types before copying and require match"},
    {"verify",cf_opts,CF_BOOL,"true/false verify transferred file by hashing after copy (resource penalty)"},

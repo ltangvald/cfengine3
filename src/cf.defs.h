@@ -35,9 +35,25 @@
 #ifdef NT
 #  define MAX_FILENAME 227
 #  define WINVER 0x501
+#  define FD_SETSIZE 512  // increase select(2) FD limit from 64
 #else
 #  define MAX_FILENAME 254
 #endif
+
+#ifdef MINGW
+# include <winsock2.h>
+# include <windows.h>
+# include <accctrl.h>
+# include <aclapi.h>
+# include <psapi.h>
+# include <wchar.h>
+# include <sddl.h>
+# include <tlhelp32.h>
+# include <iphlpapi.h>
+# include <ws2tcpip.h>
+# include <objbase.h>  // for disphelper
+#endif
+
 
 #include <stdio.h>
 #include <math.h>
@@ -140,11 +156,14 @@ struct utsname
 #define LOG_LOCAL7      (23<<3)
 #define LOG_USER        (1<<3)
 #define LOG_DAEMON      (3<<3)
-#else
+
+#else  /* NOT MINGW */
+
 #include <syslog.h>
-#endif
 
 extern int errno;
+#endif
+
 
 /* Do this for ease of configuration from the Makefile */
 
@@ -225,6 +244,8 @@ extern int errno;
 #  include <time.h>
 #endif
 
+#define _GNU_SOURCE
+
 #ifdef HAVE_TIME_H
 # include <time.h>
 #endif
@@ -242,24 +263,7 @@ extern int errno;
 # include <sys/sockio.h>
 #endif
 
-
-#ifdef MINGW
-# include <windows.h>
-# include <accctrl.h>
-# include <aclapi.h>
-# include <psapi.h>
-# include <wchar.h>
-# include <sddl.h>
-# include <tlhelp32.h>
-# include <iphlpapi.h>
-# include <ws2tcpip.h>
-# include <objbase.h>  // for disphelper
-# ifdef HAVE_WINSOCK2_H
-#  include <winsock2.h>
-# else
-#  include <winsock.h>
-# endif
-#else
+#ifndef MINGW
 # include <sys/socket.h>
 # include <sys/ioctl.h>
 # include <net/if.h>
@@ -287,10 +291,6 @@ extern int errno;
 
 #ifdef HAVE_PCRE_H
 # include <pcreposix.h>
-#elif HAVE_RXPOSIX_H
-# include <rxposix.h>
-#elif  HAVE_REGEX_H
-# include <regex.h>
 #endif
 
 #ifndef HAVE_SNPRINTF
@@ -343,11 +343,13 @@ typedef int clockid_t;
 #define CF_MAXFARGS 8
 #define CF_MAX_IP_LEN 64       /* numerical ip length */
 #define CF_PROCCOLS 16
-#define CF_HASHTABLESIZE 4969 /* prime number */
+//#define CF_HASHTABLESIZE 7919 /* prime number */
+#define CF_HASHTABLESIZE 8192
 #define CF_MACROALPHABET 61    /* a-z, A-Z plus a bit */
+#define CF_ALPHABETSIZE 256
 #define CF_MAXSHELLARGS 64
 #define CF_MAX_SCLICODES 16
-#define CF_SAMEMODE 0
+#define CF_SAMEMODE 7777
 #define CF_SAME_OWNER ((uid_t)-1)
 #define CF_UNKNOWN_OWNER ((uid_t)-2)
 #define CF_SAME_GROUP ((gid_t)-1)
@@ -379,9 +381,11 @@ typedef int clockid_t;
 /* these should be >0 to prevent contention */
 
 #define CF_EXEC_IFELAPSED 1
+#define CF_EDIT_IFELAPSED 300
 #define CF_EXEC_EXPIREAFTER 1
 
 #define MAXIP4CHARLEN 16
+#define PACK_UPIFELAPSED_SALT "packageuplist"
 
 /*******************************************************************/
 /*  DBM                                                            */
@@ -518,22 +522,21 @@ typedef u_long in_addr_t;  // as seen in in_addr struct in winsock.h
 #define CF_CHKDB          "checksum_digests" "." DB_FEXT
 #define CF_AVDB_FILE      "cf_observations" "." DB_FEXT
 #define CF_STATEDB_FILE   "cf_state" "." DB_FEXT
-#define CF_LASTDB_FILE    "cf_LastSeen" "." DB_FEXT
+#define CF_LASTDB_FILE    "cf_lastseen" "." DB_FEXT
 #define CF_AUDITDB_FILE   "cf_Audit" "." DB_FEXT
 #define CF_LOCKDB_FILE    "cf_lock" "." DB_FEXT
 
 /* end database file names */
 
 #define CF_VALUE_LOG      "cf_value.log"
-
+#define CF_FILECHANGE     "file_change.log"
+#define CF_PROMISE_LOG    "promise_summary.log"
 
 #define CF_STATELOG_FILE "state_log"
 #define CF_ENVNEW_FILE   "env_data.new"
 #define CF_ENV_FILE      "env_data"
 
 #define CF_TCPDUMP_COMM "/usr/sbin/tcpdump -t -n -v"
-#define CF_SCLI_COMM "/usr/local/bin/scli"
-
 
 #define CF_INPUTSVAR "CFINPUTS"          /* default name for file path var */
 #define CF_ALLCLASSESVAR "CFALLCLASSES"  /* default name for CFALLCLASSES env */
@@ -625,10 +628,13 @@ typedef u_long in_addr_t;  // as seen in in_addr struct in winsock.h
 #define ATTR     11
 #define CF_NETATTR   7 /* icmp udp dns tcpsyn tcpfin tcpack */
 #define PH_LIMIT 10
+#define CF_MONTH  (time_t)(3600*24*30)
 #define CF_WEEK   (7.0*24.0*3600.0)
 #define CF_HOUR   3600
+#define CF_DAY    3600*24
 #define CF_RELIABLE_CLASSES 7*24         /* CF_WEEK/CF_HOUR */
 #define CF_MEASURE_INTERVAL (5.0*60.0)
+#define CF_SHIFT_INTERVAL (6*3600.0)
 
 #define CF_OBSERVABLES 91
 
@@ -777,6 +783,7 @@ enum PROTOS
    cfd_svar,
    cfd_context,
    cfd_scontext,
+   cfd_squery,
    cfd_bad
    };
 
@@ -1108,32 +1115,14 @@ struct cfagent_connection
    int authenticated;
    int protoversion;
    int family;                              /* AF_INET or AF_INET6 */
+   char username[CF_SMALLBUF];
    char localip[CF_MAX_IP_LEN];
    char remoteip[CF_MAX_IP_LEN];
+   unsigned char digest[EVP_MAX_MD_SIZE+1];
    unsigned char *session_key;
    char encryption_type;
    short error;
    };
-
-
-/*******************************************************************/
-
-struct cfObject
-   {
-   char *scope;                         /* Name of object (scope) */
-   void *hashtable[CF_HASHTABLESIZE];   /* Variable heap  */
-   char type[CF_HASHTABLESIZE];         /* scalar or itlist? */
-   char *classlist;                     /* Private classes -- ? */
-   struct Item *actionsequence;
-   struct cfObject *next;
-   };
-
-/*
-
- $(globalvar)
- $(obj.name)
-
-*/
 
 /*******************************************************************/
 
@@ -1171,15 +1160,9 @@ struct Item
 
 /*******************************************************************/
 
-struct TwoDimList
+struct AlphaList  // Indexed itemlist
    {
-   short is2d;                  /* true if list > 1 */
-   short rounds;
-   short tied;                  /* do variables march together or in rounds ? */
-   char  sep;                   /* list separator */
-   struct Item *ilist;          /* Each node contains a list */
-   struct Item *current;        /* A static working pointer */
-   struct TwoDimList *next;
+   struct Item *list[256];
    };
 
 /*******************************************************************/

@@ -49,7 +49,7 @@ rex = CompileRegExp(regexp);
 
 if (rex.failed)
    {
-   CfOut(cf_error, "CompileRegExp", "!! Could not parse regular expression '%s'", regexp);
+   CfOut(cf_error,"","!! Could not parse regular expression '%s'", regexp);
    return false;
    }
 
@@ -337,77 +337,126 @@ return(false);
 
 /*********************************************************************/
 
-int MatchPolicy(char *needle,char *haystack,struct Attributes a,struct Promise *pp)
+int MatchPolicy(char *camel,char *haystack,struct Attributes a,struct Promise *pp)
 
 { struct Rlist *rp;
-  char *sp,*spto;
+  char *sp,*spto,*firstchar,*lastchar;
   enum insert_match opt;
-  char work[CF_BUFSIZE],final[CF_BUFSIZE];
-
-/* First construct the matching policy */
-
-memset(final,0,CF_BUFSIZE);
-strncpy(final,needle,CF_BUFSIZE-1);
+  char work[CF_BUFSIZE],final[CF_BUFSIZE],needle[CF_BUFSIZE];
+  struct Item *list = SplitString(camel,'\n'),*ip;
+  int direct_cmp = false, ok = false;
   
-for (rp = a.insert_match; rp != NULL; rp=rp->next)
+//Split into separate lines first
+
+for (ip = list; ip != NULL; ip = ip->next)
    {
-   opt = String2InsertMatch(rp->item);
-
-   /* Exact match can be done immediately */
+   ok = false;
+   direct_cmp = (strcmp(camel,haystack) == 0);
    
-   if (opt == cf_exact_match)
+   if (a.insert_match == NULL) 
       {
-      if (rp->next != NULL || rp != a.insert_match)
+      // No whitespace policy means exact_match
+      ok = ok || direct_cmp;
+      break;
+      }
+   
+   memset(final,0,CF_BUFSIZE);
+   strncpy(final,ip->name,CF_BUFSIZE-1);
+   
+   for (rp = a.insert_match; rp != NULL; rp=rp->next)
+      {
+      opt = String2InsertMatch(rp->item);
+      
+      /* Exact match can be done immediately */
+      
+      if (opt == cf_exact_match)
          {
-         CfOut(cf_error,""," !! Multiple policies conflict with \"exact_match\", using exact match");
-         PromiseRef(cf_error,pp);
+         if (rp->next != NULL || rp != a.insert_match)
+            {
+            CfOut(cf_error,""," !! Multiple policies conflict with \"exact_match\", using exact match");
+            PromiseRef(cf_error,pp);
+            }
+
+         ok = ok || direct_cmp;
+         break;
          }
       
-      return (strcmp(needle,haystack) == 0);
-      }
-
-   if (opt == cf_ignore_embedded)
-      {
-      memset(work,0,CF_BUFSIZE);
-      
-      for (sp = final,spto = work; *sp != '\0'; sp++)
+      if (opt == cf_ignore_embedded)
          {
-         if (strlen(sp) > 0 && isspace(*sp))
+         memset(work,0,CF_BUFSIZE);
+         
+         // Strip initial and final first
+
+         for (firstchar = final; isspace(*firstchar); firstchar++)
             {
-            while (isspace(*(sp+1)))
+            }
+         
+         for (lastchar = final+strlen(final)-1; lastchar > firstchar && isspace(*lastchar); lastchar--)
+            {
+            }         
+
+         for (sp = final,spto = work; *sp != '\0'; sp++)
+            {
+            if (sp > firstchar && sp < lastchar)
                {
-               sp++;
+               if (isspace(*sp))
+                  {
+                  while (isspace(*(sp+1)))
+                     {
+                     sp++;
+                     }
+                  
+                  strcat(spto,"\\s+");
+                  spto += 3;
+                  }
+               else
+                  {
+                  *spto++ = *sp;
+                  }
                }
-
-            strcat(spto,"\\s+");
-            spto += 3;
+            else
+               {
+               *spto++ = *sp;
+               }
             }
-         else
-            {
-            *spto++ = *sp;
-            }
+         
+         strcpy(final,work);
          }
-
-      strcpy(final,work);
-      }
-   
-   if (opt == cf_ignore_leading)
-      {
-      for (sp = final; isspace(*sp); sp++)
+      
+      if (opt == cf_ignore_leading)
          {
+         if (strncmp(final,"\\s*",3) != 0)
+            {
+            for (sp = final; isspace(*sp); sp++)
+               {
+               }
+            strcpy(work,sp);
+            snprintf(final,CF_BUFSIZE,"\\s*%s",work);
+            }
          }
-      strcpy(work,sp);
-      snprintf(final,CF_BUFSIZE,"\\s*%s",work);
+      
+      if (opt == cf_ignore_trailing)
+         {
+         if (strncmp(final+strlen(final)-4,"\\s*",3) != 0)
+            {
+            strcpy(work,final);
+            snprintf(final,CF_BUFSIZE,"%s\\s*",work);
+            }
+         }
+
+      ok = ok || FullTextMatch(final,haystack);
       }
-   
-   if (opt == cf_ignore_trailing)
+
+   if (!ok) // All lines in region need to match to avoid insertions
       {
-      strcpy(work,final);
-      snprintf(final,CF_BUFSIZE,"%s\\s*",work);
+      break;
       }
+
+   strcmp(final,work);
    }
 
-return FullTextMatch(final,haystack);
+DeleteItemList(list);
+return ok;
 }
 
 /*********************************************************************/
@@ -455,7 +504,7 @@ struct CfRegEx CompileRegExp(char *regexp)
 
 memset(&this,0,sizeof(struct CfRegEx)); 
 
-rx = pcre_compile(regexp,0,&errorstr,&erroffset,NULL);
+rx = pcre_compile(regexp,PCRE_MULTILINE,&errorstr,&erroffset,NULL);
 
 if (rx == NULL)
    {
@@ -509,7 +558,7 @@ struct CfRegEx CaseCompileRegExp(char *regexp)
  int erroffset;
 
 memset(&this,0,sizeof(struct CfRegEx)); 
-rx = pcre_compile(regexp,PCRE_CASELESS,&errorstr,&erroffset,NULL);
+rx = pcre_compile(regexp,PCRE_CASELESS|PCRE_MULTILINE,&errorstr,&erroffset,NULL);
 
 if (rx == NULL)
    {
@@ -566,11 +615,8 @@ if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)
    *start = ovector[0];
    *end = ovector[1];
 
-   if (rc > 1)
-      {
-      DeleteScope("match");
-      NewScope("match");
-      }
+   DeleteScope("match");
+   NewScope("match");
    
    for (i = 0; i < rc; i++) /* make backref vars $(1),$(2) etc */
       {
@@ -671,11 +717,8 @@ if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)
    match_start = teststring + ovector[0];
    match_len = ovector[1] - ovector[0];
 
-   if (rc > 1)
-      {
-      DeleteScope("match");
-      NewScope("match");
-      }
+   DeleteScope("match");
+   NewScope("match");
    
    for (i = 0; i < rc; i++) /* make backref vars $(1),$(2) etc */
       {
@@ -1380,13 +1423,58 @@ for (sp = str; (*sp != '\0') && (strEscPos < strEscSz - 2); sp++)
       sp += strlen(noEsc);
       }
    
-   if (!isalnum(*sp))
+   if (*sp != '\0' && !isalnum(*sp))
       {
       strEsc[strEscPos++] = '\\';
       }
    
    strEsc[strEscPos++] = *sp;
    }
+}
+
+/*********************************************************************/
+
+char *EscapeChar(char *str, int strSz, char esc)
+/* Escapes characters esc in the string str of size strSz  */
+
+{ char strDup[CF_BUFSIZE];
+  int strPos, strDupPos;
+  
+if(sizeof(strDup) < strSz)
+   {
+   FatalError("Too large string passed to EscapeCharInplace()\n");
+   }
+
+snprintf(strDup, sizeof(strDup), "%s", str);
+memset(str, 0, strSz);
+
+for(strPos = 0, strDupPos = 0; strPos < strSz - 2; strPos++, strDupPos++)
+   {
+   if(strDup[strDupPos] == esc)
+      {
+      str[strPos] = '\\';
+      strPos++;
+      }
+   
+   str[strPos] = strDup[strDupPos];
+   }
+
+return str;
+}
+
+/*********************************************************************/
+
+void AnchorRegex(char *regex, char *out, int outSz)
+
+{
+if (EMPTY(regex))
+  {
+  memset(out,0,outSz);
+  }
+else
+  {
+  snprintf(out,outSz,"^(%s)$",regex);
+  }
 }
 
 

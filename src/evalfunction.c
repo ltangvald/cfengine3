@@ -86,8 +86,8 @@ struct Rval FnCallHostsSeen(struct FnCall *fp,struct Rlist *finalargs)
   time_t tid = time(NULL);
   double now = (double)tid,average = 0, var = 0;
   double ticksperhr = (double)CF_TICKS_PER_HOUR;
-  char name[CF_BUFSIZE],hostname[CF_BUFSIZE];
-  struct QPoint entry;
+  char name[CF_BUFSIZE],hosthash[CF_BUFSIZE],address[CF_MAXVARSIZE];
+  struct CfKeyHostSeen entry;
   int horizon;
   
 buffer[0] = '\0';  
@@ -139,14 +139,15 @@ while(NextDB(dbp,dbcp,&key,&ksize,&value,&vsize))
    char tbuf[CF_BUFSIZE],addr[CF_BUFSIZE];
 
    memcpy(&then,value,sizeof(then));
-   strcpy(hostname,(char *)(key+1));
-
+   strcpy(hosthash,(char *)(key+1));
+   
    if (value != NULL)
       {
       memcpy(&entry,value,sizeof(entry));
-      then = entry.q;
-      average = (double)entry.expect;
-      var = (double)entry.var;
+      then = entry.Q.q;
+      average = (double)entry.Q.expect;
+      var = (double)entry.Q.var;
+      strcpy(address,entry.address);
       }
    else
       {
@@ -170,11 +171,11 @@ while(NextDB(dbp,dbcp,&key,&ksize,&value,&vsize))
 
    if (strcmp(format,"address") == 0)
       {
-      IdempPrependRScalar(&returnlist,hostname,CF_SCALAR);
+      IdempPrependRScalar(&returnlist,address,CF_SCALAR);
       }
    else
       {
-      strncpy(name,IPString2Hostname(hostname),CF_MAXVARSIZE);
+      strncpy(name,IPString2Hostname(address),CF_MAXVARSIZE);
       IdempPrependRScalar(&returnlist,name,CF_SCALAR);
       }
    }
@@ -296,6 +297,57 @@ return rval;
 
 /*********************************************************************/
 
+struct Rval FnCallGetUsers(struct FnCall *fp,struct Rlist *finalargs)
+    
+#ifndef MINGW
+{ struct Rlist *rp,*newlist = NULL,*except_names,*except_uids;
+  struct Rval rval;
+  struct passwd *pw;
+  char buffer[CF_BUFSIZE],ctrlstr[CF_SMALLBUF];
+  char *except_name,*except_uid;
+  int limit;
+  
+buffer[0] = '\0';  
+ArgTemplate(fp,CF_FNCALL_TYPES[cfn_getusers].args,finalargs); /* Arg validation */
+
+/* begin fn specific content */
+
+except_name = finalargs->item;
+except_uid = finalargs->next->item;
+
+except_names = SplitStringAsRList(except_name,',');
+except_uids = SplitStringAsRList(except_uid,',');
+
+setpwent();
+
+while (pw = getpwent())
+   {
+   if (!IsStringIn(except_names,pw->pw_name) && !IsIntIn(except_uids,(int)pw->pw_uid))
+      {
+      IdempPrependRScalar(&newlist,pw->pw_name,CF_SCALAR);
+      }
+   }
+
+endpwent();
+
+SetFnCallReturnStatus("getusers",FNCALL_SUCCESS,NULL,NULL);
+
+rval.item = newlist;
+rval.rtype = CF_LIST;
+return rval;
+}
+#else
+{
+struct Rval rval;
+CfOut(cf_error,""," -> getusers is not yet implemented on Windows"); 
+rval.item = NULL;
+rval.rtype = CF_LIST;
+return rval;
+}
+#endif
+
+/*********************************************************************/
+
 struct Rval FnCallEscape(struct FnCall *fp,struct Rlist *finalargs)
 
 { struct Rlist *rp;
@@ -334,7 +386,7 @@ struct Rval FnCallHost2IP(struct FnCall *fp,struct Rlist *finalargs)
 { struct Rlist *rp;
   struct Rval rval;
   struct passwd *pw;
-  char buffer[CF_BUFSIZE],ctrlstr[CF_SMALLBUF];
+  char buffer[CF_BUFSIZE];
   char *name;
   int limit;
   
@@ -357,6 +409,38 @@ SetFnCallReturnStatus("host2ip",FNCALL_SUCCESS,NULL,NULL);
 rval.rtype = CF_SCALAR;
 return rval;
 }
+
+/*********************************************************************/
+
+struct Rval FnCallIP2Host(struct FnCall *fp,struct Rlist *finalargs)
+
+{ struct Rlist *rp;
+  struct Rval rval;
+  struct passwd *pw;
+  char buffer[CF_BUFSIZE];
+  char *ip;
+  int limit;
+  
+buffer[0] = '\0';  
+ArgTemplate(fp,CF_FNCALL_TYPES[cfn_ip2host].args,finalargs); /* Arg validation */
+
+/* begin fn specific content */
+
+ip = finalargs->item;
+
+if ((rval.item = strdup(IPString2Hostname(ip))) == NULL)
+   {
+   FatalError("Memory allocation in FnCallIP2Host");
+   }
+
+SetFnCallReturnStatus("ip2host",FNCALL_SUCCESS,NULL,NULL);
+
+/* end fn specific content */
+
+rval.rtype = CF_SCALAR;
+return rval;
+}
+
 
 /*********************************************************************/
 
@@ -477,6 +561,12 @@ string = finalargs->item;
 typestring = finalargs->next->item;
 
 type = String2HashType(typestring);
+
+if (FIPS_MODE && type == cf_md5)
+   {
+   CfOut(cf_error,""," !! FIPS mode is enabled, and md5 is not an approved algorithm in call to hash()");
+   }
+
 HashString(string,strlen(string),digest,type);
 
 snprintf(buffer,CF_BUFSIZE-1,"%s",HashPrint(type,digest));
@@ -554,25 +644,16 @@ ArgTemplate(fp,CF_FNCALL_TYPES[cfn_classmatch].args,finalargs); /* Arg validatio
 
 /* begin fn specific content */
 
-for (ip = VHEAP; ip != NULL; ip=ip->next)
+if (MatchInAlphaList(VHEAP,(char *)finalargs->item))
    {
-   if (FullTextMatch((char *)finalargs->item,ip->name))
-      {
-      SetFnCallReturnStatus("classmatch",FNCALL_SUCCESS,NULL,NULL);
-      strcpy(buffer,"any");
-      break;
-      }
+   SetFnCallReturnStatus("classmatch",FNCALL_SUCCESS,NULL,NULL);
+   strcpy(buffer,"any");
    }
-
-for (ip = VADDCLASSES; ip != NULL; ip=ip->next)
-   {
-   if (FullTextMatch((char *)finalargs->item,ip->name))
-      {
-      SetFnCallReturnStatus("classmatch",FNCALL_SUCCESS,NULL,NULL);
-      strcpy(buffer,"any");
-      break;
-      }
-   }
+else if (MatchInAlphaList(VADDCLASSES,(char *)finalargs->item))
+    {
+    SetFnCallReturnStatus("classmatch",FNCALL_SUCCESS,NULL,NULL);
+    strcpy(buffer,"any");
+    }
 
 /*
 There is no case in which the function can "fail" to find an answer
@@ -596,27 +677,52 @@ struct Rval FnCallCountClassesMatching(struct FnCall *fp,struct Rlist *finalargs
 
 { struct Rlist *rp;
   struct Rval rval;
-  char buffer[CF_BUFSIZE];
+  char buffer[CF_BUFSIZE], *string = ((char *)finalargs->item);
   struct Item *ip;
   int count = 0;
+  int i = (int)*string;
   
 ArgTemplate(fp,CF_FNCALL_TYPES[cfn_countclassesmatching].args,finalargs); /* Arg validation */
 
 /* begin fn specific content */
 
-for (ip = VHEAP; ip != NULL; ip=ip->next)
+if (isalnum(i) || *string == '_')
    {
-   if (FullTextMatch((char *)finalargs->item,ip->name))
+   for (ip = VHEAP.list[i]; ip != NULL; ip=ip->next)
       {
-      count++;
+      if (FullTextMatch(string,ip->name))          
+         {
+         count++;
+         }
+      }
+
+   for (ip = VHEAP.list[i]; ip != NULL; ip=ip->next)
+      {
+      if (FullTextMatch(string,ip->name))          
+         {
+         count++;
+         }
       }
    }
-
-for (ip = VADDCLASSES; ip != NULL; ip=ip->next)
+else
    {
-   if (FullTextMatch((char *)finalargs->item,ip->name))
+   for (i = 0; i < CF_ALPHABETSIZE; i++)
       {
-      count++;
+      for (ip = VHEAP.list[i]; ip != NULL; ip=ip->next)
+         {
+         if (FullTextMatch((char *)finalargs->item,ip->name))
+            {
+            count++;
+            }
+         }
+      
+      for (ip = VADDCLASSES.list[i]; ip != NULL; ip=ip->next)
+         {
+         if (FullTextMatch((char *)finalargs->item,ip->name))
+            {
+            count++;
+            }
+         }
       }
    }
 
@@ -763,31 +869,47 @@ ArgTemplate(fp,CF_FNCALL_TYPES[cfn_returnszero].args,finalargs); /* Arg validati
 
 /* begin fn specific content */
 
-if (strcmp(finalargs->next->item,"useshell") == 0)
+if (!IsAbsoluteFileName(finalargs->item))
    {
-   useshell = true;
-   snprintf(comm,CF_BUFSIZE,"%s",finalargs->item);
-   }
-else
-   {
-   useshell = false;
-   snprintf(comm,CF_BUFSIZE,"%s",finalargs->item);
-   }
-
-if (cfstat(GetArg0(finalargs->item),&statbuf) == -1)
-   {
-   SetFnCallReturnStatus("returnszero",FNCALL_FAILURE,strerror(errno),NULL);   
+   CfOut(cf_error,"","execresult \"%s\" does not have an absolute path\n",finalargs->item);
+   SetFnCallReturnStatus("execresult",FNCALL_FAILURE,strerror(errno),NULL);
    strcpy(buffer,"!any");   
    }
-else if (ShellCommandReturnsZero(comm,useshell))
+
+if (!IsExecutable(GetArg0(finalargs->item)))
    {
-   SetFnCallReturnStatus("returnszero",FNCALL_SUCCESS,NULL,NULL);
-   strcpy(buffer,"any");
+   CfOut(cf_error,"","execresult \"%s\" is assumed to be executable but isn't\n",finalargs->item);
+   SetFnCallReturnStatus("execresult",FNCALL_FAILURE,strerror(errno),NULL);
+   strcpy(buffer,"!any");   
    }
 else
    {
-   SetFnCallReturnStatus("returnszero",FNCALL_SUCCESS,strerror(errno),NULL);   
-   strcpy(buffer,"!any");
+   if (strcmp(finalargs->next->item,"useshell") == 0)
+      {
+      useshell = true;
+      snprintf(comm,CF_BUFSIZE,"%s",finalargs->item);
+      }
+   else
+      {
+      useshell = false;
+      snprintf(comm,CF_BUFSIZE,"%s",finalargs->item);
+      }
+   
+   if (cfstat(GetArg0(finalargs->item),&statbuf) == -1)
+      {
+      SetFnCallReturnStatus("returnszero",FNCALL_FAILURE,strerror(errno),NULL);   
+      strcpy(buffer,"!any");   
+      }
+   else if (ShellCommandReturnsZero(comm,useshell))
+      {
+      SetFnCallReturnStatus("returnszero",FNCALL_SUCCESS,NULL,NULL);
+      strcpy(buffer,"any");
+      }
+   else
+      {
+      SetFnCallReturnStatus("returnszero",FNCALL_SUCCESS,strerror(errno),NULL);   
+      strcpy(buffer,"!any");
+      }
    }
  
 if ((rval.item = strdup(buffer)) == NULL)
@@ -817,11 +939,18 @@ ArgTemplate(fp,CF_FNCALL_TYPES[cfn_execresult].args,finalargs); /* Arg validatio
 
 /* begin fn specific content */
 
+if (!IsAbsoluteFileName(finalargs->item))
+   {
+   CfOut(cf_error,"","execresult \"%s\" does not have an absolute path\n",finalargs->item);
+   SetFnCallReturnStatus("execresult",FNCALL_FAILURE,strerror(errno),NULL);
+   strcpy(buffer,"!any");   
+   }
 
 if (!IsExecutable(GetArg0(finalargs->item)))
    {
-   CfOut(cf_error,"","ExecResult \"%s\" is assumed to be executable but isn't\n",finalargs->next->item);
+   CfOut(cf_error,"","execresult \"%s\" is assumed to be executable but isn't\n",finalargs->item);
    SetFnCallReturnStatus("execresult",FNCALL_FAILURE,strerror(errno),NULL);
+   strcpy(buffer,"!any");   
    }
 else
    {
@@ -962,7 +1091,7 @@ switch(policy)
 
 SetFnCallReturnStatus("splayclass",FNCALL_SUCCESS,strerror(errno),NULL);   
 
-hash = (double)Hash(splay);
+hash = (double)GetHash(splay);
 box = (int)(0.5 + period*hash/(double)CF_HASHTABLESIZE);
 
 minblocks = box % 12;
@@ -1103,15 +1232,9 @@ if (strlen(sendstring) > 0)
       return rval;   
       }
 
-   signal(SIGALRM,(void *)TimeOut);
-   alarm(CF_TIMEOUT);
-   
    if ((n_read = recv(conn->sd,buffer,val,0)) == -1)
       {
       }
-
-   alarm(0);
-   signal(SIGALRM,SIG_DFL);
 
    if (n_read == -1)
       {
@@ -1322,8 +1445,9 @@ else
 if ((ptr = GetScope(scopeid)) == NULL)
    {
    CfOut(cf_error,"","Function getindices was promised an array called \"%s\" in scope \"%s\" but this was not found\n",lval,scopeid);
-   SetFnCallReturnStatus("getindices",FNCALL_FAILURE,"Array not found in scope",NULL);
-   rval.item = NULL;
+   SetFnCallReturnStatus("getindices",FNCALL_SUCCESS,"Array not found in scope",NULL);
+   IdempAppendRScalar(&returnlist,CF_NULL_VALUE,CF_SCALAR);
+   rval.item = returnlist;
    rval.rtype = CF_LIST;
    return rval;            
    }
@@ -1338,8 +1462,7 @@ for (i = 0; i < CF_HASHTABLESIZE; i++)
          {
          char *sp;
          index[0] = '\0';
-         sscanf(ptr->hashtable[i]->lval+strlen(match),"%127s",index);
-
+         sscanf(ptr->hashtable[i]->lval+strlen(match),"%127[^\n]",index);
          if (sp = strchr(index,']'))
             {
             *sp = '\0';
@@ -1359,10 +1482,7 @@ for (i = 0; i < CF_HASHTABLESIZE; i++)
 
 if (returnlist == NULL)
    {
-   SetFnCallReturnStatus("getindices",FNCALL_FAILURE,"Array not found in scope",NULL);
-   rval.item = NULL;
-   rval.rtype = CF_LIST;
-   return rval;               
+   IdempAppendRScalar(&returnlist,CF_NULL_VALUE,CF_SCALAR);
    }
 
 SetFnCallReturnStatus("getindices",FNCALL_SUCCESS,NULL,NULL);
@@ -1432,6 +1552,8 @@ if (rval2.rtype != CF_LIST)
    return rval;
    }
 
+AppendRScalar(&returnlist,CF_NULL_VALUE,CF_SCALAR);
+
 for (rp = (struct Rlist *)rval2.item; rp != NULL; rp=rp->next)
    {
    if (FullTextMatch(regex,rp->item))
@@ -1446,6 +1568,178 @@ rval.item = returnlist;
 /* end fn specific content */
 
 rval.rtype = CF_LIST;
+return rval;
+}
+
+/*********************************************************************/
+
+struct Rval FnCallSum(struct FnCall *fp,struct Rlist *finalargs)
+
+{ char lval[CF_MAXVARSIZE],buffer[CF_MAXVARSIZE];
+  char *name,*regex,index[CF_MAXVARSIZE],scopeid[CF_MAXVARSIZE],match[CF_MAXVARSIZE];
+  struct Rval rval,rval2;
+  struct Rlist *rp,*returnlist = NULL;
+  struct Scope *ptr;
+  double sum = 0;
+  int i;
+
+ArgTemplate(fp,CF_FNCALL_TYPES[cfn_sum].args,finalargs); /* Arg validation */
+
+/* begin fn specific content */
+
+name = finalargs->item;
+
+/* Locate the array */
+
+if (strstr(name,"."))
+   {
+   scopeid[0] = '\0';
+   sscanf(name,"%[^127.].%127s",scopeid,lval);
+   }
+else
+   {
+   strcpy(lval,name);
+   strcpy(scopeid,CONTEXTID);
+   }
+
+if ((ptr = GetScope(scopeid)) == NULL)
+   {
+   CfOut(cf_error,"","Function \"sum\" was promised a list in scope \"%s\" but this was not found\n",scopeid);
+   SetFnCallReturnStatus("sum",FNCALL_FAILURE,"List not found in scope",NULL);
+   rval.item = NULL;
+   rval.rtype = CF_SCALAR;
+   return rval;            
+   }
+
+if (GetVariable(scopeid,lval,&rval2.item,&rval2.rtype) == cf_notype)
+   {
+   CfOut(cf_error,"","Function \"sum\" was promised a list called \"%s\" but this was not found\n",name);
+   SetFnCallReturnStatus("sum",FNCALL_FAILURE,"List not found in scope",NULL);
+   rval.item = NULL;
+   rval.rtype = CF_SCALAR;
+   return rval;
+   }
+
+if (rval2.rtype != CF_LIST)
+   {
+   CfOut(cf_error,"","Function \"sum\" was promised a list called \"%s\" but this was not found\n",name);
+   SetFnCallReturnStatus("sum",FNCALL_FAILURE,"Array not found in scope",NULL);
+   rval.item = NULL;
+   rval.rtype = CF_SCALAR;
+   return rval;
+   }
+
+for (rp = (struct Rlist *)rval2.item; rp != NULL; rp=rp->next)
+   {
+   double x;
+   
+   if ((x = Str2Double(rp->item)) == CF_NODOUBLE)
+      {
+      SetFnCallReturnStatus("sum",FNCALL_FAILURE,"Illegal real number",NULL);
+      rval.item = NULL;
+      rval.rtype = CF_SCALAR;
+      return rval;
+      }
+   else
+      {
+      sum += x;
+      }
+   }
+
+snprintf(buffer,CF_MAXVARSIZE,"%lf",sum);
+
+SetFnCallReturnStatus("sum",FNCALL_SUCCESS,NULL,NULL);
+rval.item = strdup(buffer);
+
+/* end fn specific content */
+
+rval.rtype = CF_SCALAR;
+return rval;
+}
+
+/*********************************************************************/
+
+struct Rval FnCallProduct(struct FnCall *fp,struct Rlist *finalargs)
+
+{ char lval[CF_MAXVARSIZE],buffer[CF_MAXVARSIZE];
+  char *name,*regex,index[CF_MAXVARSIZE],scopeid[CF_MAXVARSIZE],match[CF_MAXVARSIZE];
+  struct Rval rval,rval2;
+  struct Rlist *rp,*returnlist = NULL;
+  struct Scope *ptr;
+  double product = 1.0;
+  int i;
+
+ArgTemplate(fp,CF_FNCALL_TYPES[cfn_product].args,finalargs); /* Arg validation */
+
+/* begin fn specific content */
+
+name = finalargs->item;
+
+/* Locate the array */
+
+if (strstr(name,"."))
+   {
+   scopeid[0] = '\0';
+   sscanf(name,"%[^127.].%127s",scopeid,lval);
+   }
+else
+   {
+   strcpy(lval,name);
+   strcpy(scopeid,CONTEXTID);
+   }
+
+if ((ptr = GetScope(scopeid)) == NULL)
+   {
+   CfOut(cf_error,"","Function \"product\" was promised a list in scope \"%s\" but this was not found\n",scopeid);
+   SetFnCallReturnStatus("product",FNCALL_FAILURE,"List not found in scope",NULL);
+   rval.item = NULL;
+   rval.rtype = CF_SCALAR;
+   return rval;            
+   }
+
+if (GetVariable(scopeid,lval,&rval2.item,&rval2.rtype) == cf_notype)
+   {
+   CfOut(cf_error,"","Function \"product\" was promised a list called \"%s\" but this was not found\n",name);
+   SetFnCallReturnStatus("product",FNCALL_FAILURE,"List not found in scope",NULL);
+   rval.item = NULL;
+   rval.rtype = CF_SCALAR;
+   return rval;
+   }
+
+if (rval2.rtype != CF_LIST)
+   {
+   CfOut(cf_error,"","Function \"product\" was promised a list called \"%s\" but this was not found\n",name);
+   SetFnCallReturnStatus("product",FNCALL_FAILURE,"Array not found in scope",NULL);
+   rval.item = NULL;
+   rval.rtype = CF_SCALAR;
+   return rval;
+   }
+
+for (rp = (struct Rlist *)rval2.item; rp != NULL; rp=rp->next)
+   {
+   double x;
+   
+   if ((x = Str2Double(rp->item)) == CF_NODOUBLE)
+      {
+      SetFnCallReturnStatus("product",FNCALL_FAILURE,"Illegal real number",NULL);
+      rval.item = NULL;
+      rval.rtype = CF_SCALAR;
+      return rval;
+      }
+   else
+      {
+      product *= x;
+      }
+   }
+
+snprintf(buffer,CF_MAXVARSIZE,"%lf",product);
+
+SetFnCallReturnStatus("product",FNCALL_SUCCESS,NULL,NULL);
+rval.item = strdup(buffer);
+
+/* end fn specific content */
+
+rval.rtype = CF_SCALAR;
 return rval;
 }
 
@@ -1640,9 +1934,10 @@ filename = finalargs->next->item;
 
 if ((fin = fopen(filename,"r")) == NULL)
    {
-   CfOut(cf_error,"fopen"," !! File \"%s\" could not be read in countlinesmatching()",filename);
-   SetFnCallReturnStatus("countlinesmatching",FNCALL_FAILURE,"File unreadable",NULL);
-   rval.item = NULL;
+   CfOut(cf_verbose,"fopen"," !! File \"%s\" could not be read in countlinesmatching()",filename);
+   snprintf(retval,CF_SMALLBUF-1,"0",lcount);
+   SetFnCallReturnStatus("countlinesmatching",FNCALL_SUCCESS,NULL,NULL);
+   rval.item = strdup(retval);
    rval.rtype = CF_SCALAR;
    return rval;               
    }
@@ -1725,7 +2020,7 @@ else
 
 if (GetVariable(CONTEXTID,naked,&retval,&rettype) == cf_notype)
    {
-   CfOut(cf_error,"","Function selectservers was promised a list called \"%s\" but this was not found\n",listvar);
+   CfOut(cf_error,"","Function selectservers was promised a list called \"%s\" but this was not found from context %s.%s\n",listvar,CONTEXTID,naked);
    SetFnCallReturnStatus("selectservers",FNCALL_FAILURE,"Host list was not a list found in scope",NULL);
    snprintf(buffer,CF_MAXVARSIZE-1,"%d",count);
    rval.item = strdup(buffer);
@@ -1800,16 +2095,10 @@ for (rp = hostnameip; rp != NULL; rp=rp->next)
          continue;
          }
       
-      signal(SIGALRM,(void *)TimeOut);
-      alarm(CF_TIMEOUT);
-      
       if ((n_read = recv(conn->sd,buffer,val,0)) == -1)
          {
          }
-      
-      alarm(0);
-      signal(SIGALRM,SIG_DFL);
-      
+            
       if (n_read == -1)
          {
          cf_closesocket(conn->sd);
@@ -2015,7 +2304,16 @@ ArgTemplate(fp,CF_FNCALL_TYPES[cfn_fileexists].args,finalargs); /* Arg validatio
 
 if (lstat(finalargs->item,&statbuf) == -1)
    {
-   strcpy(buffer,"!any");
+   if (fn == cfn_filesize)
+      {      
+      strcpy(buffer,"-1");
+      SetFnCallReturnStatus(CF_FNCALL_TYPES[fn].name,FNCALL_FAILURE,NULL,NULL);
+      }
+   else
+      {
+      strcpy(buffer,"!any");
+      SetFnCallReturnStatus(CF_FNCALL_TYPES[fn].name,FNCALL_SUCCESS,NULL,NULL);
+      }
    }
 else
    {
@@ -2023,6 +2321,13 @@ else
 
    switch (fn)
       {
+      case cfn_isexecutable:
+          if (IsExecutable(finalargs->item))
+             {
+             strcpy(buffer,"any");
+             }
+          break;
+          
       case cfn_isdir:
           if (S_ISDIR(statbuf.st_mode))
              {
@@ -2044,6 +2349,10 @@ else
       case cfn_fileexists:
           strcpy(buffer,"any");
           break;
+
+      case cfn_filesize:
+          snprintf(buffer,CF_MAXVARSIZE,"%ld",statbuf.st_size);
+          break;
       }
 
    SetFnCallReturnStatus(CF_FNCALL_TYPES[fn].name,FNCALL_SUCCESS,NULL,NULL);
@@ -2055,7 +2364,7 @@ if ((rval.item = strdup(buffer)) == NULL)
    }
 
 /* end fn specific content */
-
+   
 rval.rtype = CF_SCALAR;
 return rval;
 }
@@ -2262,7 +2571,7 @@ ArgTemplate(fp,CF_FNCALL_TYPES[cfn_strcmp].args,finalargs); /* Arg validation */
 
 /* begin fn specific content */
 
-SetFnCallReturnStatus("isvariable",FNCALL_SUCCESS,NULL,NULL);   
+SetFnCallReturnStatus("strcmp",FNCALL_SUCCESS,NULL,NULL);   
 
 if (strcmp(finalargs->item,finalargs->next->item) == 0)
    {
@@ -2395,13 +2704,63 @@ else
          }
       else
          {
-         SetFnCallReturnStatus("remotescalar",FNCALL_FAILURE,NULL,NULL);
+         // This function should never fail
+         snprintf(buffer,2,"");
+         SetFnCallReturnStatus("remotescalar",FNCALL_SUCCESS,NULL,NULL);
          }
       }
    else
       {
       SetFnCallReturnStatus("remotescalar",FNCALL_SUCCESS,NULL,NULL);
       CacheUnreliableValue("remotescalar",handle,buffer);
+      }
+   
+   if ((rval.item = strdup(buffer)) == NULL)
+      {
+      FatalError("Memory allocation in FnCallRemoteSCalar");
+      }
+   }
+
+/* end fn specific content */
+
+rval.rtype = CF_SCALAR;
+return rval;
+}
+
+/*********************************************************************/
+
+struct Rval FnCallHubKnowledge(struct FnCall *fp,struct Rlist *finalargs)
+
+{ struct Rlist *rp;
+  struct Rval rval;
+  char buffer[CF_BUFSIZE];
+  char *handle;
+  int encrypted;
+  
+buffer[0] = '\0';  
+ArgTemplate(fp,CF_FNCALL_TYPES[cfn_hubknowledge].args,finalargs); /* Arg validation */
+
+/* begin fn specific content */
+
+handle = finalargs->item;
+
+if (THIS_AGENT_TYPE != cf_agent)
+   {
+   if ((rval.item = strdup("<inaccessible remote scalar>")) == NULL)
+      {
+      FatalError("Memory allocation in FnCallRemoteSCalar");
+      }
+   }
+else
+   {
+   CfOut(cf_verbose,""," -> Accessing hub knowledge bank for \"%s\"",handle);
+   GetRemoteScalar("VAR",handle,POLICY_SERVER,true,buffer);
+
+   // This should always be successful - and this one doesn't cache
+   
+   if (strncmp(buffer,"BAD:",4) == 0)
+      {
+      snprintf(buffer,CF_MAXVARSIZE,"0");
       }
    
    if ((rval.item = strdup(buffer)) == NULL)
@@ -2521,7 +2880,7 @@ if (file_buffer == NULL)
    }
 else
    {
-   file_buffer = StripPatterns(file_buffer,comment);
+   file_buffer = StripPatterns(file_buffer,comment,filename);
 
    if (file_buffer == NULL)
       {
@@ -2624,7 +2983,7 @@ if (file_buffer == NULL)
    }
 else
    {
-   file_buffer = StripPatterns(file_buffer,comment);
+   file_buffer = StripPatterns(file_buffer,comment,filename);
 
    if (file_buffer == NULL)
       {
@@ -2727,7 +3086,7 @@ if (file_buffer == NULL)
    }
 else
    {
-   file_buffer = StripPatterns(file_buffer,comment);
+   file_buffer = StripPatterns(file_buffer,comment,filename);
 
    if (file_buffer == NULL)
       {
@@ -2991,43 +3350,46 @@ switch (ch)
 argv0 = finalargs->item;
 argv1 = finalargs->next->item;
 
-a = Str2Double(argv0);
-b = Str2Double(argv1);
-
-if (a == CF_NODOUBLE || b == CF_NODOUBLE)
+if (IsRealNumber(argv0) && IsRealNumber(argv1))
    {
-   SetFnCallReturnStatus("is*than",FNCALL_FAILURE,NULL,NULL);
-   rval.item = NULL;
-   rval.rtype = CF_SCALAR;
-   return rval;
-   }
+   a = Str2Double(argv0); 
+   b = Str2Double(argv1);
+
+   if (a == CF_NODOUBLE || b == CF_NODOUBLE)
+      {
+      SetFnCallReturnStatus("is*than",FNCALL_FAILURE,NULL,NULL);
+      rval.item = NULL;
+      rval.rtype = CF_SCALAR;
+      return rval;
+      }
 
 /* begin fn specific content */
-
-if ((a != CF_NOVAL) && (b != CF_NOVAL)) 
-   {
-   Debug("%s and %s are numerical\n",argv0,argv1);
    
-   if (ch == '+')
+   if ((a != CF_NOVAL) && (b != CF_NOVAL)) 
       {
-      if (a > b)
+      Debug("%s and %s are numerical\n",argv0,argv1);
+      
+      if (ch == '+')
          {
-         strcpy(buffer,"any");
+         if (a > b)
+            {
+            strcpy(buffer,"any");
+            }
+         else
+            {
+            strcpy(buffer,"!any");
+            }
          }
       else
          {
-         strcpy(buffer,"!any");
-         }
-      }
-   else
-      {
-      if (a < b)  
-         {
-         strcpy(buffer,"any");
-         }
-      else
-         {
-         strcpy(buffer,"!any");
+         if (a < b)  
+            {
+            strcpy(buffer,"any");
+            }
+         else
+            {
+            strcpy(buffer,"!any");
+            }
          }
       }
    }
@@ -3219,6 +3581,73 @@ if ((rval.item = strdup(buffer)) == NULL)
    }
 
 SetFnCallReturnStatus("on",FNCALL_SUCCESS,NULL,NULL);
+
+/* end fn specific content */
+
+rval.rtype = CF_SCALAR;
+return rval;
+}
+
+/*********************************************************************/
+
+struct Rval FnCallLaterThan(struct FnCall *fp,struct Rlist *finalargs)
+
+{ struct Rlist *rp;
+  struct Rval rval;
+  char buffer[CF_BUFSIZE];
+  long d[6];
+  time_t cftime,now = time(NULL);
+  struct tm tmv;
+  enum cfdatetemplate i;
+  
+buffer[0] = '\0';  
+ArgTemplate(fp,CF_FNCALL_TYPES[cfn_laterthan].args,finalargs); /* Arg validation */
+
+/* begin fn specific content */
+
+rp = finalargs;
+
+for (i = 0; i < 6; i++)
+   {
+   if (rp != NULL)
+      {
+      d[i] = Str2Int(rp->item);
+      rp = rp->next;
+      }
+   }
+
+/* (year,month,day,hour,minutes,seconds) */
+
+tmv.tm_year = d[cfa_year] - 1900;
+tmv.tm_mon  = d[cfa_month] -1;
+tmv.tm_mday = d[cfa_day];
+tmv.tm_hour = d[cfa_hour];
+tmv.tm_min  = d[cfa_min];
+tmv.tm_sec  = d[cfa_sec];
+tmv.tm_isdst= -1;
+
+if ((cftime=mktime(&tmv))== -1)
+   {
+   CfOut(cf_inform,"","Illegal time value");
+   }
+
+Debug("Time computed from input was: %s\n",cf_ctime(&cftime));
+
+if (now > cftime)
+   {
+   strcpy(buffer,CF_ANYCLASS);
+   }
+else
+   {
+   strcpy(buffer,"!any");
+   }
+
+if ((rval.item = strdup(buffer)) == NULL)
+   {
+   FatalError("Memory allocation in FnCallLaterThan");
+   }
+
+SetFnCallReturnStatus("laterthan",FNCALL_SUCCESS,NULL,NULL);
 
 /* end fn specific content */
 
@@ -3448,7 +3877,7 @@ if (file_buffer == NULL)
    }
 else
    {
-   file_buffer = StripPatterns(file_buffer,comment);
+   file_buffer = StripPatterns(file_buffer,comment,filename);
 
    if (file_buffer == NULL)
       {
@@ -3511,7 +3940,7 @@ return rval;
 
 /*********************************************************************/
 
-struct Rval FnCallReadStringArray(struct FnCall *fp,struct Rlist *finalargs,enum cfdatatype type)
+struct Rval FnCallReadStringArray(struct FnCall *fp,struct Rlist *finalargs,enum cfdatatype type,int intIndex)
 
 /* lval,filename,separator,comment,Max number of bytes  */
 
@@ -3521,11 +3950,20 @@ struct Rval FnCallReadStringArray(struct FnCall *fp,struct Rlist *finalargs,enum
   int maxent,maxsize,count = 0,noerrors = false,entries = 0;
   char *file_buffer = NULL;
 
-ArgTemplate(fp,CF_FNCALL_TYPES[cfn_readstringarray].args,finalargs); /* Arg validation */
+ /* Arg validation */
+
+if (intIndex)
+   {
+   ArgTemplate(fp,CF_FNCALL_TYPES[cfn_readstringarrayidx].args,finalargs);
+   snprintf(fnname,CF_MAXVARSIZE-1,"read%sarrayidx",CF_DATATYPES[type]);
+   }
+else
+   {
+   ArgTemplate(fp,CF_FNCALL_TYPES[cfn_readstringarray].args,finalargs);
+   snprintf(fnname,CF_MAXVARSIZE-1,"read%sarray",CF_DATATYPES[type]);
+   }
 
 /* begin fn specific content */
-
-snprintf(fnname,CF_MAXVARSIZE-1,"read%sarray",CF_DATATYPES[type]);
 
  /* 6 args: array_lval,filename,comment_regex,split_regex,max number of entries,maxfilesize  */
 
@@ -3546,35 +3984,26 @@ Debug("FILE: %s\n",file_buffer);
 
 if (file_buffer == NULL)
    {
-   rval.item = NULL;
-   rval.rtype = CF_LIST;
-   SetFnCallReturnStatus(fnname,FNCALL_FAILURE,NULL,NULL);
-   return rval;
+   entries = 0;
    }
 else
    {
-   file_buffer = StripPatterns(file_buffer,comment);
+   file_buffer = StripPatterns(file_buffer,comment,filename);
 
    if (file_buffer == NULL)
       {
-      rval.item = NULL;
-      rval.rtype = CF_LIST;
-      return rval;
+      entries = 0;
       }
    else
       {
-      entries = BuildLineArray(array_lval,file_buffer,split,maxent,type);
+      entries = BuildLineArray(array_lval,file_buffer,split,maxent,type,intIndex);
       }
    }
 
 switch(type)
    {
    case cf_str:
-       break;
-
    case cf_int:
-       break;
-
    case cf_real:
        break;
 
@@ -3906,7 +4335,7 @@ ArgTemplate(fp,CF_FNCALL_TYPES[cfn_userexists].args,finalargs); /* Arg validatio
 
 strcpy(buffer,CF_ANYCLASS);
 
-if (isdigit((int)*arg))
+if (IsNumber(arg))
    {
    uid = Str2Uid(arg,NULL,NULL);
    
@@ -4020,7 +4449,7 @@ if (cfstat(filename,&sb) == -1)
          }
       else
          {
-         CfOut(cf_inform,"stat","Could not examine file %s in readfile",filename);
+         CfOut(cf_inform,"stat"," !! Could not examine file \"%s\" in readfile",filename);
          }
       }
    return NULL;
@@ -4036,23 +4465,29 @@ else
    size = sb.st_size;
    }
 
+if (size == 0)
+   {
+   CfOut(cf_verbose,"","Aborting read: file %s has zero bytes",filename);
+   return NULL;
+   }
+
 result = malloc(size+1);
    
 if (result == NULL)
    {
-   CfOut(cf_error,"stat","Could not allocate file %s in readfile",filename);
+   CfOut(cf_error,"malloc","Could not allocate file %s in readfile",filename);
    return NULL;
    }
 
 if ((fp = fopen(filename,"r")) == NULL)
    {
-   CfOut(cf_inform,"fopen","Could not open file %s in readfile",filename);
+   CfOut(cf_verbose,"fopen","Could not open file %s in readfile",filename);
    return NULL;
    }
 
 if (fread(result,size,1,fp) != 1)
    {
-   CfOut(cf_inform,"fread","Could not read expected amount from file %s in readfile",filename);
+   CfOut(cf_verbose,"fread","Could not read expected amount from file %s in readfile",filename);
    fclose(fp);
    return NULL;
    }
@@ -4078,14 +4513,24 @@ return (void *)result;
 
 /*********************************************************************/
 
-char *StripPatterns(char *file_buffer,char *pattern)
+char *StripPatterns(char *file_buffer,char *pattern,char *filename)
 
 { int start,end;
+  int count = 0;
 
-while(BlockTextMatch(pattern,file_buffer,&start,&end))
-   {
-   CloseStringHole(file_buffer,start,end);
-   }
+if(!EMPTY(pattern))
+  {
+  while(BlockTextMatch(pattern,file_buffer,&start,&end))
+    {
+    CloseStringHole(file_buffer,start,end);
+	
+    if (count++ > strlen(file_buffer))
+      {
+      CfOut(cf_error,""," !! Comment regex \"%s\" was irreconcilable reading file %s probably because it legally matches nothing",pattern,filename);
+      return file_buffer;
+      }
+    }
+  }
 
 return file_buffer;
 }
@@ -4112,11 +4557,12 @@ for (sp = s + start; *(sp+off) != '\0'; sp++)
 
 /*********************************************************************/
 
-int BuildLineArray(char *array_lval,char *file_buffer,char *split,int maxent,enum cfdatatype type)
+int BuildLineArray(char *array_lval,char *file_buffer,char *split,int maxent,enum cfdatatype type,int intIndex)
 
-{ char *sp,linebuf[CF_BUFSIZE],name[CF_MAXVARSIZE];
+{ char *sp,linebuf[CF_BUFSIZE],name[CF_MAXVARSIZE],first_one[CF_MAXVARSIZE];
   struct Rlist *rp,*newlist = NULL;
-  int allowblanks = true, vcount,hcount;
+  int allowblanks = true, vcount,hcount,lcount = 0;
+  int lineLen;
 
 memset(linebuf,0,CF_BUFSIZE);
 hcount = 0;
@@ -4126,24 +4572,85 @@ for (sp = file_buffer; hcount < maxent && *sp != '\0'; sp++)
    linebuf[0] = '\0';
    sscanf(sp,"%1023[^\n]",linebuf);
 
-   if (strlen(linebuf) == 0)
+   lineLen = strlen(linebuf);
+
+   if (lineLen == 0)
       {
       continue;
+      }
+   else if (lineLen == 1 && linebuf[0] == '\r')
+      {
+      continue;
+      }
+
+   if(linebuf[lineLen - 1] == '\r')
+     {
+     linebuf[lineLen - 1] = '\0';
+     }
+
+   if (lcount++ > CF_HASHTABLESIZE)
+      {
+      CfOut(cf_error,""," !! Array is too big to be read into Cfengine (max 4000)");
+      break;
       }
 
    newlist = SplitRegexAsRList(linebuf,split,maxent,allowblanks);
    
    vcount = 0;
+   first_one[0] = '\0';
    
    for (rp = newlist; rp != NULL; rp=rp->next)
       {
-      snprintf(name,CF_MAXVARSIZE,"%s[%s][%d]",array_lval,newlist->item,vcount);
-      NewScalar(THIS_BUNDLE,name,rp->item,type);
+      char this_rval[CF_MAXVARSIZE];
+      long ival;
+      double rval;
+
+      switch (type)
+         {
+         case cf_str:
+             strncpy(this_rval,rp->item,CF_MAXVARSIZE-1);
+             break;
+             
+         case cf_int:
+             ival = Str2Int(rp->item);
+             snprintf(this_rval,CF_MAXVARSIZE,"%d",(int)ival);
+             break;
+             
+         case cf_real:
+             rval = Str2Int(rp->item);
+             sscanf(rp->item,"%255s",this_rval);
+             break;
+             
+         default:
+             
+             FatalError("Software error readstringarray - abused type");       
+         }
+
+      if (strlen(first_one) == 0)
+         {
+         strncpy(first_one,this_rval,CF_MAXVARSIZE-1);
+         }
+          
+      if (intIndex)
+         {
+         snprintf(name,CF_MAXVARSIZE,"%s[%d][%d]",array_lval,hcount,vcount);
+         }
+      else
+         {
+         snprintf(name,CF_MAXVARSIZE,"%s[%s][%d]",array_lval,first_one,vcount);
+         }
+
+      NewScalar(THIS_BUNDLE,name,this_rval,type);
       vcount++;
       }
 
    hcount++;
-   sp += strlen(linebuf);
+   sp += lineLen;
+
+   if (*sp == '\0')  // either \n or \0
+      {
+      break;
+      }
    }
 
 /* Don't free data - goes into vars */
@@ -4222,6 +4729,8 @@ for (sp = content+strlen(content)-1; sp >= content && *sp != FILE_SEPARATOR; sp-
    }
 
 NewScope(context);
+name[0] = '\0';
+content[0] = '\0';
 
 switch (*line)
    {
@@ -4249,11 +4758,23 @@ switch (*line)
           NewScalar(context,name,content,cf_str);
           }
        break;
+
+   case '@':
+       content[0] = '\0';
+       sscanf(line+1,"%[^=]=%[^\n]",name,content);
+
+       if (CheckID(name))
+          {
+          CfOut(cf_verbose,"","Defined variable: %s in context %s with value: %s\n",name,context,content);
+          struct Rlist *list = ParseShownRlist(content);
+          NewList(context,name,list,cf_str);          
+          }
+       break;
        
    default:
        if (print)
           {
-          CfOut(cf_error,"","M \"%s\": %s\n",command,line);
+          CfOut(cf_cmdout,"","M \"%s\": %s\n",command,line);
           }
        break;
    }
@@ -4271,7 +4792,7 @@ for (sp = id; *sp != '\0'; sp++)
    {
    if (!isalnum((int)*sp) && (*sp != '_'))
       {
-      CfOut(cf_error,"","Module protocol contained an illegal character (%c) in class/variable identifier %s.",*sp,id);
+      CfOut(cf_error,"","Module protocol contained an illegal character \'%c\' in class/variable identifier \'%s\'.",*sp,id);
       return false;
       }
    }
