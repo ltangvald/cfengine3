@@ -1,33 +1,26 @@
-/* cfengine for GNU
- 
-        Copyright (C) 1995
-        Free Software Foundation, Inc.
- 
-   This file is part of GNU cfengine - written and maintained 
-   by Cfengine AS, Dept of Computing and Engineering, Oslo College,
-   Dept. of Theoretical physics, University of Oslo
- 
+/*
+   Copyright (C) Cfengine AS
+
+   This file is part of Cfengine 3 - written and maintained by Cfengine AS.
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
-   Free Software Foundation; either version 2, or (at your option) any
-   later version.
- 
+   Free Software Foundation; version 3.
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
-   You should have received a copy of the GNU General Public License
-   along with this program; if not, write to the Free Software
-   Foundation, 675 Mass Ave, Cambridge, MA 02139, USA.  */
- 
 
-/*******************************************************************/
-/*                                                                 */
-/*  extern HEADER for cfengine                                     */
-/*                                                                 */
-/*******************************************************************/
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
+  To the extent this program is licensed as part of the Enterprise
+  versions of Cfengine, the applicable Commerical Open Source License
+  (COSL) may apply to this file if you as a licensee so wish it. See
+  included file COSL.txt.
+*/
 
 #include "../pub/getopt.h"
 
@@ -41,6 +34,9 @@ extern pthread_mutex_t MUTEX_DBHANDLE;
 extern pthread_mutex_t MUTEX_POLICY;
 extern pthread_mutex_t MUTEX_GETADDR;
 extern pthread_mutex_t MUTEX_DB_LASTSEEN;
+extern pthread_mutex_t MUTEX_DB_REPORT;
+extern pthread_mutex_t MUTEX_VSCOPE;
+extern pthread_mutex_t MUTEX_SERVER_KEYSEEN;
 # endif
 
 extern pid_t ALARM_PID;
@@ -81,6 +77,8 @@ extern struct Item *IPADDRESSES;
 extern char PIDFILE[CF_BUFSIZE];
 extern char  STR_CFENGINEPORT[16];
 extern unsigned short SHORT_CFENGINEPORT;
+extern time_t CONNTIMEOUT;
+extern time_t RECVTIMEOUT;
 
 extern char CFLOCK[CF_BUFSIZE];
 extern char SAVELOCK[CF_BUFSIZE];
@@ -89,7 +87,6 @@ extern char CFLAST[CF_BUFSIZE];
 extern char LOCKDB[CF_BUFSIZE];
 extern char EDITBUFF[CF_BUFSIZE];
 
-extern char *tzname[2];
 extern int CFSIGNATURE;
 extern char CFDES1[8];
 extern char CFDES2[8];
@@ -153,7 +150,6 @@ extern int ERRORCOUNT;
 extern int NUMBEROFEDITS;
 extern time_t CFSTARTTIME;
 extern time_t CFINITSTARTTIME;
-extern int CF_TIMEOUT;
 
 extern struct utsname VSYSNAME;
 extern int LINENUMBER;
@@ -279,7 +275,6 @@ extern struct Item *VSTRATEGYBUILD;
 
 
 extern struct Item *VMOUNTLIST;
-extern struct Item *VHEAP;      /* Points to the base of the attribute heap */
 extern struct Item *VNEGHEAP;
 extern struct Item *VDELCLASSES;
 extern struct Item *ABORTHEAP;
@@ -344,8 +339,8 @@ extern struct MiscMount *VMISCMOUNTTOP;
 extern struct Item *VIMPORT;
 extern struct Item *VACTIONSEQ;
 extern struct Item *VACCESSLIST;
-extern struct Item *VADDCLASSES;
-extern struct Item *VALLADDCLASSES;
+extern struct AlphaList VHEAP; 
+extern struct AlphaList VADDCLASSES;
 extern struct Rlist *PRIVCLASSHEAP;
 
 extern struct Item *VJUSTACTIONS;
@@ -508,7 +503,9 @@ extern mode_t UMASK;
 
 extern char *SIGNALS[];
 
+#ifndef MINGW
 extern char *tzname[2]; /* see man ctime */
+#endif
 
 extern int SENSIBLEFILECOUNT;
 extern int SENSIBLEFSSIZE;

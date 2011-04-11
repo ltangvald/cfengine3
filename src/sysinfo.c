@@ -91,6 +91,7 @@ void GetNameInfo3()
   time_t tloc;
   struct hostent *hp;
   struct sockaddr_in cin;
+  unsigned char digest[EVP_MAX_MD_SIZE+1];
 #ifdef AIX
   char real_version[_SYS_NMLN];
 #endif
@@ -101,7 +102,7 @@ void GetNameInfo3()
   long sz;
 #endif
   char *components[] = { "cf-twin", "cf-agent", "cf-serverd", "cf-monitord", "cf-know",
-                         "cf-report", "cf-key", "cf-runagent", "cf-execd",
+                         "cf-report", "cf-key", "cf-runagent", "cf-execd", "cf-hub",
                          "cf-promises", NULL };
   int have_component[11];
   struct stat sb;
@@ -196,22 +197,22 @@ FindDomainName(VSYSNAME.nodename);
 
 if (!StrStr(VSYSNAME.nodename,VDOMAIN))
    {
-   snprintf(VFQNAME,CF_BUFSIZE,"%s.%s",VSYSNAME.nodename,ToLowerStr(VDOMAIN));
-   NewClass(VFQNAME);
-   strcpy(VUQNAME,VSYSNAME.nodename);
-   NewClass(VUQNAME);
+   strcpy(VUQNAME,ToLowerStr(VSYSNAME.nodename));
+   NewClass(ToLowerStr(VUQNAME));
+   snprintf(VFQNAME,CF_BUFSIZE,"%s.%s",VUQNAME,ToLowerStr(VDOMAIN));
+   NewClass(ToLowerStr(VFQNAME));
    }
 else
    {
    int n = 0;
-   strcpy(VFQNAME,VSYSNAME.nodename);
+   strcpy(VFQNAME,ToLowerStr(VSYSNAME.nodename));
    NewClass(VFQNAME);
 
    while(VSYSNAME.nodename[n++] != '.' && VSYSNAME.nodename[n] != '\0')
       {
       }
 
-   strncpy(VUQNAME,VSYSNAME.nodename,n);
+   strncpy(VUQNAME,ToLowerStr(VSYSNAME.nodename),n);
 
    if (VUQNAME[n-1] == '.')
       {
@@ -240,6 +241,7 @@ else
    }
 
 CfOut(cf_verbose,"","Cfengine - %s %s\n\n",VERSION,CF3COPYRIGHT);
+
 CfOut(cf_verbose,"","------------------------------------------------------------------------\n\n");
 CfOut(cf_verbose,"","Host name is: %s\n",VSYSNAME.nodename);
 CfOut(cf_verbose,"","Operating System Type is %s\n",VSYSNAME.sysname);
@@ -251,6 +253,7 @@ CfOut(cf_verbose,"","-----------------------------------------------------------
 
 snprintf(workbuf,CF_MAXVARSIZE,"%s",cf_ctime(&tloc));
 Chop(workbuf);
+
 NewScalar("sys","date",workbuf,cf_str);
 NewScalar("sys","cdate",CanonifyName(workbuf),cf_str);
 NewScalar("sys","host",VSYSNAME.nodename,cf_str);
@@ -258,6 +261,7 @@ NewScalar("sys","uqhost",VUQNAME,cf_str);
 NewScalar("sys","fqhost",VFQNAME,cf_str);
 NewScalar("sys","os",VSYSNAME.sysname,cf_str);
 NewScalar("sys","release",VSYSNAME.release,cf_str);
+NewScalar("sys","version",VSYSNAME.version,cf_str);
 NewScalar("sys","arch",VSYSNAME.machine,cf_str);
 NewScalar("sys","workdir",CFWORKDIR,cf_str);
 NewScalar("sys","fstab",VFSTAB[VSYSTEMHARDCLASS],cf_str);
@@ -266,9 +270,17 @@ NewScalar("sys","maildir",VMAILDIR[VSYSTEMHARDCLASS],cf_str);
 NewScalar("sys","exports",VEXPORTS[VSYSTEMHARDCLASS],cf_str);
 NewScalar("sys","expires",EXPIRY,cf_str);
 NewScalar("sys","cf_version",VERSION,cf_str);
-#ifdef HAVE_LIBCFNOVA
+#ifdef HAVE_NOVA
 NewScalar("sys","nova_version",Nova_GetVersion(),cf_str);
 #endif
+
+if (PUBKEY)
+   {
+   HashPubKey(PUBKEY,digest,CF_DEFAULT_DIGEST);
+   NewScalar("sys","key_digest",HashPrint(CF_DEFAULT_DIGEST,digest),cf_str);
+   snprintf(workbuf,CF_MAXVARSIZE-1,"PK_%s",CanonifyName(HashPrint(CF_DEFAULT_DIGEST,digest)));
+   NewClass(workbuf);
+   }
 
 for (i = 0; components[i] != NULL; i++)
    {
@@ -505,14 +517,14 @@ void Get3Environment()
   struct stat statbuf;
   time_t now = time(NULL);
 
-CfOut(cf_verbose,"","Looking for environment from cf-monitor...\n");
+CfOut(cf_verbose,"","Looking for environment from cf-monitord...\n");
 
 snprintf(env,CF_BUFSIZE,"%s/state/%s",CFWORKDIR,CF_ENV_FILE);
 MapName(env);
 
 if (cfstat(env,&statbuf) == -1)
    {
-   CfOut(cf_verbose,"","Unable to detect environment from cfMonitord\n\n");
+   CfOut(cf_verbose,"","Unable to detect environment from cf-monitord\n\n");
    return;
    }
 
@@ -596,7 +608,7 @@ return false;
 
 void FindDomainName(char *hostname)
 
-{ char fqn[CF_MAXVARSIZE];
+{ char fqn[CF_MAXVARSIZE] = {0};
   char *ptr;
   char buffer[CF_BUFSIZE];
 
@@ -783,8 +795,6 @@ if (cfstat("/etc/gentoo-release",&statbuf) != -1)
    NewClass("gentoo");
    }
 
-Lsb_Version();
-
 #else
 
 strncpy(vbuff,VSYSNAME.release,CF_MAXVARSIZE);
@@ -882,8 +892,8 @@ NewScalar("sys","crontab","",cf_str);
 #endif  /* CFCYG */
 
 #ifdef MINGW
-NewClass(VSYSNAME.version);  // code name - e.g. Windows Vista
-NewClass(VSYSNAME.release);  // service pack number - e.g. Service Pack 3
+NewClass(VSYSNAME.release);  // code name - e.g. Windows Vista
+NewClass(VSYSNAME.version);  // service pack number - e.g. Service Pack 3
 
 if (strstr(VSYSNAME.sysname, "workstation"))
    {
@@ -908,7 +918,6 @@ NewScalar("sys","flavor","windows",cf_str);
 
 #endif  /* MINGW */
 
-
 #ifndef NT
 if ((pw = getpwuid(getuid())) == NULL)
    {
@@ -927,6 +936,27 @@ else
    }
 
 NewScalar("sys","crontab",vbuff,cf_str);
+#endif
+
+#if defined(HAVE_NOVA) && defined(HAVE_LIBMONGOC)
+
+if (IsDefinedClass("redhat"))
+   {
+   CfOut(cf_verbose,""," -> Recording default document root /var/www/html");
+   CFDB_PutValue("document_root","/var/www/html");
+   }
+
+if (IsDefinedClass("SuSE"))
+   {
+   CfOut(cf_verbose,""," -> Recording default document root /srv/www/htdocs");
+   CFDB_PutValue("document_root","/srv/www/htdocs");
+   }
+
+if (IsDefinedClass("debian"))
+   {
+   CfOut(cf_verbose,""," -> Recording default document root /var/www");
+   CFDB_PutValue("document_root","/var/www");
+   }
 #endif
 }
 
@@ -1006,6 +1036,8 @@ if (major != -1 && (strcmp(vendor,"") != 0))
    strcat(classbuf, "_");
    strcat(classbuf, strmajor);
    NewClass(classbuf);
+   NewScalar("sys","flavour",classbuf,cf_str);
+   NewScalar("sys","flavor",classbuf,cf_str);
    }
 
 return 0;
@@ -1021,7 +1053,8 @@ int Linux_Redhat_Version(void)
 #define REDHAT_ES_ID "Red Hat Enterprise Linux ES"
 #define REDHAT_WS_ID "Red Hat Enterprise Linux WS"
 #define REDHAT_C_ID "Red Hat Enterprise Linux Client"
-#define REDHAT_S_ID "Red Hat Enterprise Linux Server"
+#define REDHAT_S_ID "Red Hat Enterprise Linux Server" 
+#define REDHAT_W_ID "Red Hat Enterprise Linux Workstation"
 #define MANDRAKE_ID "Linux Mandrake"
 #define MANDRAKE_10_1_ID "Mandrakelinux"
 #define WHITEBOX_ID "White Box Enterprise Linux"
@@ -1104,7 +1137,7 @@ else if(!strncmp(relstring, REDHAT_S_ID, strlen(REDHAT_S_ID)))
    vendor = "redhat";
    edition = "s";
    }
-else if(!strncmp(relstring, REDHAT_C_ID, strlen(REDHAT_C_ID)))
+else if(!strncmp(relstring, REDHAT_C_ID, strlen(REDHAT_C_ID)) || !strncmp(relstring, REDHAT_W_ID, strlen(REDHAT_W_ID)))
    {
    vendor = "redhat";
    edition = "c";
@@ -1209,6 +1242,29 @@ if (major != -1 && minor != -1 && (strcmp(vendor,"") != 0))
       }
    }
 
+// Now a version without the edition
+
+if (major != -1 && minor != -1 && (strcmp(vendor,"") != 0))
+   {
+   classbuf[0] = '\0';
+   strcat(classbuf, vendor);
+   NewClass(classbuf);
+   strcat(classbuf, "_");
+
+   strcat(classbuf, strmajor);
+   NewClass(classbuf);
+
+   NewScalar("sys","flavour",classbuf,cf_str);
+   NewScalar("sys","flavor",classbuf,cf_str);
+
+   if (minor != -2)
+      {
+      strcat(classbuf, "_");
+      strcat(classbuf, strminor);
+      NewClass(classbuf);
+      }
+   }
+
 return 0;
 }
 
@@ -1226,17 +1282,15 @@ int Linux_Suse_Version(void)
 /* The full string read in from SuSE-release */
 char relstring[CF_MAXVARSIZE];
 char classbuf[CF_MAXVARSIZE];
-char vbuf[CF_BUFSIZE];
+char vbuf[CF_BUFSIZE],strversion[CF_MAXVARSIZE],strpatch[CF_MAXVARSIZE];
 
 /* Where the numerical release will be found */
 char *release=NULL;
-
 int i,version;
 int major = -1;
 char strmajor[CF_MAXVARSIZE];
 int minor = -1;
 char strminor[CF_MAXVARSIZE];
-
 FILE *fp;
 
 /* Grab the first line from the file and then close it. */
@@ -1248,6 +1302,26 @@ if ((fp = fopen(SUSE_REL_FILENAME,"r")) == NULL)
 
 fgets(relstring, sizeof(relstring), fp);
 Chop(relstring);
+strversion[0] = '\0';
+strpatch[0] = '\0';
+
+while (!feof(fp))
+   {
+   fgets(vbuf,sizeof(vbuf),fp);
+
+   if (strncmp(vbuf,"VERSION",strlen("version")) == 0)
+      {
+      strncpy(strversion,vbuf,sizeof(strversion));
+      sscanf(strversion,"VERSION = %d",&major);
+      }
+
+   if (strncmp(vbuf,"PATCH",strlen("PATCH")) == 0)
+      {
+      strncpy(strpatch,vbuf,sizeof(strpatch));
+      sscanf(strpatch,"PATCHLEVEL = %d",&minor);
+      }
+   }
+
 fclose(fp);
 
    /* Check if it's a SuSE Enterprise version  */
@@ -1270,6 +1344,21 @@ if (!strncmp(relstring, SUSE_SLES8_ID, strlen(SUSE_SLES8_ID)))
    classbuf[0] = '\0';
    strcat(classbuf, "SLES8");
    NewClass(classbuf);
+   }
+else if (strncmp(relstring,"sles",4) == 0)
+   {
+   struct Item *list, *ip;
+   sscanf(relstring,"%[-_a-zA-Z0-9]",vbuf);
+   NewClass(vbuf);
+
+   list = SplitString(vbuf,'-');
+
+   for (ip = list; ip != NULL; ip=ip->next)
+      {
+      NewClass(ip->name);
+      }
+   
+   DeleteItemList(list);
    }
 else
    {
@@ -1305,29 +1394,71 @@ release = strstr(relstring, SUSE_RELEASE_FLAG);
 
 if (release == NULL)
    {
+   release = strstr(relstring,"opensuse");
+   }
+
+if (release == NULL)
+   {
+   release = strversion;
+   }
+
+if (release == NULL)
+   {
    CfOut(cf_verbose,"","Could not find a numeric OS release in %s\n",SUSE_REL_FILENAME);
    return 2;
    }
 else
    {
-   release += strlen(SUSE_RELEASE_FLAG);
-   sscanf(release, "%d.%d", &major, &minor);
-   sprintf(strmajor, "%d", major);
-   sprintf(strminor, "%d", minor);
+   if (strchr(release,'.'))
+      {
+      sscanf(release, "%*s %d.%d", &major, &minor);
+      sprintf(strmajor, "%d", major);
+      sprintf(strminor, "%d", minor);
+
+      if (major != -1 && minor != -1)
+         {
+         strcpy(classbuf, "SuSE");
+         NewClass(classbuf);
+         strcat(classbuf, "_");
+         strcat(classbuf, strmajor);
+         NewClass(classbuf);
+         NewScalar("sys","flavour",classbuf,cf_str);
+         NewScalar("sys","flavor",classbuf,cf_str);
+         strcat(classbuf, "_");
+         strcat(classbuf, strminor);
+         NewClass(classbuf);
+         
+         CfOut(cf_verbose,""," -> Discovered SuSE version %s",classbuf);
+         return 0;
+         }
+      }
+   else
+      {
+      sscanf(strversion,"VERSION = %s",strmajor);
+      sscanf(strpatch,"PATCHLEVEL = %s",strminor);
+      
+      if (major != -1 && minor != -1)
+         {
+         strcpy(classbuf, "SLES");
+         NewClass(classbuf);
+         strcat(classbuf, "_");
+         strcat(classbuf, strmajor);
+         NewClass(classbuf);
+         strcat(classbuf, "_");
+         strcat(classbuf, strminor);
+         NewClass(classbuf);
+         snprintf(classbuf,CF_MAXVARSIZE,"SuSE_%d",major);
+         NewScalar("sys","flavour",classbuf,cf_str);
+         NewScalar("sys","flavor",classbuf,cf_str);
+         NewClass(classbuf);
+         
+         CfOut(cf_verbose,""," -> Discovered SuSE version %s",classbuf);
+         return 0;
+         }
+      }
    }
 
-if (major != -1 && minor != -1)
-   {
-   classbuf[0] = '\0';
-   strcat(classbuf, "SuSE");
-   NewClass(classbuf);
-   strcat(classbuf, "_");
-   strcat(classbuf, strmajor);
-   NewClass(classbuf);
-   strcat(classbuf, "_");
-   strcat(classbuf, strminor);
-   NewClass(classbuf);
-   }
+CfOut(cf_verbose,"","Could not find a numeric OS release in %s\n",SUSE_REL_FILENAME);
 
 return 0;
 }
@@ -1379,36 +1510,93 @@ return 0;
 int Linux_Debian_Version(void)
 {
 #define DEBIAN_VERSION_FILENAME "/etc/debian_version"
+#define DEBIAN_ISSUE_FILENAME "/etc/issue"
 int major = -1;
 int release = -1;
-char classname[CF_MAXVARSIZE] = "";
+int result;
+char classname[CF_MAXVARSIZE],buffer[CF_MAXVARSIZE],os[CF_MAXVARSIZE],version[CF_MAXVARSIZE];
 FILE *fp;
+
+buffer[0] = classname[0] = '\0';
+
+CfOut(cf_verbose,"","Looking for Debian version...\n");
 
 if ((fp = fopen(DEBIAN_VERSION_FILENAME,"r")) == NULL)
    {
    return 1;
    }
 
-CfOut(cf_verbose,"","Looking for Debian version...\n");
-switch (fscanf(fp, "%d.%d", &major, &release))
+fgets(buffer,CF_MAXVARSIZE,fp);
+fclose(fp);
+
+result = sscanf(buffer,"%d.%d", &major, &release); 
+
+switch (result)
     {
     case 2:
         CfOut(cf_verbose,"","This appears to be a Debian %u.%u system.", major, release);
         snprintf(classname, CF_MAXVARSIZE, "debian_%u_%u", major, release);
         NewClass(classname);
+        snprintf(classname, CF_MAXVARSIZE, "debian_%u",major);
+        NewClass(classname);
+        NewScalar("sys","flavour",classname,cf_str);
+        NewScalar("sys","flavor",classname,cf_str);
+        break;
         /* Fall-through */
     case 1:
         CfOut(cf_verbose,"","This appears to be a Debian %u system.", major);
         snprintf(classname, CF_MAXVARSIZE, "debian_%u", major);
         NewClass(classname);
+        NewScalar("sys","flavour",classname,cf_str);
+        NewScalar("sys","flavor",classname,cf_str);
         break;
-    case 0:
-        CfOut(cf_verbose,"","No Debian version number found.\n");
-        fclose(fp);
-        return 2;
+
+    default:
+        version[0] = '\0';
+        sscanf(buffer,"%25[^/]",version);
+        if (strlen(version) > 0)
+           {
+           snprintf(classname,CF_MAXVARSIZE, "debian_%s",version);
+           NewClass(classname);
+           }
+        break;
     }
 
+if ((fp = fopen(DEBIAN_ISSUE_FILENAME,"r")) == NULL)
+   {
+   return 1;
+   }
+
+fgets(buffer,CF_MAXVARSIZE,fp);
 fclose(fp);
+
+os[0] = '\0';
+sscanf(buffer,"%250s",os);
+
+if (strcmp(os,"Debian") == 0)
+   {
+   sscanf(buffer,"%*s %*s %[^/]",version);
+   snprintf(buffer,CF_MAXVARSIZE, "debian_%s",version);
+   NewClass("debian");
+   NewClass(buffer);
+   NewScalar("sys","flavour",buffer,cf_str);
+   NewScalar("sys","flavor",buffer,cf_str);
+   }
+else if (strcmp(os,"Ubuntu") == 0)
+   {
+   sscanf(buffer,"%*s %[^.].%d",version,&release);
+   snprintf(buffer,CF_MAXVARSIZE, "ubuntu_%s",version);
+   NewScalar("sys","flavour",buffer,cf_str);
+   NewScalar("sys","flavor",buffer,cf_str);
+   NewClass("ubuntu");
+   NewClass(buffer);
+   if (release >= 0)
+      {
+      snprintf(buffer,CF_MAXVARSIZE, "ubuntu_%s_%d",version,release);
+      NewClass(buffer);
+      }
+   }
+
 return 0;
 }
 
@@ -1462,6 +1650,8 @@ else
 return Linux_Mandriva_Version_Real(MANDRAKE_REL_FILENAME, relstring, vendor);
 }
 
+/******************************************************************/
+
 int Linux_New_Mandriva_Version(void)
 
 {
@@ -1497,6 +1687,8 @@ else
 return Linux_Mandriva_Version_Real(MANDRIVA_REL_FILENAME, relstring, vendor);
 
 }
+
+/******************************************************************/
 
 int Linux_Mandriva_Version_Real(char *filename, char *relstring, char *vendor)
 
@@ -1548,57 +1740,6 @@ if (major != -1 && minor != -1 && strcmp(vendor, ""))
 return 0;
 }
 
-/******************************************************************/
-
-int Lsb_Version(void)
-
-{ char vbuff[CF_BUFSIZE];
-  char codename[CF_MAXVARSIZE];
-  char distrib[CF_MAXVARSIZE];
-  char release[CF_MAXVARSIZE];
-  char classname[CF_MAXVARSIZE];;
-  char *ret;
-  int major = 0;
-  int minor = 0;
-  
-if ((ret = Lsb_Release("--id")) != NULL)
-   {
-   strncpy(distrib,ret,CF_MAXVARSIZE);
-   snprintf(classname, CF_MAXVARSIZE, "%s",ret);
-   NewClass(classname);
-
-   if ((ret = Lsb_Release("--codename")) != NULL)
-      {
-      strncpy(codename,ret,CF_MAXVARSIZE);
-      snprintf(classname, CF_MAXVARSIZE, "%s_%s", distrib,codename);
-      NewClass(classname);
-      }
-
-   if ((ret  = Lsb_Release("--release")) != NULL)
-      {
-      strncpy(release,ret,CF_MAXVARSIZE);
-      
-      switch (sscanf(release, "%d.%d\n", &major, &minor))
-         {
-         case 2:
-             snprintf(classname, CF_MAXVARSIZE, "%s_%u_%u", distrib, major, minor);
-             NewClass(classname);
-         case 1:
-             snprintf(classname, CF_MAXVARSIZE, "%s_%u", distrib, major);
-             NewClass(classname);
-         }
-      }
-
-   NewScalar("sys","flavour",classname,cf_str);
-   NewScalar("sys","flavor",classname,cf_str);
-   return 0;
-   }
-else
-   {
-   CfOut(cf_verbose,""," !! No LSB information available on this Linux host - you should install the LSB packages");
-   return -1;
-   }
-}
 
 /******************************************************************/
 
@@ -1737,44 +1878,19 @@ return 1;
 
 #endif
 
+/******************************************************************/
+
+char *Cf_GetVersion(void)
+
+{
+return VERSION;
+}
+
+
 
 /******************************************************************/
 /* User info                                                      */
 /******************************************************************/
-
-void *Lsb_Release(char *key)
-
-{ char vbuff[CF_BUFSIZE];
-  char info[CF_MAXVARSIZE];
-  FILE *pp;
-  struct stat sb;
-
-snprintf(vbuff,CF_BUFSIZE, "/usr/bin/lsb_release");
-
-if (cfstat(vbuff,&sb) == -1)
-   {
-   CfOut(cf_verbose,"","LSB probe \"%s\" doesn't exist",vbuff);
-   return NULL;
-   }
-
-snprintf(vbuff,CF_BUFSIZE, "/usr/bin/lsb_release %s",key);
-
-if ((pp = cf_popen(vbuff, "r")) == NULL)
-   {
-   return NULL;
-   }
-
-memset(info,0,CF_MAXVARSIZE);
-
-if (CfReadLine(vbuff,CF_BUFSIZE,pp))
-   {
-   sscanf(vbuff,"%*[^:]: %255s",info);
-   }
-
-cf_pclose(pp);
-return ToLowerStr(info);
-}
-
 /******************************************************************/
 
 int GetCurrentUserName(char *userName, int userNameLen)
@@ -1793,7 +1909,7 @@ return Unix_GetCurrentUserName(userName, userNameLen);
 void Unix_GetInterfaceInfo(enum cfagenttype ag)
 
 { int fd,len,i,j,first_address = false,ipdefault = false;
-  struct ifreq ifbuf[CF_IFREQ],ifr, *ifp;
+  struct ifreq ifbuf[CF_IFREQ] = {0},ifr, *ifp;
   struct ifconf list;
   struct sockaddr_in *sin;
   struct hostent *hp;
@@ -1830,7 +1946,7 @@ last_name[0] = '\0';
 for (j = 0,len = 0,ifp = list.ifc_req; len < list.ifc_len; len+=SIZEOF_IFREQ(*ifp),j++,ifp=(struct ifreq *)((char *)ifp+SIZEOF_IFREQ(*ifp)))
    {
    int skip = false;
-   
+
    if (ifp->ifr_addr.sa_family == 0)
       {
       continue;
@@ -1975,7 +2091,7 @@ for (j = 0,len = 0,ifp = list.ifc_req; len < list.ifc_len; len+=SIZEOF_IFREQ(*if
             strcpy(VIPADDRESS,inet_ntoa(sin->sin_addr));
             }
 
-         AppendItem(&IPADDRESSES,VIPADDRESS,"");
+         AppendItem(&IPADDRESSES,inet_ntoa(sin->sin_addr),"");
 
          for (sp = ip+strlen(ip)-1; (sp > ip); sp--)
             {
@@ -2030,7 +2146,7 @@ close(fd);
 
 void Unix_FindV6InterfaceInfo(void)
 
-{ FILE *pp;
+{ FILE *pp = NULL;
   char buffer[CF_BUFSIZE];
 
 /* Whatever the manuals might say, you cannot get IPV6

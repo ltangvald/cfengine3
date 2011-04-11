@@ -102,6 +102,7 @@ return fp;
 struct FnCall *CopyFnCall(struct FnCall *f)
 
 {
+Debug("CopyFnCall()\n");
 return NewFnCall(f->name,CopyRlist(f->args));
 }
 
@@ -110,8 +111,6 @@ return NewFnCall(f->name,CopyRlist(f->args));
 void DeleteFnCall(struct FnCall *fp)
 
 {
-Debug("DeleteFnCall %s\n",fp->name);
-
 if (fp->name)
    {
    free(fp->name);
@@ -119,7 +118,7 @@ if (fp->name)
 
 if (fp->args)
    {
-   DeleteRvalItem(fp->args,CF_LIST);
+   DeleteRlist(fp->args);
    }
 
 free(fp);
@@ -130,8 +129,9 @@ free(fp);
 struct FnCall *ExpandFnCall(char *contextid,struct FnCall *f,int expandnaked)
 
 {
+ Debug("ExpandFnCall()\n");
 //return NewFnCall(f->name,ExpandList(contextid,f->args,expandnaked));
- return NewFnCall(f->name,ExpandList(contextid,f->args,false));
+return NewFnCall(f->name,ExpandList(contextid,f->args,false));
 }
 
 /*******************************************************************/
@@ -139,19 +139,55 @@ struct FnCall *ExpandFnCall(char *contextid,struct FnCall *f,int expandnaked)
 void PrintFunctions()
 
 { struct FnCall *fp;
- int i;
+  int i;
 
- for (i = 0; i < 3; i++)
-    {
-    if (P.currentfncall[i] != NULL)
-       {
-       printf("(%d) =========================\n|",i);
-       ShowFnCall(stdout,P.currentfncall[i]);
-       printf("|\n==============================\n");
-       }
-    } 
+for (i = 0; i < 3; i++)
+   {
+   if (P.currentfncall[i] != NULL)
+      {
+      printf("(%d) =========================\n|",i);
+      ShowFnCall(stdout,P.currentfncall[i]);
+      printf("|\n==============================\n");
+      }
+   } 
 }
 
+/*******************************************************************/
+
+int PrintFnCall(char *buffer, int bufsize,struct FnCall *fp)
+    
+{ struct Rlist *rp;
+  char work[CF_MAXVARSIZE];
+
+snprintf(buffer,bufsize,"%s(",fp->name);
+
+for (rp = fp->args; rp != NULL; rp=rp->next)
+   {
+   switch (rp->type)
+      {
+      case CF_SCALAR:
+          Join(buffer,(char *)rp->item,bufsize);
+          break;
+
+      case CF_FNCALL:
+          PrintFnCall(work,CF_MAXVARSIZE,(struct FnCall *)rp->item);
+          Join(buffer,work,bufsize);
+          break;
+
+      default:
+          break;
+      }
+   
+   if (rp->next != NULL)
+      {
+      strcat(buffer,",");
+      }
+   }
+
+ strcat(buffer, ")");
+
+return strlen(buffer);
+}
 
 /*******************************************************************/
 
@@ -280,6 +316,9 @@ switch (this)
    case cfn_host2ip:
        rval = FnCallHost2IP(fp,expargs);
        break;
+   case cfn_ip2host:
+       rval = FnCallIP2Host(fp,expargs);
+       break;
    case cfn_join:
        rval = FnCallJoin(fp,expargs);
        break;
@@ -343,7 +382,13 @@ switch (this)
    case cfn_filesexist:
        rval = FnCallFileSexist(fp,expargs);
        break;
+   case cfn_filesize:
+       rval = FnCallStatInfo(fp,expargs,this);
+       break;
    case cfn_isdir:
+       rval = FnCallStatInfo(fp,expargs,this);
+       break;
+   case cfn_isexecutable:
        rval = FnCallStatInfo(fp,expargs,this);
        break;
    case cfn_islink:
@@ -403,6 +448,9 @@ switch (this)
    case cfn_getindices:
        rval = FnCallGetIndices(fp,expargs);
        break;
+   case cfn_getvalues:
+       rval = FnCallGetValues(fp,expargs);
+       break;
    case cfn_countlinesmatching:
        rval = FnCallCountLinesMatching(fp,expargs);
        break;
@@ -421,6 +469,9 @@ switch (this)
    case cfn_userexists:
        rval = FnCallUserExists(fp,expargs);
        break;
+   case cfn_getusers:
+       rval = FnCallGetUsers(fp,expargs);
+       break;
    case cfn_groupexists:
        rval = FnCallGroupExists(fp,expargs);
        break;
@@ -437,13 +488,28 @@ switch (this)
        rval = FnCallReadStringList(fp,expargs,cf_real);
        break;
    case cfn_readstringarray:
-       rval = FnCallReadStringArray(fp,expargs,cf_str);
+       rval = FnCallReadStringArray(fp,expargs,cf_str,false);
+       break;
+   case cfn_readstringarrayidx:
+       rval = FnCallReadStringArray(fp,expargs,cf_str,true);
        break;
    case cfn_readintarray:
-       rval = FnCallReadStringArray(fp,expargs,cf_int);
+       rval = FnCallReadStringArray(fp,expargs,cf_int,false);
        break;
    case cfn_readrealarray:
-       rval = FnCallReadStringArray(fp,expargs,cf_real);
+       rval = FnCallReadStringArray(fp,expargs,cf_real,false);
+       break;
+   case cfn_parsestringarray:
+       rval = FnCallParseStringArray(fp,expargs,cf_str,false);
+       break;
+   case cfn_parsestringarrayidx:
+       rval = FnCallParseStringArray(fp,expargs,cf_str,true);
+       break;
+   case cfn_parseintarray:
+       rval = FnCallParseStringArray(fp,expargs,cf_int,false);
+       break;
+   case cfn_parserealarray:
+       rval = FnCallParseStringArray(fp,expargs,cf_real,false);
        break;
    case cfn_irange:
        rval = FnCallIRange(fp,expargs);
@@ -454,6 +520,9 @@ switch (this)
    case cfn_remotescalar:
        rval = FnCallRemoteScalar(fp,expargs);
        break;
+   case cfn_hubknowledge:
+       rval = FnCallHubKnowledge(fp,expargs);
+       break;
    case cfn_remoteclassesmatching:
        rval = FnCallRemoteClasses(fp,expargs);
        break;
@@ -462,6 +531,15 @@ switch (this)
        break;
    case cfn_ago:
        rval = FnCallAgoDate(fp,expargs);
+       break;
+   case cfn_laterthan:
+       rval = FnCallLaterThan(fp,expargs);
+       break;
+   case cfn_sum:
+       rval = FnCallSum(fp,expargs);
+       break;
+   case cfn_product:
+       rval = FnCallProduct(fp,expargs);
        break;
    case cfn_accum:
        rval = FnCallAccumulatedDate(fp,expargs);

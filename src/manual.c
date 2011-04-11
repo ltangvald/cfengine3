@@ -213,7 +213,7 @@ fprintf(fout,
         "@title Cfengine Reference Manual\n"
         "@subtitle Auto generated, self-healing knowledge\n"
         "@subtitle Documentation for core version %s\n"
-#ifdef HAVE_LIBCFNOVA
+#ifdef HAVE_NOVA
         "@subtitle %s\n"
 #endif
         "@author cfengine.com\n"
@@ -226,7 +226,7 @@ fprintf(fout,
         "in this document. All efforts have been made to ensure the correctness of\n"
         "the information contained herein.\n"
         "@end cartouche\n"
-        "Copyright @copyright{} from 2008 to the year of issue Cfengine AS\n"
+        "Copyright @copyright{} 2008,2010 to the year of issue Cfengine AS\n"
         "@end titlepage\n"
         "@c *************************** File begins here ************************\n"
         "@ifinfo\n"
@@ -257,7 +257,7 @@ fprintf(fout,
         "@contents\n"
         "@end iftex\n",
         VERSION
-#ifdef HAVE_LIBCFNOVA
+#ifdef HAVE_NOVA
         ,
         Nova_StrVersion()
 #endif
@@ -472,7 +472,7 @@ if (strlen(s) == 0)
 if (type == cf_opts || type == cf_olist)
    {
    list = SplitStringAsRList(s,',');
-   fprintf(fout,"@noindent @b{Allowed input range}: @*\n@example",s);
+   fprintf(fout,"@noindent @b{Allowed input range}: @*\n@example",TexInfoEscape(s));
    
    for (rp = list; rp != NULL; rp=rp->next)
       {
@@ -484,7 +484,7 @@ if (type == cf_opts || type == cf_olist)
    }
 else
    {
-   fprintf(fout,"@noindent @b{Allowed input range}: @code{%s}\n\n",s);
+   fprintf(fout,"@noindent @b{Allowed input range}: @code{%s}\n\n",TexInfoEscape(s));
    }
 }
 
@@ -561,6 +561,11 @@ if (cfstat(filename,&sb) == -1)
       return;
       }
 
+#ifdef HAVE_CONSTELLATION
+   fprintf(fp,"\n@i{History}: Was introduced in version %s, Nova %s, Constellation %s (%s)\n\n",VERSION,Nova_GetVersion(),Constellation_GetVersion(),VYEAR);
+#elif HAVE_NOVA
+   fprintf(fp,"\n@i{History}: Was introduced in version %s, Nova %s (%s)\n\n",VERSION,Nova_GetVersion(),VYEAR);
+#endif
    fprintf(fp,"\n@verbatim\n\nFill me in (%s)\n\"\"\n@end verbatim\n",filename);
    fclose(fp);
    CfOut(cf_verbose,"","Created %s template\n",filename);  
@@ -636,9 +641,37 @@ for (sp = pattern; *sp != '\0'; sp++)
    switch (*sp)
       {
       case '@':
+      case '{':
+      case '}':
           fputc((int)'@',fout);
       default:
           fputc((int)*sp,fout);
       }
    }
+}
+
+/*****************************************************************************/
+
+char *TexInfoEscape(char *s)
+
+{ char *spf,*spt;
+  static char buffer[CF_BUFSIZE];
+
+memset(buffer,0,CF_BUFSIZE);
+  
+for (spf = s,spt = buffer; *spf != '\0'; spf++)
+   {
+   switch (*spf)
+      {
+      case '{':
+      case '}':
+      case '@':
+          *spt++ = '@';
+          break;
+      }
+   
+   *spt++ = *spf;
+   }
+
+return buffer;
 }

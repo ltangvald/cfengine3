@@ -39,7 +39,7 @@
 void CfFOut(char *filename,enum cfreport level,char *errstr,char *fmt, ...)
 
 { va_list ap;
-  char *sp,buffer[CF_BUFSIZE],output[CF_BUFSIZE];
+  char *sp,buffer[CF_BUFSIZE],output[CF_BUFSIZE],expand[CF_EXPANDSIZE];
   struct Item *ip,*mess = NULL;
 
 if ((fmt == NULL) || (strlen(fmt) == 0))
@@ -51,9 +51,10 @@ memset(output,0,CF_BUFSIZE);
 va_start(ap,fmt);
 vsnprintf(buffer,CF_BUFSIZE-1,fmt,ap);
 va_end(ap);
-SanitizeBuffer(buffer);
-Chop(buffer);
-AppendItem(&mess,buffer,NULL);
+ExpandThis(level,buffer,expand);
+SanitizeBuffer(expand);
+Chop(expand);
+AppendItem(&mess,expand,NULL);
 
 if ((errstr == NULL) || (strlen(errstr) > 0))
    {
@@ -110,7 +111,7 @@ DeleteItemList(mess);
 void CfOut(enum cfreport level,char *errstr,char *fmt, ...)
 
 { va_list ap;
-  char *sp,buffer[CF_BUFSIZE],output[CF_BUFSIZE];
+ char *sp,buffer[CF_BUFSIZE],output[CF_BUFSIZE],expand[CF_EXPANDSIZE];
   struct Item *ip,*mess = NULL;
 
 if ((fmt == NULL) || (strlen(fmt) == 0))
@@ -122,9 +123,10 @@ memset(output,0,CF_BUFSIZE);
 va_start(ap,fmt);
 vsnprintf(buffer,CF_BUFSIZE-1,fmt,ap);
 va_end(ap);
-SanitizeBuffer(buffer);
-Chop(buffer);
-AppendItem(&mess,buffer,NULL);
+ExpandThis(level,buffer,expand);
+SanitizeBuffer(expand);
+Chop(expand);
+AppendItem(&mess,expand,NULL);
 
 if ((errstr == NULL) || (strlen(errstr) > 0))
    {
@@ -181,7 +183,7 @@ DeleteItemList(mess);
 void cfPS(enum cfreport level,char status,char *errstr,struct Promise *pp,struct Attributes attr,char *fmt, ...)
 
 { va_list ap;
-  char rettype,*sp,buffer[CF_BUFSIZE],output[CF_BUFSIZE],*v,handle[CF_MAXVARSIZE];
+  char rettype,*sp,buffer[CF_BUFSIZE],output[CF_BUFSIZE],*v,handle[CF_MAXVARSIZE],expand[CF_EXPANDSIZE];
   struct Item *ip,*mess = NULL;
   int verbose;
   struct Rlist *rp;
@@ -195,10 +197,10 @@ if ((fmt == NULL) || (strlen(fmt) == 0))
 va_start(ap,fmt);
 vsnprintf(buffer,CF_BUFSIZE-1,fmt,ap);
 va_end(ap);
-
-SanitizeBuffer(buffer);
-Chop(buffer);
-AppendItem(&mess,buffer,NULL);
+ExpandThis(status,buffer,expand);
+SanitizeBuffer(expand);
+Chop(expand);
+AppendItem(&mess,expand,NULL);
 
 if ((errstr == NULL) || (strlen(errstr) > 0))
    {
@@ -289,6 +291,24 @@ switch(level)
           MakeLog(mess,level);
           }
        break;
+
+   case cf_reporting:
+   case cf_cmdout:
+
+       if (attr.report.to_file)
+          {
+          FileReport(mess,verbose,attr.report.to_file);
+          }
+       else
+          {
+          MakeReport(mess,verbose);
+          }
+
+       if (attr.transaction.log_level == cf_inform)
+          {
+          MakeLog(mess,level);
+          }
+       break;
        
    case cf_verbose:
        
@@ -305,8 +325,6 @@ switch(level)
        break;
 
    case cf_error:
-   case cf_reporting:
-   case cf_cmdout:
 
        if (attr.report.to_file)
           {
@@ -316,28 +334,26 @@ switch(level)
           {
           MakeReport(mess,verbose);
           }
-       
-       if (attr.transaction.log_level == level)
-          {   
+
+       if (attr.transaction.log_level == cf_error)
+          {
           MakeLog(mess,level);
           }
-       break;   
-	   
+       break;
+
    case cf_log:
        
        MakeLog(mess,level);
        break;
        
    default:
-       
-       FatalError("Software error: report level unknown: require cf_error, cf_inform, cf_verbose");
        break;       
    }
 
 #ifdef MINGW
 if(pp != NULL)
   {
-  NovaWin_LogPromiseResult(pp->promiser, pp->petype, pp->promisee, status, mess);
+  NovaWin_LogPromiseResult(pp->promiser, pp->petype, pp->promisee, status, attr.transaction.log_level, mess);
   }
 #endif
 
@@ -347,7 +363,7 @@ if (pp != NULL)
    {
    for (ip = mess; ip != NULL; ip = ip->next)
       {
-      ClassAuditLog(pp,attr,ip->name,status);
+      ClassAuditLog(pp,attr,ip->name,status,buffer);
       }
    }
 
@@ -376,7 +392,7 @@ if (!ThreadLock(cft_output))
    return;
    }
 
-fprintf(fp,"%s %s",VPREFIX,buffer);
+fprintf(fp,"%s> %s",VPREFIX,buffer);
 
 ThreadUnlock(cft_output);
 }
@@ -391,18 +407,18 @@ void MakeReport(struct Item *mess,int prefix)
 
 for (ip = mess; ip != NULL; ip = ip->next)
    {
-   ThreadLock(cft_output);
+   ThreadLock(cft_report);
    
    if (prefix)
       {
-      printf("%s %s\n",VPREFIX,ip->name);
+      printf("%s> %s\n",VPREFIX,ip->name);
       }
    else
       {
       printf("%s\n",ip->name);
       }
 
-   ThreadUnlock(cft_output);
+   ThreadUnlock(cft_report);
    }
 }
 
@@ -425,7 +441,7 @@ for (ip = mess; ip != NULL; ip = ip->next)
    
    if (prefix)
       {
-      fprintf(fp,"%s %s\n",VPREFIX,ip->name);
+      fprintf(fp,"%s> %s\n",VPREFIX,ip->name);
       }
    else
       {
@@ -445,19 +461,15 @@ if (fp != stdout)
 
 void SanitizeBuffer(char *buffer)
 
-{ char *sp;
-
+{ char *spf,*spt; 
+  char buf[CF_EXPANDSIZE];
+  int change = false;
+ 
  /* Check for %s %m which someone might be able to insert into
    an error message in order to get a syslog buffer overflow...
    bug reported by Pekka Savola */
- 
-for (sp = buffer; *sp != '\0'; sp++)
-   {
-   if ((*sp == '%') && (*(sp+1) >= 'a'))
-      {
-      *sp = '?';
-      }
-   }
+
+// No longer necessary
 }
 
 /*********************************************************************************/

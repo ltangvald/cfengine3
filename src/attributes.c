@@ -36,9 +36,11 @@
 
 struct Attributes GetFilesAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
  
 memset(&attr,0,sizeof(attr));
+
+// default for file copy
  
 attr.havedepthsearch = GetBooleanConstraint("depth_search",pp);
 attr.haveselect = GetBooleanConstraint("file_select",pp);
@@ -100,6 +102,25 @@ else
       }
    }
 
+if ((THIS_AGENT_TYPE == cf_common) && attr.create && attr.havecopy)
+   {
+   if (attr.copy.compare != cfa_checksum && attr.copy.compare != cfa_hash)
+      {
+      CfOut(cf_error,""," !! Promise constraint conflicts - %s file will never be copied as created file is always newer",pp->promiser);
+      PromiseRef(cf_error,pp);
+      }
+   else
+      {      
+      CfOut(cf_verbose,""," !! Promise constraint conflicts - %s file cannot strictly both be created empty and copied from a source file.",pp->promiser);
+      }
+   }
+
+if ((THIS_AGENT_TYPE == cf_common) && attr.create && attr.havelink)
+   {
+   CfOut(cf_error,""," !! Promise constraint conflicts - %s cannot be created and linked at the same time",pp->promiser);
+   PromiseRef(cf_error,pp);
+   }
+
 return attr;
 }
 
@@ -107,8 +128,7 @@ return attr;
 
 struct Attributes GetOutputsAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.transaction = GetTransactionConstraints(pp);
 attr.classes = GetClassDefinitionConstraints(pp);
@@ -122,9 +142,7 @@ return attr;
 
 struct Attributes GetReportsAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.transaction = GetTransactionConstraints(pp);
 attr.classes = GetClassDefinitionConstraints(pp);
@@ -137,10 +155,8 @@ return attr;
 
 struct Attributes GetEnvironmentsAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
 
-memset(&attr,0,sizeof(attr));
- 
 attr.transaction = GetTransactionConstraints(pp);
 attr.classes = GetClassDefinitionConstraints(pp);
 attr.env = GetEnvironmentsConstraints(pp);
@@ -152,10 +168,8 @@ return attr;
 
 struct Attributes GetServicesAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
 
-memset(&attr,0,sizeof(attr));
- 
 attr.transaction = GetTransactionConstraints(pp);
 attr.classes = GetClassDefinitionConstraints(pp);
 attr.service = GetServicesConstraints(pp);
@@ -167,9 +181,7 @@ return attr;
 
 struct Attributes GetPackageAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
  
 attr.transaction = GetTransactionConstraints(pp);
 attr.classes = GetClassDefinitionConstraints(pp);
@@ -181,9 +193,7 @@ return attr;
 
 struct Attributes GetDatabaseAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.transaction = GetTransactionConstraints(pp);
 attr.classes = GetClassDefinitionConstraints(pp);
@@ -197,8 +207,6 @@ struct Attributes GetClassContextAttributes(struct Promise *pp)
 
 { struct Attributes a;
 
-memset(&a,0,sizeof(a));
-
 a.transaction = GetTransactionConstraints(pp);
 a.classes = GetClassDefinitionConstraints(pp);
 a.context = GetContextConstraints(pp);
@@ -210,9 +218,7 @@ return a;
 
 struct Attributes GetExecAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.contain = GetExecContainConstraints(pp);
 attr.havecontain = GetBooleanConstraint("contain",pp);
@@ -235,9 +241,7 @@ return attr;
 
 struct Attributes GetProcessAttributes(struct Promise *pp)
 
-{ static struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ static struct Attributes attr = {0};
 
 attr.signals = GetListConstraint("signals",pp);
 attr.process_stop = (char *)GetConstraint("process_stop",pp,CF_SCALAR);
@@ -263,9 +267,7 @@ return attr;
 
 struct Attributes GetStorageAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.mount = GetMountConstraints(pp);
 attr.volume = GetVolumeConstraints(pp);
@@ -274,7 +276,10 @@ attr.havemount = GetBooleanConstraint("mount",pp);
 
 /* Common ("included") */
 
-attr.edits.maxfilesize = EDITFILESIZE;
+if (attr.edits.maxfilesize <= 0)
+   {
+   attr.edits.maxfilesize = EDITFILESIZE;
+   }
 
 attr.havetrans = GetBooleanConstraint(CF_TRANSACTION,pp);
 attr.transaction = GetTransactionConstraints(pp);
@@ -289,9 +294,7 @@ return attr;
 
 struct Attributes GetMethodAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.havebundle = GetBundleConstraint("usebundle",pp);
 
@@ -310,9 +313,7 @@ return attr;
 
 struct Attributes GetInterfacesAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.havetcpip = GetBundleConstraint("usebundle",pp);
 attr.tcpip = GetTCPIPAttributes(pp);
@@ -332,13 +333,23 @@ return attr;
 
 struct Attributes GetTopicsAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
-
-memset(&attr,0,sizeof(attr));
+{ struct Attributes attr = {0};
 
 attr.fwd_name = GetConstraint("forward_relationship",pp,CF_SCALAR);
 attr.bwd_name = GetConstraint("backward_relationship",pp,CF_SCALAR);
 attr.associates = GetListConstraint("associates",pp);
+attr.synonyms = GetListConstraint("synonyms",pp);
+return attr;
+}
+
+/*******************************************************************/
+
+struct Attributes GetInferencesAttributes(struct Promise *pp)
+
+{ struct Attributes attr = {0};
+
+attr.precedents = GetListConstraint("precedents",pp);
+attr.qualifiers = GetListConstraint("qualifers",pp);
 return attr;
 }
 
@@ -346,10 +357,8 @@ return attr;
 
 struct Attributes GetOccurrenceAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
   char *value;
-
-memset(&attr,0,sizeof(attr));
 
 attr.represents = GetListConstraint("represents",pp);
 attr.rep_type = GetConstraint("representation",pp,CF_SCALAR);
@@ -363,10 +372,8 @@ return attr;
 
 struct Attributes GetMeasurementAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
 
-memset(&attr,0,sizeof(attr));
- 
 attr.measure = GetMeasurementConstraint(pp);
     
 /* Common ("included") */
@@ -484,8 +491,8 @@ struct FilePerms GetPermissionConstraints(struct Promise *pp)
                 
 value = (char *)GetConstraint("mode",pp,CF_SCALAR);
 
-p.plus = 0;
-p.minus = 0;
+p.plus = CF_SAMEMODE;
+p.minus = CF_SAMEMODE;
 
 if (!ParseModeString(value,&p.plus,&p.minus))
    {
@@ -707,6 +714,10 @@ c.del_change = (struct Rlist *)GetListConstraint("cancel_repaired",pp);
 c.del_kept = (struct Rlist *)GetListConstraint("cancel_kept",pp);
 c.del_notkept = (struct Rlist *)GetListConstraint("cancel_notkept",pp);
 
+c.retcode_kept = (struct Rlist *)GetListConstraint("kept_returncodes",pp);
+c.retcode_repaired = (struct Rlist *)GetListConstraint("repaired_returncodes",pp);
+c.retcode_failed = (struct Rlist *)GetListConstraint("failed_returncodes",pp);
+
 c.persist = GetIntConstraint("persist_time",pp);
 
 if (c.persist == CF_NOINT)
@@ -784,15 +795,41 @@ value = (char *)GetConstraint("hash",pp,CF_SCALAR);
 
 if (value && strcmp(value,"best") == 0)
    {
+#ifdef HAVE_NOVA
+   c.hash = cf_sha512;
+#else
    c.hash = cf_besthash;
+#endif   
+   }
+else if (value && strcmp(value,"md5") == 0)
+   {
+   c.hash = cf_md5;
    }
 else if (value && strcmp(value,"sha1") == 0)
    {
    c.hash = cf_sha1;
    }
+else if (value && strcmp(value,"sha256") == 0)
+   {
+   c.hash = cf_sha256;
+   }
+else if (value && strcmp(value,"sha384") == 0)
+   {
+   c.hash = cf_sha384;
+   }
+else if (value && strcmp(value,"sha512") == 0)
+   {
+   c.hash = cf_sha512;
+   }
 else
    {
-   c.hash = cf_md5;
+   c.hash = CF_DEFAULT_DIGEST;
+   }
+
+if (FIPS_MODE && c.hash == cf_md5)
+   {
+   CfOut(cf_error,""," !! FIPS mode is enabled, and md5 is not an approved algorithm");
+   PromiseRef(cf_error,pp);
    }
 
 value = (char *)GetConstraint("report_changes",pp,CF_SCALAR);
@@ -851,6 +888,7 @@ value = (char *)GetConstraint("link_type",pp,CF_SCALAR);
 f.link_type = String2LinkType(value);
 f.servers = GetListConstraint("servers",pp);
 f.portnumber = (short)GetIntConstraint("portnumber",pp);
+f.timeout = (short)GetIntConstraint("timeout",pp);
 f.link_instead = GetListConstraint("linkcopy_patterns",pp);
 f.copy_links = GetListConstraint("copylink_patterns",pp);
 
@@ -888,6 +926,7 @@ f.encrypt = GetBooleanConstraint("encrypt",pp);
 f.verify = GetBooleanConstraint("verify",pp);
 f.purge = GetBooleanConstraint("purge",pp);
 f.destination = NULL;
+
 return f;
 }
 
@@ -1217,7 +1256,7 @@ printf(".....................................................\n\n");
 
 struct Attributes GetInsertionAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
   char *value;
 
 attr.havelocation = GetBooleanConstraint("location",pp);
@@ -1252,9 +1291,9 @@ struct EditLocation GetLocationAttributes(struct Promise *pp)
 { struct EditLocation e;
   char *value;
 
-e.line_matching = GetConstraint("select_line_matching",pp,CF_SCALAR);;
+e.line_matching = GetConstraint("select_line_matching",pp,CF_SCALAR);
 
-value = GetConstraint("before_after",pp,CF_SCALAR);;
+value = GetConstraint("before_after",pp,CF_SCALAR);
 
 if (value && strcmp(value,"before") == 0)
    {
@@ -1265,7 +1304,7 @@ else
    e.before_after = cfe_after;
    }
 
-e.first_last = GetConstraint("first_last",pp,CF_SCALAR);;
+e.first_last = GetConstraint("first_last",pp,CF_SCALAR);
 return e;
 }
 
@@ -1273,7 +1312,7 @@ return e;
 
 struct Attributes GetDeletionAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
 
 attr.not_matching = GetBooleanConstraint("not_matching",pp);
 
@@ -1298,7 +1337,7 @@ return attr;
 
 struct Attributes GetColumnAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
 
 attr.havecolumn = GetBooleanConstraint("edit_field",pp);
 attr.column = GetColumnConstraints(pp);
@@ -1321,7 +1360,7 @@ return attr;
 
 struct Attributes GetReplaceAttributes(struct Promise *pp)
 
-{ struct Attributes attr;
+{ struct Attributes attr = {0};
 
 attr.havereplace = GetBooleanConstraint("replace_patterns",pp);
 attr.replace = GetReplaceConstraints(pp);
@@ -1377,6 +1416,12 @@ struct EditColumn GetColumnConstraints(struct Promise *pp)
 
 c.column_separator = GetConstraint("field_separator",pp,CF_SCALAR);
 c.select_column = GetIntConstraint("select_field",pp);
+
+if (c.select_column != CF_NOINT && GetBooleanConstraint("start_fields_from_zero",pp))
+   {
+   c.select_column++;
+   }
+
 value = GetConstraint("value_separator",pp,CF_SCALAR);
 
 if (value)
@@ -1429,6 +1474,18 @@ v.sensible_size = (int) Str2Int(value);
 value = GetConstraint("sensible_count",pp,CF_SCALAR);
 v.sensible_count = (int) Str2Int(value);
 v.scan_arrivals = GetBooleanConstraint("scan_arrivals",pp);
+
+// defaults
+ if(v.sensible_size == CF_NOINT)
+   {
+     v.sensible_size = 1000;
+   }
+ 
+ if(v.sensible_count == CF_NOINT)
+   {
+     v.sensible_count = 2;
+   }
+
 
 return v;
 }

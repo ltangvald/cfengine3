@@ -32,6 +32,446 @@
 #include "cf3.defs.h"
 #include "cf3.extern.h"
 
+#ifdef HAVE_PCRE_H
+#include <pcre.h>
+#endif
+
+#ifdef HAVE_PCRE_PCRE_H
+#include <pcre/pcre.h>
+#endif
+
+struct CfRegEx
+{
+   int failed;
+   const char *regexp;
+#ifdef HAVE_LIBPCRE
+    pcre *rx;
+    const char *err;
+    int err_offset;
+#else
+    regex_t rx;
+#endif
+};
+
+/*********************************************************************/
+/* Wrappers                                                          */
+/*********************************************************************/
+
+static struct CfRegEx CompileRegExp(const char *regexp)
+
+{ struct CfRegEx this;
+ 
+#ifdef HAVE_LIBPCRE
+ pcre *rx;
+ const char *errorstr; 
+ int erroffset;
+
+memset(&this,0,sizeof(struct CfRegEx)); 
+
+rx = pcre_compile(regexp,PCRE_MULTILINE,&errorstr,&erroffset,NULL);
+
+if (rx == NULL)
+   {
+   CfOut(cf_error,"","Regular expression error \"%s\" in expression \"%s\" at %d\n",errorstr,regexp,erroffset);
+   this.failed = true;
+   }
+else
+   {
+   this.failed = false;
+   this.rx = rx;
+   }
+
+#else
+
+ regex_t rx;
+ int code;
+
+memset(&this,0,sizeof(struct CfRegEx));
+
+code = regcomp(&rx,regexp,REG_EXTENDED);
+
+if (code != 0)
+   {
+   char buf[CF_BUFSIZE];
+   regerror(code,&rx,buf,CF_BUFSIZE-1);
+   Chop(buf);
+   CfOut(cf_error,"regerror","Regular expression error %d for %s: %s\n", code,regexp,buf);
+   this.failed = true;
+   }
+else
+   {
+   this.failed = false;
+   this.rx = rx;
+   }
+
+#endif
+
+this.regexp = regexp;
+return this;
+}
+
+/*********************************************************************/
+
+static struct CfRegEx CaseCompileRegExp(const char *regexp)
+
+{ struct CfRegEx this;
+ 
+#ifdef HAVE_LIBPCRE
+ pcre *rx;
+ const char *errorstr; 
+ int erroffset;
+
+memset(&this,0,sizeof(struct CfRegEx)); 
+rx = pcre_compile(regexp,PCRE_CASELESS|PCRE_MULTILINE,&errorstr,&erroffset,NULL);
+
+if (rx == NULL)
+   {
+   CfOut(cf_error,"","Regular expression error %s in %s at %d: %s\n",errorstr,regexp,erroffset);
+   this.failed = true;
+   }
+else
+   {
+   this.failed = false;
+   this.rx = rx;
+   }
+
+#else
+
+ regex_t rx;
+ int code;
+
+memset(&this,0,sizeof(struct CfRegEx)); 
+
+code = regcomp(&rx,regexp,REG_EXTENDED|REG_ICASE);
+
+if (code != 0)
+   {
+   char buf[CF_BUFSIZE];
+   regerror(code,&rx,buf,CF_BUFSIZE-1);
+   CfOut(cf_error,"regerror","Regular expression error %d for %s: %s\n", code, regexp,buf);
+   this.failed = true;
+   }
+else
+   {
+   this.failed = false;
+   this.rx = rx;
+   }
+
+#endif
+
+this.regexp = regexp;
+return this;
+}
+
+/*********************************************************************/
+
+static int RegExMatchSubString(struct CfRegEx rex,char *teststring,int *start,int *end)
+
+{
+#ifdef HAVE_LIBPCRE
+ pcre *rx;
+ int ovector[OVECCOUNT],i,rc;
+ 
+rx = rex.rx;
+
+if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)) >= 0)
+   {
+   *start = ovector[0];
+   *end = ovector[1];
+
+   DeleteScope("match");
+   NewScope("match");
+   
+   for (i = 0; i < rc; i++) /* make backref vars $(1),$(2) etc */
+      {
+      char substring[CF_MAXVARSIZE];
+      char lval[4];
+      char *backref_start = teststring + ovector[i*2];
+      int backref_len = ovector[i*2+1] - ovector[i*2];
+
+      if (backref_len < CF_MAXVARSIZE)
+         {
+         memset(substring,0,CF_MAXVARSIZE);
+         strncpy(substring,backref_start,backref_len);
+         snprintf(lval,3,"%d",i);
+         ForceScalar(lval,substring);
+         }
+      }
+
+   pcre_free(rx);
+   return true;
+   }
+else
+   {
+   *start = 0;
+   *end = 0;
+   pcre_free(rx);
+   return false;
+   }
+
+#else
+
+ regex_t rx = rex.rx;
+ regmatch_t pmatch[2];
+ int code,i;
+
+if ((code = regexec(&rx,teststring,2,pmatch,0)) == 0)
+   {
+   DeleteScope("match");
+   NewScope("match");
+
+   for (i = 0; i < 2; i++) /* make backref vars $(1),$(2) etc */
+      {
+      int backref_len;
+      char substring[CF_MAXVARSIZE];
+      char lval[4];
+      regoff_t s,e;
+      s = (int)pmatch[i].rm_so;
+      e = (int)pmatch[i].rm_eo;
+      backref_len = e - s;
+
+      if (backref_len < CF_MAXVARSIZE)
+         {
+         memset(substring,0,CF_MAXVARSIZE);
+         strncpy(substring,(char *)(teststring+s),backref_len);
+         snprintf(lval,3,"%d",i);
+         ForceScalar(lval,substring);
+         }
+      }
+
+   *start = (int)pmatch[0].rm_so;
+   *end = (int)pmatch[0].rm_eo;
+   regfree(&rx);
+   return true;
+   }
+else
+   {
+   char buf[CF_BUFSIZE];
+   
+   if (DEBUG)
+      {
+      buf[0] = '\0';
+      regerror(code,&rx,buf,CF_BUFSIZE-1);
+      Debug("Regular expression error %d for %s: %s\n", code,rex.regexp,buf);
+      }
+   
+   *start = 0;
+   *end = 0;
+   regfree(&rx);
+   return false;
+   }
+
+#endif
+}
+
+/*********************************************************************/
+
+static int RegExMatchFullString(struct CfRegEx rex,char *teststring)
+
+{
+#ifdef HAVE_LIBPCRE
+ pcre *rx;
+ int ovector[OVECCOUNT],i,rc,match_len;
+ char *match_start;
+ 
+rx = rex.rx;
+
+if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)) >= 0)
+   {
+   match_start = teststring + ovector[0];
+   match_len = ovector[1] - ovector[0];
+
+   DeleteScope("match");
+   NewScope("match");
+   
+   for (i = 0; i < rc; i++) /* make backref vars $(1),$(2) etc */
+      {
+      char substring[CF_MAXVARSIZE];
+      char lval[4];
+      char *backref_start = teststring + ovector[i*2];
+      int backref_len = ovector[i*2+1] - ovector[i*2];
+
+      memset(substring,0,CF_MAXVARSIZE);
+
+      if (backref_len < CF_MAXVARSIZE)
+         {
+         strncpy(substring,backref_start,backref_len);
+         snprintf(lval,3,"%d",i);
+         ForceScalar(lval,substring);
+         }
+      }
+
+   if (rx)
+      {
+      pcre_free(rx);
+      }
+      
+   if ((match_start == teststring) && (match_len == strlen(teststring)))
+      {
+      return true;
+      }
+   else
+      {
+      return false;
+      }
+   }
+else
+   {
+   pcre_free(rx);
+   return false;
+   }
+
+#else
+
+ regex_t rx = rex.rx;
+ regmatch_t pmatch[2];
+ int i,code;
+ regoff_t start = 0,end = 0;
+
+if ((code = regexec(&rx,teststring,2,pmatch,0)) == 0)
+   {
+   DeleteScope("match");
+   NewScope("match");
+
+   for (i = 1; i < 2; i++) /* make backref vars $(1),$(2) etc */
+      {
+      int backref_len;
+      char substring[CF_MAXVARSIZE];
+      char lval[4];
+      start = pmatch[i].rm_so;
+      end = pmatch[i].rm_eo;
+      backref_len = end - start;
+      
+      if (backref_len < CF_MAXVARSIZE)
+         {
+         memset(substring,0,CF_MAXVARSIZE);
+         strncpy(substring,teststring+start,backref_len);
+         snprintf(lval,3,"%d",i);
+         ForceScalar(lval,substring);         
+         }
+      
+      break;
+      }
+
+   regfree(&rx);
+      
+   if ((pmatch[0].rm_so == 0) && (pmatch[0].rm_eo == strlen(teststring)))
+      {
+      Debug("Regex %s matches (%s) exactly.\n",rex.regexp,teststring);
+      return true;
+      }
+   else
+      {
+      Debug("Regex %s did not match (%s) exactly, but it matched a part of it.\n",rex.regexp,teststring);
+      return false;
+      }
+   }
+else
+   {
+   char buf[CF_BUFSIZE];
+
+   if (DEBUG)
+      {
+      regerror(code,&rx,buf,CF_BUFSIZE-1);
+      Debug("Regular expression error %d for %s: %s\n", code,rex.regexp,buf);
+      }
+   
+   regfree(&rx);
+   return false;
+   }
+
+#endif
+return false;
+}
+
+/*********************************************************************/
+
+static char *FirstBackReference(struct CfRegEx rex,char *regex,char *teststring)
+
+{ static char backreference[CF_BUFSIZE];
+
+#ifdef HAVE_LIBPCRE
+ pcre *rx;
+ int ovector[OVECCOUNT],i,rc,match_len;
+ char *match_start;
+
+rx = rex.rx;
+memset(backreference,0,CF_BUFSIZE);
+
+if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)) >= 0)
+   {
+   match_start = teststring + ovector[0];
+   match_len = ovector[1] - ovector[0];
+
+   for (i = 1; i < rc; i++) /* make backref vars $(1),$(2) etc */
+      {
+      char *backref_start = teststring + ovector[i*2];
+      int backref_len = ovector[i*2+1] - ovector[i*2];
+      
+      if (backref_len < CF_MAXVARSIZE)
+         {
+         strncpy(backreference,backref_start,backref_len);
+         }
+
+      break;
+      }
+   }
+
+pcre_free(rx);
+   
+#else
+
+ regex_t rx = rex.rx;
+ regmatch_t pmatch[3];
+ int i,code;
+ regoff_t start = 0,end = 0;
+
+memset(backreference,0,CF_MAXVARSIZE);
+ 
+if ((code = regexec(&rx,teststring,2,pmatch,0)) == 0)
+   {
+   for (i = 1; i < 2; i++) /* make backref vars $(1),$(2) etc */
+      {
+      int backref_len;
+      char substring[CF_MAXVARSIZE];
+      char lval[4];
+      start = pmatch[i].rm_so;
+      end = pmatch[i].rm_eo;
+      backref_len = end - start;
+      
+      if (backref_len < CF_MAXVARSIZE)
+         {
+         strncpy(backreference,(char *)(teststring+start),backref_len);
+         }
+      
+      break;
+      }
+   }
+
+regfree(&rx);
+
+#endif
+
+if (strlen(backreference) == 0)
+   {
+   Debug("The regular expression \"%s\" yielded no matching back-reference\n",regex);
+   strncpy(backreference,"CF_NOMATCH",CF_MAXVARSIZE);
+   }
+else
+   {
+   Debug("The regular expression \"%s\" yielded backreference \"%s\" on %s\n",regex,backreference,teststring);
+   }
+
+return backreference;
+}
+
+bool ValidateRegEx(const char *regex)
+{
+    struct CfRegEx rex = CompileRegExp(regex);
+
+    return !rex.failed;
+}
+
 /*************************************************************************/
 /* WILDCARD TOOLKIT : Level 0                                            */
 /*************************************************************************/
@@ -49,7 +489,7 @@ rex = CompileRegExp(regexp);
 
 if (rex.failed)
    {
-   CfOut(cf_error, "CompileRegExp", "!! Could not parse regular expression '%s'", regexp);
+   CfOut(cf_error,"","!! Could not parse regular expression '%s'", regexp);
    return false;
    }
 
@@ -337,77 +777,126 @@ return(false);
 
 /*********************************************************************/
 
-int MatchPolicy(char *needle,char *haystack,struct Attributes a,struct Promise *pp)
+int MatchPolicy(char *camel,char *haystack,struct Attributes a,struct Promise *pp)
 
 { struct Rlist *rp;
-  char *sp,*spto;
+  char *sp,*spto,*firstchar,*lastchar;
   enum insert_match opt;
-  char work[CF_BUFSIZE],final[CF_BUFSIZE];
-
-/* First construct the matching policy */
-
-memset(final,0,CF_BUFSIZE);
-strncpy(final,needle,CF_BUFSIZE-1);
+  char work[CF_BUFSIZE],final[CF_BUFSIZE],needle[CF_BUFSIZE];
+  struct Item *list = SplitString(camel,'\n'),*ip;
+  int direct_cmp = false, ok = false;
   
-for (rp = a.insert_match; rp != NULL; rp=rp->next)
+//Split into separate lines first
+
+for (ip = list; ip != NULL; ip = ip->next)
    {
-   opt = String2InsertMatch(rp->item);
-
-   /* Exact match can be done immediately */
+   ok = false;
+   direct_cmp = (strcmp(camel,haystack) == 0);
    
-   if (opt == cf_exact_match)
+   if (a.insert_match == NULL) 
       {
-      if (rp->next != NULL || rp != a.insert_match)
+      // No whitespace policy means exact_match
+      ok = ok || direct_cmp;
+      break;
+      }
+   
+   memset(final,0,CF_BUFSIZE);
+   strncpy(final,ip->name,CF_BUFSIZE-1);
+   
+   for (rp = a.insert_match; rp != NULL; rp=rp->next)
+      {
+      opt = String2InsertMatch(rp->item);
+      
+      /* Exact match can be done immediately */
+      
+      if (opt == cf_exact_match)
          {
-         CfOut(cf_error,""," !! Multiple policies conflict with \"exact_match\", using exact match");
-         PromiseRef(cf_error,pp);
+         if (rp->next != NULL || rp != a.insert_match)
+            {
+            CfOut(cf_error,""," !! Multiple policies conflict with \"exact_match\", using exact match");
+            PromiseRef(cf_error,pp);
+            }
+
+         ok = ok || direct_cmp;
+         break;
          }
       
-      return (strcmp(needle,haystack) == 0);
-      }
-
-   if (opt == cf_ignore_embedded)
-      {
-      memset(work,0,CF_BUFSIZE);
-      
-      for (sp = final,spto = work; *sp != '\0'; sp++)
+      if (opt == cf_ignore_embedded)
          {
-         if (strlen(sp) > 0 && isspace(*sp))
+         memset(work,0,CF_BUFSIZE);
+         
+         // Strip initial and final first
+
+         for (firstchar = final; isspace(*firstchar); firstchar++)
             {
-            while (isspace(*(sp+1)))
+            }
+         
+         for (lastchar = final+strlen(final)-1; lastchar > firstchar && isspace(*lastchar); lastchar--)
+            {
+            }         
+
+         for (sp = final,spto = work; *sp != '\0'; sp++)
+            {
+            if (sp > firstchar && sp < lastchar)
                {
-               sp++;
+               if (isspace(*sp))
+                  {
+                  while (isspace(*(sp+1)))
+                     {
+                     sp++;
+                     }
+                  
+                  strcat(spto,"\\s+");
+                  spto += 3;
+                  }
+               else
+                  {
+                  *spto++ = *sp;
+                  }
                }
-
-            strcat(spto,"\\s+");
-            spto += 3;
+            else
+               {
+               *spto++ = *sp;
+               }
             }
-         else
-            {
-            *spto++ = *sp;
-            }
+         
+         strcpy(final,work);
          }
-
-      strcpy(final,work);
-      }
-   
-   if (opt == cf_ignore_leading)
-      {
-      for (sp = final; isspace(*sp); sp++)
+      
+      if (opt == cf_ignore_leading)
          {
+         if (strncmp(final,"\\s*",3) != 0)
+            {
+            for (sp = final; isspace(*sp); sp++)
+               {
+               }
+            strcpy(work,sp);
+            snprintf(final,CF_BUFSIZE,"\\s*%s",work);
+            }
          }
-      strcpy(work,sp);
-      snprintf(final,CF_BUFSIZE,"\\s*%s",work);
+      
+      if (opt == cf_ignore_trailing)
+         {
+         if (strncmp(final+strlen(final)-4,"\\s*",3) != 0)
+            {
+            strcpy(work,final);
+            snprintf(final,CF_BUFSIZE,"%s\\s*",work);
+            }
+         }
+
+      ok = ok || FullTextMatch(final,haystack);
       }
-   
-   if (opt == cf_ignore_trailing)
+
+   if (!ok) // All lines in region need to match to avoid insertions
       {
-      strcpy(work,final);
-      snprintf(final,CF_BUFSIZE,"%s\\s*",work);
+      break;
       }
+
+   strcmp(final,work);
    }
 
-return FullTextMatch(final,haystack);
+DeleteItemList(list);
+return ok;
 }
 
 /*********************************************************************/
@@ -439,424 +928,6 @@ for (rp = listofregex; rp != NULL; rp=rp->next)
 return false;
 }
 
-
-/*********************************************************************/
-/* Wrappers                                                          */
-/*********************************************************************/
-
-struct CfRegEx CompileRegExp(char *regexp)
-
-{ struct CfRegEx this;
- 
-#ifdef HAVE_LIBPCRE
- pcre *rx;
- const char *errorstr; 
- int erroffset;
-
-memset(&this,0,sizeof(struct CfRegEx)); 
-
-rx = pcre_compile(regexp,0,&errorstr,&erroffset,NULL);
-
-if (rx == NULL)
-   {
-   CfOut(cf_error,"","Regular expression error \"%s\" in expression \"%s\" at %d\n",errorstr,regexp,erroffset);
-   this.failed = true;
-   }
-else
-   {
-   this.failed = false;
-   this.rx = rx;
-   }
-
-#else
-
- regex_t rx;
- int code;
-
-memset(&this,0,sizeof(struct CfRegEx));
-
-code = regcomp(&rx,regexp,REG_EXTENDED);
-
-if (code != 0)
-   {
-   char buf[CF_BUFSIZE];
-   regerror(code,&rx,buf,CF_BUFSIZE-1);
-   Chop(buf);
-   CfOut(cf_error,"regerror","Regular expression error %d for %s: %s\n", code,regexp,buf);
-   this.failed = true;
-   }
-else
-   {
-   this.failed = false;
-   this.rx = rx;
-   }
-
-#endif
-
-this.regexp = regexp;
-return this;
-}
-
-/*********************************************************************/
-
-struct CfRegEx CaseCompileRegExp(char *regexp)
-
-{ struct CfRegEx this;
- 
-#ifdef HAVE_LIBPCRE
- pcre *rx;
- const char *errorstr; 
- int erroffset;
-
-memset(&this,0,sizeof(struct CfRegEx)); 
-rx = pcre_compile(regexp,PCRE_CASELESS,&errorstr,&erroffset,NULL);
-
-if (rx == NULL)
-   {
-   CfOut(cf_error,"","Regular expression error %s in %s at %d: %s\n",errorstr,regexp,erroffset);
-   this.failed = true;
-   }
-else
-   {
-   this.failed = false;
-   this.rx = rx;
-   }
-
-#else
-
- regex_t rx;
- int code;
-
-memset(&this,0,sizeof(struct CfRegEx)); 
-
-code = regcomp(&rx,regexp,REG_EXTENDED|REG_ICASE);
-
-if (code != 0)
-   {
-   char buf[CF_BUFSIZE];
-   regerror(code,&rx,buf,CF_BUFSIZE-1);
-   CfOut(cf_error,"regerror","Regular expression error %d for %s: %s\n", code, regexp,buf);
-   this.failed = true;
-   }
-else
-   {
-   this.failed = false;
-   this.rx = rx;
-   }
-
-#endif
-
-this.regexp = regexp;
-return this;
-}
-
-/*********************************************************************/
-
-int RegExMatchSubString(struct CfRegEx rex,char *teststring,int *start,int *end)
-
-{
-#ifdef HAVE_LIBPCRE
- pcre *rx;
- int ovector[OVECCOUNT],i,rc;
- 
-rx = rex.rx;
-
-if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)) >= 0)
-   {
-   *start = ovector[0];
-   *end = ovector[1];
-
-   if (rc > 1)
-      {
-      DeleteScope("match");
-      NewScope("match");
-      }
-   
-   for (i = 0; i < rc; i++) /* make backref vars $(1),$(2) etc */
-      {
-      char substring[CF_MAXVARSIZE];
-      char lval[4];
-      char *backref_start = teststring + ovector[i*2];
-      int backref_len = ovector[i*2+1] - ovector[i*2];
-
-      if (backref_len < CF_MAXVARSIZE)
-         {
-         memset(substring,0,CF_MAXVARSIZE);
-         strncpy(substring,backref_start,backref_len);
-         snprintf(lval,3,"%d",i);
-         ForceScalar(lval,substring);
-         }
-      }
-
-   pcre_free(rx);
-   return true;
-   }
-else
-   {
-   *start = 0;
-   *end = 0;
-   pcre_free(rx);
-   return false;
-   }
-
-#else
-
- regex_t rx = rex.rx;
- regmatch_t pmatch[2];
- int code,i;
-
-if ((code = regexec(&rx,teststring,2,pmatch,0)) == 0)
-   {
-   DeleteScope("match");
-   NewScope("match");
-
-   for (i = 0; i < 2; i++) /* make backref vars $(1),$(2) etc */
-      {
-      int backref_len;
-      char substring[CF_MAXVARSIZE];
-      char lval[4];
-      regoff_t s,e;
-      s = (int)pmatch[i].rm_so;
-      e = (int)pmatch[i].rm_eo;
-      backref_len = e - s;
-
-      if (backref_len < CF_MAXVARSIZE)
-         {
-         memset(substring,0,CF_MAXVARSIZE);
-         strncpy(substring,(char *)(teststring+s),backref_len);
-         snprintf(lval,3,"%d",i);
-         ForceScalar(lval,substring);
-         }
-      }
-
-   *start = (int)pmatch[0].rm_so;
-   *end = (int)pmatch[0].rm_eo;
-   regfree(&rx);
-   return true;
-   }
-else
-   {
-   char buf[CF_BUFSIZE];
-   
-   if (DEBUG)
-      {
-      buf[0] = '\0';
-      regerror(code,&rx,buf,CF_BUFSIZE-1);
-      Debug("Regular expression error %d for %s: %s\n", code,rex.regexp,buf);
-      }
-   
-   *start = 0;
-   *end = 0;
-   regfree(&rx);
-   return false;
-   }
-
-#endif
-}
-
-/*********************************************************************/
-
-int RegExMatchFullString(struct CfRegEx rex,char *teststring)
-
-{
-#ifdef HAVE_LIBPCRE
- pcre *rx;
- int ovector[OVECCOUNT],i,rc,match_len;
- char *match_start;
- 
-rx = rex.rx;
-
-if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)) >= 0)
-   {
-   match_start = teststring + ovector[0];
-   match_len = ovector[1] - ovector[0];
-
-   if (rc > 1)
-      {
-      DeleteScope("match");
-      NewScope("match");
-      }
-   
-   for (i = 0; i < rc; i++) /* make backref vars $(1),$(2) etc */
-      {
-      char substring[CF_MAXVARSIZE];
-      char lval[4];
-      char *backref_start = teststring + ovector[i*2];
-      int backref_len = ovector[i*2+1] - ovector[i*2];
-
-      memset(substring,0,CF_MAXVARSIZE);
-
-      if (backref_len < CF_MAXVARSIZE)
-         {
-         strncpy(substring,backref_start,backref_len);
-         snprintf(lval,3,"%d",i);
-         ForceScalar(lval,substring);
-         }
-      }
-
-   if (rx)
-      {
-      pcre_free(rx);
-      }
-      
-   if ((match_start == teststring) && (match_len == strlen(teststring)))
-      {
-      return true;
-      }
-   else
-      {
-      return false;
-      }
-   }
-else
-   {
-   pcre_free(rx);
-   return false;
-   }
-
-#else
-
- regex_t rx = rex.rx;
- regmatch_t pmatch[2];
- int i,code;
- regoff_t start = 0,end = 0;
-
-if ((code = regexec(&rx,teststring,2,pmatch,0)) == 0)
-   {
-   DeleteScope("match");
-   NewScope("match");
-
-   for (i = 1; i < 2; i++) /* make backref vars $(1),$(2) etc */
-      {
-      int backref_len;
-      char substring[CF_MAXVARSIZE];
-      char lval[4];
-      start = pmatch[i].rm_so;
-      end = pmatch[i].rm_eo;
-      backref_len = end - start;
-      
-      if (backref_len < CF_MAXVARSIZE)
-         {
-         memset(substring,0,CF_MAXVARSIZE);
-         strncpy(substring,teststring+start,backref_len);
-         snprintf(lval,3,"%d",i);
-         ForceScalar(lval,substring);         
-         }
-      
-      break;
-      }
-
-   regfree(&rx);
-      
-   if ((pmatch[0].rm_so == 0) && (pmatch[0].rm_eo == strlen(teststring)))
-      {
-      Debug("Regex %s matches (%s) exactly.\n",rex.regexp,teststring);
-      return true;
-      }
-   else
-      {
-      Debug("Regex %s did not match (%s) exactly, but it matched a part of it.\n",rex.regexp,teststring);
-      return false;
-      }
-   }
-else
-   {
-   char buf[CF_BUFSIZE];
-
-   if (DEBUG)
-      {
-      regerror(code,&rx,buf,CF_BUFSIZE-1);
-      Debug("Regular expression error %d for %s: %s\n", code,rex.regexp,buf);
-      }
-   
-   regfree(&rx);
-   return false;
-   }
-
-#endif
-return false;
-}
-
-/*********************************************************************/
-
-char *FirstBackReference(struct CfRegEx rex,char *regex,char *teststring)
-
-{ static char backreference[CF_BUFSIZE];
-
-#ifdef HAVE_LIBPCRE
- pcre *rx;
- int ovector[OVECCOUNT],i,rc,match_len;
- char *match_start;
-
-rx = rex.rx;
-memset(backreference,0,CF_BUFSIZE);
-
-if ((rc = pcre_exec(rx,NULL,teststring,strlen(teststring),0,0,ovector,OVECCOUNT)) >= 0)
-   {
-   match_start = teststring + ovector[0];
-   match_len = ovector[1] - ovector[0];
-
-   for (i = 1; i < rc; i++) /* make backref vars $(1),$(2) etc */
-      {
-      char *backref_start = teststring + ovector[i*2];
-      int backref_len = ovector[i*2+1] - ovector[i*2];
-      
-      if (backref_len < CF_MAXVARSIZE)
-         {
-         strncpy(backreference,backref_start,backref_len);
-         }
-
-      break;
-      }
-   }
-
-pcre_free(rx);
-   
-#else
-
- regex_t rx = rex.rx;
- regmatch_t pmatch[3];
- int i,code;
- regoff_t start = 0,end = 0;
-
-memset(backreference,0,CF_MAXVARSIZE);
- 
-if ((code = regexec(&rx,teststring,2,pmatch,0)) == 0)
-   {
-   for (i = 1; i < 2; i++) /* make backref vars $(1),$(2) etc */
-      {
-      int backref_len;
-      char substring[CF_MAXVARSIZE];
-      char lval[4];
-      start = pmatch[i].rm_so;
-      end = pmatch[i].rm_eo;
-      backref_len = end - start;
-      
-      if (backref_len < CF_MAXVARSIZE)
-         {
-         strncpy(backreference,(char *)(teststring+start),backref_len);
-         }
-      
-      break;
-      }
-   }
-
-regfree(&rx);
-
-#endif
-
-if (strlen(backreference) == 0)
-   {
-   Debug("The regular expression \"%s\" yielded no matching back-reference\n",regex);
-   strncpy(backreference,"CF_NOMATCH",CF_MAXVARSIZE);
-   }
-else
-   {
-   Debug("The regular expression \"%s\" yielded backreference \"%s\" on %s\n",regex,backreference,teststring);
-   }
-
-return backreference;
-}
 
 /*********************************************************************/
 /* Enumerated languages - fuzzy match model                          */
@@ -1107,21 +1178,19 @@ if (!(isrange||isCIDR))
  
 if (isv4)
    {
-   struct sockaddr_in addr1,addr2;
-   int shift;
 
-   memset(&addr1,0,sizeof(struct sockaddr_in));
-   memset(&addr2,0,sizeof(struct sockaddr_in));
-   
    if (isCIDR)
       {
+      struct sockaddr_in addr1,addr2;
+      int shift;
+
       address[0] = '\0';
       mask = 0;
       sscanf(s1,"%16[^/]/%d",address,&mask);
       shift = 32 - mask;
-      
-      memcpy(&addr1,(struct sockaddr_in *) sockaddr_pton(AF_INET,address),sizeof(struct sockaddr_in));
-      memcpy(&addr2,(struct sockaddr_in *) sockaddr_pton(AF_INET,s2),sizeof(struct sockaddr_in));
+
+      sockaddr_pton(AF_INET, address, &addr1);
+      sockaddr_pton(AF_INET, s2, &addr2);
 
       a1 = htonl(addr1.sin_addr.s_addr);
       a2 = htonl(addr2.sin_addr.s_addr);
@@ -1200,14 +1269,13 @@ if (isv4)
 #if defined(HAVE_GETADDRINFO)
 if (isv6)
    {
-   struct sockaddr_in6 addr1,addr2;
-   int blocks, i;
+   int i;
 
-   memset(&addr1,0,sizeof(struct sockaddr_in6));
-   memset(&addr2,0,sizeof(struct sockaddr_in6));
-   
    if (isCIDR)
       {
+      int blocks;
+      struct sockaddr_in6 addr1,addr2;
+
       address[0] = '\0';
       mask = 0;
       sscanf(s1,"%40[^/]/%d",address,&mask);
@@ -1218,10 +1286,10 @@ if (isv6)
          CfOut(cf_error,"","Cannot handle ipv6 masks which are not 8 bit multiples (fix me)");
          return -1;
          }
-      
-      memcpy(&addr1,(struct sockaddr_in6 *) sockaddr_pton(AF_INET6,address),sizeof(struct sockaddr_in6));
-      memcpy(&addr2,(struct sockaddr_in6 *) sockaddr_pton(AF_INET6,s2),sizeof(struct sockaddr_in6));
-      
+
+      sockaddr_pton(AF_INET6, address, &addr1);
+      sockaddr_pton(AF_INET6, s2, &addr2);
+
       for (i = 0; i < blocks; i++) /* blocks < 16 */
          {
          if (addr1.sin6_addr.s6_addr[i] != addr2.sin6_addr.s6_addr[i])
@@ -1380,13 +1448,58 @@ for (sp = str; (*sp != '\0') && (strEscPos < strEscSz - 2); sp++)
       sp += strlen(noEsc);
       }
    
-   if (!isalnum(*sp))
+   if (*sp != '\0' && !isalnum(*sp))
       {
       strEsc[strEscPos++] = '\\';
       }
    
    strEsc[strEscPos++] = *sp;
    }
+}
+
+/*********************************************************************/
+
+char *EscapeChar(char *str, int strSz, char esc)
+/* Escapes characters esc in the string str of size strSz  */
+
+{ char strDup[CF_BUFSIZE];
+  int strPos, strDupPos;
+  
+if(sizeof(strDup) < strSz)
+   {
+   FatalError("Too large string passed to EscapeCharInplace()\n");
+   }
+
+snprintf(strDup, sizeof(strDup), "%s", str);
+memset(str, 0, strSz);
+
+for(strPos = 0, strDupPos = 0; strPos < strSz - 2; strPos++, strDupPos++)
+   {
+   if(strDup[strDupPos] == esc)
+      {
+      str[strPos] = '\\';
+      strPos++;
+      }
+   
+   str[strPos] = strDup[strDupPos];
+   }
+
+return str;
+}
+
+/*********************************************************************/
+
+void AnchorRegex(char *regex, char *out, int outSz)
+
+{
+if (EMPTY(regex))
+  {
+  memset(out,0,outSz);
+  }
+else
+  {
+  snprintf(out,outSz,"^(%s)$",regex);
+  }
 }
 
 

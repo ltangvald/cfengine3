@@ -78,7 +78,7 @@ int main (int argc,char *argv[]);
       "Print basic information about changes made to the system, i.e. promises repaired",
       "Activate internal diagnostics (developers only)",
       "Perform additional analysis of configuration",
-      "Generate reports about configuration",
+      "Generate reports about configuration and insert into CFDB",
       NULL
       };
 
@@ -92,6 +92,7 @@ int main(int argc,char *argv[])
 CheckOpts(argc,argv); 
 GenericInitialize(argc,argv,"common");
 ThisAgentInit();
+AnalyzePromiseConflicts();
 GenericDeInitialize();
 
 if (ERRORCOUNT > 0)
@@ -103,7 +104,7 @@ else
    {
    CfOut(cf_verbose,""," -> Inputs are valid\n");
    exit(0);
-   }
+   } 
 }
 
 /*******************************************************************/
@@ -170,6 +171,7 @@ while ((c=getopt_long(argc,argv,"ad:vnIf:D:N:VSrxM",OPTIONS,&optindex)) != EOF)
           
       case 'n': DONTDO = true;
           IGNORELOCK = true;
+	  LOOKUP = true;
           NewClass("opt_dry_run");
           break;
           
@@ -190,7 +192,6 @@ while ((c=getopt_long(argc,argv,"ad:vnIf:D:N:VSrxM",OPTIONS,&optindex)) != EOF)
           exit(0);
 
       case 'a':
-
           printf("Self-analysis is not yet implemented.");
           exit(0);
           break;
@@ -214,6 +215,7 @@ Debug("Set debugging\n");
 void ThisAgentInit()
 
 {
+SHOWREPORTS = false;
 }
 
 

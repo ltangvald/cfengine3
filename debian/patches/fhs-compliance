@@ -8,19 +8,15 @@ actual creation of the inputs dir any cf-* binary will fail
 
 --- a/src/generic_agent.c
 +++ b/src/generic_agent.c
-@@ -396,9 +396,10 @@
+@@ -460,7 +460,6 @@
     CfOut(cf_verbose,"","Work directory is %s\n",CFWORKDIR);
  
     snprintf(HASHDB,CF_BUFSIZE-1,"%s%c%s",CFWORKDIR,FILE_SEPARATOR,CF_CHKDB);
 -
-+/*
     snprintf(vbuff,CF_BUFSIZE,"%s%cinputs%cupdate.conf",CFWORKDIR,FILE_SEPARATOR,FILE_SEPARATOR);
     MakeParentDirectory(vbuff,force);
-+*/
     snprintf(vbuff,CF_BUFSIZE,"%s%cbin%ccf-agent -D from_cfexecd",CFWORKDIR,FILE_SEPARATOR,FILE_SEPARATOR);
-    MakeParentDirectory(vbuff,force);
-    snprintf(vbuff,CF_BUFSIZE,"%s%coutputs%cspooled_reports",CFWORKDIR,FILE_SEPARATOR,FILE_SEPARATOR);
-@@ -1055,7 +1056,7 @@
+@@ -1186,7 +1185,7 @@
     }
  else
     {
@@ -29,7 +25,7 @@ actual creation of the inputs dir any cf-* binary will fail
     VSETUIDLOG = strdup(LOGFILE);
     }
  
-@@ -1616,7 +1617,7 @@
+@@ -1759,7 +1758,7 @@
  
  { FILE *fp;
  
@@ -40,18 +36,18 @@ actual creation of the inputs dir any cf-* binary will fail
     {
 --- a/src/agent.c
 +++ b/src/agent.c
-@@ -339,7 +339,7 @@
+@@ -344,7 +344,7 @@
    status which we need for setting returns
  */
  
 -snprintf(filename,CF_BUFSIZE,"%s/cfagent.%s.log",CFWORKDIR,VSYSNAME.nodename);
 +snprintf(filename,CF_BUFSIZE,"/var/log/cfagent.%s.log",VSYSNAME.nodename);
  MapName(filename);
+ 
  if ((fp = fopen(filename,"a")) != NULL)
-    {
 --- a/src/files_interfaces.c
 +++ b/src/files_interfaces.c
-@@ -1320,7 +1320,7 @@
+@@ -1345,7 +1345,7 @@
  b.edits.backup = cfa_nobackup;
  b.edits.maxfilesize = 1000000;
  
@@ -60,9 +56,18 @@ actual creation of the inputs dir any cf-* binary will fail
  MapName(filename);
  
  if (!LoadFileAsItemList(&VSETUIDLIST,filename,b,pp))
+@@ -1365,7 +1365,7 @@
+ b.edits.backup = cfa_nobackup;
+ b.edits.maxfilesize = 1000000;
+ 
+-snprintf(filename,CF_BUFSIZE,"%s/cfagent.%s.log",CFWORKDIR,VSYSNAME.nodename);
++snprintf(filename,CF_BUFSIZE,"/var/log/cfagent.%s.log",VSYSNAME.nodename);
+ MapName(filename);
+ 
+ PurgeItemList(&VSETUIDLIST,"SETUID/SETGID");
 --- a/src/transaction.c
 +++ b/src/transaction.c
-@@ -156,7 +156,7 @@
+@@ -158,7 +158,7 @@
     sum = (CF_MACROALPHABET * sum + cc_operand[i]) % CF_HASHTABLESIZE;
     }
  

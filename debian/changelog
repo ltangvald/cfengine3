@@ -1,3 +1,62 @@
+cfengine3 (3.1.5~b1-1) unstable; urgency=low
+
+  * New upstream release
+  * debian/patches:
+    + fhs-compliance: patch from Andreas Larsson to include a missing line to
+      be fully compliant with FHS (Closes: 619580)
+    + remove-man-errors: s/sucessfully/successfully/g
+  * debian/watch: removed the repack for copyright issues, the pdf is not 
+    shipped anymore by upstream
+  * debian/copyright:
+    + removing any reference to repack.sh and its licenses
+    + copyright updates suggested by Mikhail Gusarov (Closes: 620961)
+  * debian/rules:
+    + reformatted configure opts and added htmldir to include the html docs in
+      the package (Closes: 609367)
+    + disabled nova and constellation, not included in the free version
+    + added dh_autoreconf and dh_autoreconf_clean
+  * debian/cfengine3.doc-base: added a doc-base for the HTML doc distributed
+  * debian/control:
+    + added dh-autoreconf to Build-Depends
+  * debian/source/local-options: unapply all patches after the build
+
+ -- Antonio Radici <antonio@debian.org>  Mon, 11 Apr 2011 17:45:21 +0100
+
+cfengine3 (3.1.4+dsfg-1) unstable; urgency=low
+
+  * New upstream release (Closes: 610962)
+  * debian/patches:
+    + all patches refreshed
+
+ -- Antonio Radici <antonio@debian.org>  Mon, 07 Mar 2011 00:36:34 +0000
+
+cfengine3 (3.1.2+dfsg-1) experimental; urgency=low
+
+  * New upstream release (Closes: 585619, 605534)
+  * debian/cfengine3.init: quote the unquoted variables (Closes: 605044)
+  * debian/postrm: clean up files during purge (Closes: 606359)
+  * debian/patches: all refreshed/re-adapted
+  * debian/rules: added --enable-shared=no, otherwise libpromises.so.1 will be
+    shipped
+  * debian/cfengine3.default: variable names now compatible with cfengine3.init
+    (Closes: 602404)
+
+ -- Antonio Radici <antonio@debian.org>  Mon, 03 Jan 2011 21:08:59 +0000
+
+cfengine3 (3.1.0~b2+dfsg-1) experimental; urgency=low
+
+  * New upstream release (Closes: 598541)
+  * debian/control:
+    + Standards-Version bumped to 3.9.1
+  * debian/patches:
+    + all patches refreshed
+    + fix-error-typos removed, integrated upstream
+    + fhs-compliance to create the workdir (Closes: 597552)
+  * debian/source/include-binaries:
+    + docs/ContributorStatement.pdf added
+
+ -- Antonio Radici <antonio@debian.org>  Sun, 17 Oct 2010 21:55:10 +0100
+
 cfengine3 (3.0.5+dfsg-1) unstable; urgency=low
 
   * New upstream release

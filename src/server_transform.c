@@ -62,6 +62,7 @@ extern struct Auth *ROLESTOP;
 
 void KeepFileAccessPromise(struct Promise *pp);
 void KeepLiteralAccessPromise(struct Promise *pp, char *type);
+void KeepQueryAccessPromise(struct Promise *pp,char *type);
 
 /*******************************************************************/
 /* Level                                                           */
@@ -84,39 +85,35 @@ void Summarize()
 
 CfOut(cf_verbose,"","Summarize control promises\n");
   
-if (DEBUG || D2)
-   {
-   printf("\nACCESS GRANTED ----------------------:\n");
+ CfOut(cf_verbose, "", "Granted access to paths :\n");
 
-   for (ptr = VADMIT; ptr != NULL; ptr=ptr->next)
-      {
-      printf("Path: %s (encrypt=%d)\n",ptr->path,ptr->encrypt);
+ for (ptr = VADMIT; ptr != NULL; ptr=ptr->next)
+    {
+    CfOut(cf_verbose, "", "Path: %s (encrypt=%d)\n",ptr->path,ptr->encrypt);
 
-      for (ip = ptr->accesslist; ip != NULL; ip=ip->next)
-         {
-         printf("   Admit: %s root=",ip->name);
-         for (ipr = ptr->maproot; ipr !=NULL; ipr=ipr->next)
-            {
-            printf("%s,",ipr->name);
-            }
-         printf("\n");
-         }
-      }
+    for (ip = ptr->accesslist; ip != NULL; ip=ip->next)
+       {
+       CfOut(cf_verbose, "", "   Admit: %s root=",ip->name);
+       for (ipr = ptr->maproot; ipr !=NULL; ipr=ipr->next)
+          {
+          CfOut(cf_verbose, "", "%s,",ipr->name);
+          }
+       }
+    }
    
-   printf("\nACCESS DENIAL ------------------------ :\n");
+
+ CfOut(cf_verbose, "", "Denied access to paths :\n");
    
-   for (ptr = VDENY; ptr != NULL; ptr=ptr->next)
-      {
-      printf("Path: %s\n",ptr->path);
+ for (ptr = VDENY; ptr != NULL; ptr=ptr->next)
+    {
+    CfOut(cf_verbose, "", "Path: %s\n",ptr->path);
       
-      for (ip = ptr->accesslist; ip != NULL; ip=ip->next)
-         {
-         printf("   Deny: %s\n",ip->name);
-         }      
-      }
+    for (ip = ptr->accesslist; ip != NULL; ip=ip->next)
+       {
+       CfOut(cf_verbose, "", "   Deny: %s\n",ip->name);
+       }      
+    }
 
-   printf("\n");
-   }
 
 CfOut(cf_verbose,""," -> Host IPs allowed connection access :\n");
 
@@ -372,6 +369,14 @@ for (cp = ControlBodyConstraints(cf_server); cp != NULL; cp=cp->next)
       SHORT_CFENGINEPORT = (short)Str2Int(retval);
       strncpy(STR_CFENGINEPORT,retval,15);
       CfOut(cf_verbose,"","SET default portnumber = %u = %s = %s\n",(int)SHORT_CFENGINEPORT,STR_CFENGINEPORT,retval);
+      SHORT_CFENGINEPORT = htons((short)Str2Int(retval));
+      continue;
+      }
+
+   if (strcmp(cp->lval,CFS_CONTROLBODY[cfs_keyttl].lval) == 0)
+      {
+      KEYTTL = (short)Str2Int(retval);
+      CfOut(cf_verbose,"","SET key TTL = %d\n",KEYTTL);
       continue;
       }
 
@@ -391,6 +396,12 @@ if (GetVariable("control_common",CFG_CONTROLBODY[cfg_syslog_host].lval,&retval,&
 if (GetVariable("control_common",CFG_CONTROLBODY[cfg_syslog_port].lval,&retval,&rettype) != cf_notype)
    {
    strncpy(SYSLOGHOST,Hostname2IPString(retval),CF_MAXVARSIZE-1);
+   }
+
+if (GetVariable("control_common",CFG_CONTROLBODY[cfg_fips_mode].lval,&retval,&rettype) != cf_notype)
+   {
+   FIPS_MODE = GetBoolean(retval);
+   CfOut(cf_verbose,"","SET FIPS_MODE = %d\n",FIPS_MODE);
    }
 }
 
@@ -420,7 +431,7 @@ for (bp = BUNDLES; bp != NULL; bp = bp->next) /* get schedule */
       
       for (sp = bp->subtypes; sp != NULL; sp = sp->next) /* get schedule */
          {
-         if (strcmp(sp->name,"access") == 0)
+         if (strcmp(sp->name,"vars") != 0 && strcmp(sp->name,"classes") != 0)
             {
             continue;
             }
@@ -464,7 +475,7 @@ for (bp = BUNDLES; bp != NULL; bp = bp->next) /* get schedule */
       
       for (sp = bp->subtypes; sp != NULL; sp = sp->next) /* get schedule */
          {
-         if (strcmp(sp->name,"access") != 0)
+         if (strcmp(sp->name,"access") != 0 && strcmp(sp->name,"roles") != 0)
             {
             continue;
             }
@@ -516,6 +527,12 @@ sp = (char *)GetConstraint("resource_type",pp,CF_SCALAR);
 if (strcmp(pp->agentsubtype,"access") == 0 && sp && strcmp(sp,"literal") == 0)
    {
    KeepLiteralAccessPromise(pp,"literal");
+   return;
+   }
+
+if (strcmp(pp->agentsubtype,"access") == 0 && sp && strcmp(sp,"query") == 0)
+   {
+   KeepQueryAccessPromise(pp,"query");
    return;
    }
 
@@ -716,6 +733,88 @@ for (cp = pp->conlist; cp != NULL; cp = cp->next)
 
 /*********************************************************************/
 
+void KeepQueryAccessPromise(struct Promise *pp,char *type)
+
+{ struct Constraint *cp;
+  struct Body *bp;
+  struct FnCall *fp;
+  struct Rlist *rp;
+  struct Auth *ap,*dp;
+  char *val;
+
+if (!GetAuthPath(pp->promiser,VARADMIT))
+   {
+   InstallServerAuthPath(pp->promiser,&VARADMIT,&VARADMITTOP);
+   }
+
+RegisterLiteralServerData(pp->promiser,pp);
+
+if (!GetAuthPath(pp->promiser,VARDENY))
+   {
+   InstallServerAuthPath(pp->promiser,&VARDENY,&VARDENYTOP);
+   }
+
+ap = GetAuthPath(pp->promiser,VARADMIT);
+dp = GetAuthPath(pp->promiser,VARDENY);
+
+if (strcmp(type,"query") == 0)
+   {
+   ap->literal = true;
+   }
+
+for (cp = pp->conlist; cp != NULL; cp = cp->next)
+   {
+   if (!IsDefinedClass(cp->classes))
+      {
+      continue;
+      }
+
+   switch (cp->type)
+      {
+      case CF_SCALAR:
+
+          val = (char *)cp->rval;
+
+          if (strcmp(cp->lval,CF_REMACCESS_BODIES[cfs_encrypted].lval) == 0)
+             {
+             ap->encrypt = true;
+             }
+             
+          break;
+
+      case CF_LIST:
+          
+          for (rp = (struct Rlist *)cp->rval; rp != NULL; rp=rp->next)
+             {
+             if (strcmp(cp->lval,CF_REMACCESS_BODIES[cfs_admit].lval) == 0)
+                {
+                PrependItem(&(ap->accesslist),rp->item,NULL);
+                continue;
+                }
+             
+             if (strcmp(cp->lval,CF_REMACCESS_BODIES[cfs_deny].lval) == 0)
+                {
+                PrependItem(&(dp->accesslist),rp->item,NULL);
+                continue;
+                }
+
+             if (strcmp(cp->lval,CF_REMACCESS_BODIES[cfs_maproot].lval) == 0)
+                {
+                PrependItem(&(ap->maproot),rp->item,NULL);
+                continue;
+                }
+             }
+          break;
+
+      case CF_FNCALL:
+          /* Shouldn't happen */
+          break;
+      }
+   }
+}
+
+/*********************************************************************/
+
 void KeepServerRolePromise(struct Promise *pp)
 
 { struct Constraint *cp;
@@ -758,7 +857,14 @@ for (cp = pp->conlist; cp != NULL; cp = cp->next)
           break;
 
       default:
-          CfOut(cf_error,"","RHS of authorize promise for %s should be a list\n",pp->promiser);
+
+          if (strcmp(cp->lval,"comment") == 0 || strcmp(cp->lval,"handle") == 0)
+             {
+             }
+          else
+             {
+             CfOut(cf_error,"","RHS of authorize promise for %s should be a list\n",pp->promiser);
+             }
           break;
       }
    }

@@ -48,16 +48,6 @@
  /*                                                         */
  /***********************************************************/
 
-struct BodySyntax CF_INFERENCE_BODY[] =
-   {
-   {"pre_assoc_pattern",cf_str,"","Name of forward association between promiser topic and associates"},
-   {"post_assoc_pattern",cf_str,"","Name of backward/inverse association from associates to promiser topic"},
-   {"inference",cf_str,"","Result of the syllogism"},
-   {NULL,cf_notype,NULL,NULL}
-   };
-
-/***************************************************************/
-
 struct BodySyntax CF_RELATE_BODY[] =
    {
    {"forward_relationship",cf_str,"","Name of forward association between promiser topic and associates"},
@@ -72,8 +62,8 @@ struct BodySyntax CF_OCCUR_BODIES[] =
    {
    {"represents",cf_slist,"","List of subtopics that explains the type(s) of information represented by the occurrence"},
    {"representation",cf_opts,"literal,url,db,file,web,image,portal","How to interpret the promiser string e.g. actual data or reference to data"},
-   {"web_root",cf_str,"","Base URL of the occurrence when rendered as a web-URL (replaces path_root)"},
-   {"path_root",cf_str,"","Base path of the occurrence when locating file (replaced by web_root)"},
+   {"web_root",cf_str,"","Base URL of the occurrence when rendered as a web-URL (deprecated)"},
+   {"path_root",cf_str,"","Base path of the occurrence when locating file (deprecated)"},
    {NULL,cf_notype,NULL,NULL}
    };
 
@@ -82,6 +72,7 @@ struct BodySyntax CF_OCCUR_BODIES[] =
 struct BodySyntax CF_TOPICS_BODIES[] =
    {
    {"association",cf_body,CF_RELATE_BODY,"Declare associated topics"},
+   {"synonyms",cf_slist,"","A list of words to be treated as equivalents in the defined context"},
    {"comment",cf_str,"","Retained comment about this promise's real intention"},
    {NULL,cf_notype,NULL,NULL}
    };
@@ -90,8 +81,8 @@ struct BodySyntax CF_TOPICS_BODIES[] =
 
 struct BodySyntax CF_INFER_BODIES[] =
    {
-   {"follow_topics",cf_str,"","Use the knowledge promised by topics matching this pattern"},
-   {"infer",cf_body,CF_INFERENCE_BODY,"Specify the promise-inference triangle from this topic"},
+   {"precedents",cf_slist,"","The foundational vector for a trinary inference"},
+   {"qualifiers",cf_slist,"","The second vector in a trinary inference"},
    {NULL,cf_notype,NULL,NULL}
    };
 

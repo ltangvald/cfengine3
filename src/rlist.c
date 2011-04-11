@@ -83,6 +83,36 @@ return false;
 
 /*******************************************************************/
 
+int IsIntIn(struct Rlist *list,int i)
+
+{ struct Rlist *rp;
+  char s[CF_SMALLBUF];
+
+snprintf(s,CF_SMALLBUF-1,"%d",i);
+  
+if (list == NULL)
+   {
+   return false;
+   }
+
+for (rp = list; rp != NULL; rp=rp->next)
+   {
+   if (rp->type != CF_SCALAR)
+      {
+      continue;
+      }
+
+   if (strcmp(s,rp->item) == 0)
+      {
+      return true;
+      }
+   }
+
+return false;
+}
+
+/*******************************************************************/
+
 int IsRegexIn(struct Rlist *list,char *regex)
 
 { struct Rlist *rp;
@@ -143,7 +173,7 @@ void *CopyRvalItem(void *item, char type)
   struct FnCall *fp;
   void *new,*rval;
   char rtype = CF_SCALAR,output[CF_BUFSIZE];
-  char naked[CF_MAXVARSIZE];
+  char naked[CF_BUFSIZE];
   
 Debug("CopyRvalItem(%c)\n",type);
 
@@ -216,8 +246,8 @@ switch(type)
        return start;
    }
 
-snprintf(output,CF_BUFSIZE,"Unknown type %c in CopyRvalItem - should not happen",type);
-FatalError(output);
+//snprintf(output,CF_BUFSIZE,"Unknown type %c in CopyRvalItem - should not happen",type);
+//FatalError(output);
 return NULL;
 }
 
@@ -267,17 +297,34 @@ for (rp1 = list1, rp2 = list2; rp1 != NULL && rp2!= NULL; rp1=rp1->next,rp2=rp2-
    {
    if (rp1->item && rp2->item)
       {
+      struct Rlist *rc1,*rc2;
+      
       if (rp1->type == CF_FNCALL || rp2->type == CF_FNCALL)
          {
          return -1; // inconclusive
          }
+
+      rc1 = rp1;
+      rc2 = rp2;
+
+      // Check for list nesting with { fncall(), "x" ... }
       
-      if (IsCf3VarString(rp1->item) || IsCf3VarString(rp2->item))
+      if (rp1->type == CF_LIST)
+         {   
+         rc1 = rp1->item;
+         }
+      
+      if (rp2->type == CF_LIST)
+         {
+         rc2 = rp2->item;
+         }
+
+      if (IsCf3VarString(rc1->item) || IsCf3VarString(rp2->item))
          {
          return -1; // inconclusive
          }
 
-      if (strcmp(rp1->item,rp2->item) != 0)
+      if (strcmp(rc1->item,rc2->item) != 0)
          {
          return false;
          }
@@ -297,7 +344,6 @@ struct Rlist *CopyRlist(struct Rlist *list)
 
 { struct Rlist *rp,*start = NULL;
   struct FnCall *fp;
-  void *new;
 
 Debug("CopyRlist()\n");
   
@@ -306,10 +352,9 @@ if (list == NULL)
    return NULL;
    }
 
-for (rp = list; rp != NULL; rp= rp->next)
+for (rp = list; rp != NULL; rp = rp->next)
    {
-   new = CopyRvalItem(rp->item,rp->type);
-   AppendRlist(&start,new,rp->type);
+   AppendRlist(&start,rp->item,rp->type);  // allocates memory for objects
    }
 
 return start;
@@ -318,9 +363,41 @@ return start;
 /*******************************************************************/
 
 void DeleteRlist(struct Rlist *list)
-
+/* Delete a rlist and all it references */
 {
-DeleteRvalItem(list,CF_LIST);
+  struct Rlist *rl, *next;
+
+  if(list != NULL)
+    {
+      for(rl = list; rl != NULL; rl = next)
+	{
+	  next = rl->next;
+	  
+	  if (rl->item != NULL)
+	    {
+	    DeleteRvalItem(rl->item,rl->type);
+	    }
+	  
+	  free(rl);
+	}
+    }
+}
+
+/*******************************************************************/
+
+void DeleteRlistNoRef(struct Rlist *list)
+/* Delete a rlist, but not its references */
+{
+  struct Rlist *rl, *next;
+
+  if(list != NULL)
+    {
+      for(rl = list; rl != NULL; rl = next)
+	{
+	  next = rl->next;
+	  free(rl);
+	}
+    }
 }
 
 /*******************************************************************/
@@ -434,7 +511,7 @@ struct Rlist *AppendRlist(struct Rlist **start,void *item, char type)
 switch(type)
    {
    case CF_SCALAR:
-       Debug("Appending scalar to rval-list [%s]\n",item);
+       Debug("Appending scalar to rval-list [%s]\n",(char *)item);
        break;
 
    case CF_FNCALL:
@@ -542,17 +619,19 @@ switch(type)
        return NULL;
    }
 
+ThreadLock(cft_system);
+
 if ((rp = (struct Rlist *)malloc(sizeof(struct Rlist))) == NULL)
    {
    CfOut(cf_error,"malloc","Unable to allocate Rlist");
    FatalError("");
    }
 
+ThreadUnlock(cft_system);
+
 rp->next = *start;
 rp->item = CopyRvalItem(item,type);
 rp->type = type;  /* scalar, builtin function */
-
-ThreadLock(cft_lock);
 
 if (type == CF_LIST)
    {
@@ -563,8 +642,8 @@ else
    rp->state_ptr = NULL;
    }
 
+ThreadLock(cft_lock);
 *start = rp;
-
 ThreadUnlock(cft_lock);
 return rp;
 }
@@ -579,7 +658,7 @@ struct Rlist *OrthogAppendRlist(struct Rlist **start,void *item, char type)
   struct FnCall *fp;
   char *sp = NULL;
   struct CfAssoc *cp;
-
+  
 Debug("OrthogAppendRlist\n");
  
 switch(type)
@@ -612,15 +691,20 @@ else
    }
 
 
-// This is item is infact a struct CfAssoc pointing to a list
+// This is item is in fact a struct CfAssoc pointing to a list
 
 cp = (struct CfAssoc *)item;
-rp->state_ptr = (struct Rlist *)cp->rval;
+
+// Note, we pad all iterators will a blank so the ptr arithmetic works
+// else EndOfIteration will not see lists with only one element
+
+lp = PrependRlist((struct Rlist **)&(cp->rval),CF_NULL_VALUE,CF_SCALAR);
+rp->state_ptr = lp->next; // Always skip the null value
+AppendRlist((struct Rlist **)&(cp->rval),CF_NULL_VALUE,CF_SCALAR);
 
 rp->item = item;
 rp->type = CF_LIST;
 rp->next = NULL;
-
 return rp;
 }
 
@@ -637,6 +721,28 @@ for (rp = start; rp != NULL; rp=rp->next)
    }
 
 return count;
+}
+
+/*******************************************************************/
+
+struct Rlist *ParseShownRlist(char *string)
+
+{ struct Rlist *newlist = NULL,*splitlist,*rp;
+  char value[CF_MAXVARSIZE];
+
+/* Parse a string representation generated by ShowList and turn back into Rlist */
+  
+splitlist = SplitStringAsRList(string,',');
+
+for (rp =  splitlist; rp != NULL; rp = rp->next)
+   {
+   value[0];
+   sscanf(rp->item,"%*[{ '\"]%255[^'\"]",value);
+   AppendRlist(&newlist,value,CF_SCALAR);
+   }
+
+DeleteRlist(splitlist);
+return newlist;
 }
 
 /*******************************************************************/
@@ -663,6 +769,154 @@ fprintf(fp,"}");
 
 /*******************************************************************/
 
+int PrintRlist(char *buffer,int bufsize,struct Rlist *list)
+
+{ struct Rlist *rp;
+
+StartJoin(buffer,"{",bufsize);
+ 
+for (rp = list; rp != NULL; rp=rp->next)
+   {
+   Join(buffer,"\'",bufsize);
+   
+   PrintRval(buffer,bufsize,rp->item,rp->type);
+
+   Join(buffer,"\'",bufsize);
+   
+   if (rp->next != NULL)
+      {
+      Join(buffer,",",bufsize);
+      }
+   }
+
+EndJoin(buffer,"}",bufsize);
+
+return true;
+}
+
+/*******************************************************************/
+
+int GetStringListElement(char *strList, int index, char *outBuf, int outBufSz)
+
+/** Takes a string-parsed list "{'el1','el2','el3',..}" and writes
+ ** "el1" or "el2" etc. based on index (starting on 0) in outBuf.
+ ** returns true on success, false otherwise.
+ **/
+
+{ char *sp,*elStart = strList,*elEnd;
+  int elNum = 0;
+  int minBuf;
+  
+memset(outBuf,0,outBufSz);
+
+if (EMPTY(strList))
+   {
+   return false;
+   }
+
+if(strList[0] != '{')
+   {
+   return false;
+   }
+
+for(sp = strList; *sp != '\0'; sp++)
+   {   
+   if((sp[0] == '{' || sp[0] == ',') && sp[1] == '\'')
+      {
+      elStart = sp + 2;
+      }
+     
+   else if((sp[0] == '\'') && sp[1] == ',' || sp[1] == '}')
+      {
+      elEnd = sp;
+      
+      if(elNum == index)
+         {
+         if(elEnd - elStart < outBufSz)
+            {
+            minBuf = elEnd - elStart;
+            }
+         else
+            {
+            minBuf = outBufSz - 1;
+            }
+         
+         strncpy(outBuf,elStart,minBuf);
+         
+         break;
+         }
+      
+      elNum++;
+      }
+   }
+
+return true;
+}
+
+/*******************************************************************/
+
+int StripListSep(char *strList, char *outBuf, int outBufSz)
+{
+  char *sp;
+
+  memset(outBuf,0,outBufSz);
+
+  if(EMPTY(strList))
+    {
+    return false;
+    }
+  
+  if(strList[0] != '{')
+    {
+    return false;
+    }
+  
+  snprintf(outBuf,outBufSz,"%s",strList + 1);
+  
+  if(outBuf[strlen(outBuf) - 1] == '}')
+    {
+    outBuf[strlen(outBuf) - 1] = '\0';
+    }
+
+  return true;
+}
+
+
+/*******************************************************************/
+
+int PrintRval(char *buffer,int bufsize,void *rval,char type)
+
+{
+
+if (rval == NULL)
+   {
+   return 0;
+   }
+
+switch (type)
+   {
+   case CF_SCALAR:
+       Join(buffer,(char *)rval,bufsize);
+       break;
+       
+   case CF_LIST:
+       PrintRlist(buffer,bufsize,(struct Rlist *)rval);
+       break;
+       
+   case CF_FNCALL:
+       PrintFnCall(buffer,bufsize,(struct FnCall *)rval);
+       break;
+
+   case CF_NOPROMISEE:
+       // fprintf(fp,"(no-one)");
+       break;
+   }
+
+return true;
+}
+
+/*******************************************************************/
+
 void ShowRlistState(FILE *fp,struct Rlist *list)
 
 { struct Rlist *rp;
@@ -675,6 +929,8 @@ ShowRval(fp,list->state_ptr->item,list->type);
 void ShowRval(FILE *fp,void *rval,char type)
 
 {
+char buf[CF_BUFSIZE];
+
 if (rval == NULL)
    {
    return;
@@ -683,7 +939,8 @@ if (rval == NULL)
 switch (type)
    {
    case CF_SCALAR:
-       fprintf(fp,"%s",(char *)rval);
+       EscapeQuotes((char *)rval,buf,sizeof(buf));
+       fprintf(fp,"%s",buf);
        break;
        
    case CF_LIST:
@@ -704,7 +961,7 @@ switch (type)
 
 void DeleteRvalItem(void *rval, char type)
 
-{ struct Rlist *clist;
+{ struct Rlist *clist, *next = NULL;
 
 Debug("DeleteRvalItem(%c)",type);
 
@@ -724,27 +981,33 @@ if (rval == NULL)
 switch(type)
    {
    case CF_SCALAR:
+
+       ThreadLock(cft_lock);
        free((char *)rval);
+       ThreadUnlock(cft_lock);
        break;
 
    case CF_LIST:
-       
-       /* rval is now a list whose first item is list->item */
-       clist = (struct Rlist *)rval;
+     
+       /* rval is now a list whose first item is clist->item */
 
-       if (clist->next != NULL)
-          {
-          DeleteRvalItem(clist->next,CF_LIST);
-          }
-       
-       if (clist->item != NULL)
+     for(clist = (struct Rlist *)rval; clist != NULL; clist = next)
+       {
+
+       next = clist->next;
+
+       if (clist->item)
           {
           DeleteRvalItem(clist->item,clist->type);
           }
+
+       free(clist);
+       }
+
        break;
        
    case CF_FNCALL:
-       
+
        if (rval)
           {
           DeleteFnCall((struct FnCall *)rval);
@@ -829,6 +1092,31 @@ return rp;
 }
 
 /*******************************************************************/
+
+struct Rlist *PrependRlistAlien(struct Rlist **start,void *item)
+
+   /* Allocates new memory for objects - careful, could leak!  */
+    
+{ struct Rlist *rp,*lp = *start;
+
+ThreadLock(cft_lock); 
+
+if ((rp = (struct Rlist *)malloc(sizeof(struct Rlist))) == NULL)
+   {
+   CfOut(cf_error,"malloc","Unable to allocate Rlist");
+   FatalError("");
+   }
+
+rp->next = *start;
+*start = rp;
+ThreadUnlock(cft_lock);
+
+rp->item = item;
+rp->type = CF_SCALAR;
+return rp;
+}
+
+/*******************************************************************/
 /* Stack                                                           */
 /*******************************************************************/
 
@@ -899,6 +1187,11 @@ struct Rlist *SplitStringAsRList(char *string,char sep)
   
 Debug("SplitStringAsRList(%s)\n",string);
 
+if (string == NULL)
+   {
+   return NULL;
+   }
+
 for (sp = string; *sp != '\0'; sp++)
    {
    if (*sp == '\0' || sp > string+maxlen)
@@ -928,6 +1221,11 @@ struct Rlist *SplitRegexAsRList(char *string,char *regex,int max,int blanks)
   char node[CF_MAXVARSIZE];
   int start,end,b = 0;
   int delta, count = 0;
+
+if (string == NULL)
+   {
+   return NULL;
+   }
 
 Debug("\n\nSplit \"%s\" with regex \"%s\" (up to maxent %d)\n\n",string,regex,max);
   
@@ -963,118 +1261,84 @@ if (count < max)
       AppendRScalar(&liststart,node,CF_SCALAR);
       }
    }
-else
-   {
-   memset(node,0,CF_MAXVARSIZE);
-   strncpy(node,sp,CF_MAXVARSIZE-1);
-   
-   if (blanks || strlen(node) > 0)
-      {
-      AppendRScalar(&liststart,node,CF_SCALAR);
-      }
-   }
 
 return liststart;
 }
 
-/*******************************************************************/
+/*****************************************************************************/
 
-struct Rlist *AlphaSortRListNames(struct Rlist *list)
+int PrependPackageItem(struct CfPackageItem **list,char *name,char *version,char *arch,struct Attributes a,struct Promise *pp)
 
-/* Borrowed this algorithm from merge-sort implementation */
+{ struct CfPackageItem *pi;
 
-{ struct Rlist *p, *q, *e, *tail, *oldhead;
-  int insize, nmerges, psize, qsize, i;
-
-if (list == NULL)
-   { 
-   return NULL;
+if (strlen(name) == 0 || strlen(version) == 0 || strlen(arch) == 0)
+   {
+   return false;
    }
- 
- insize = 1;
- 
- while (true)
-    {
-    p = list;
-    oldhead = list;                /* only used for circular linkage */
-    list = NULL;
-    tail = NULL;
-    
-    nmerges = 0;  /* count number of merges we do in this pass */
-    
-    while (p)
-       {
-       nmerges++;  /* there exists a merge to be done */
-       /* step `insize' places along from p */
-       q = p;
-       psize = 0;
-       
-       for (i = 0; i < insize; i++)
-          {
-          psize++;
-          q = q->next;
 
-          if (!q)
-              {
-              break;
-              }
-          }
-       
-       /* if q hasn't fallen off end, we have two lists to merge */
-       qsize = insize;
-       
-       /* now we have two lists; merge them */
-       while (psize > 0 || (qsize > 0 && q))
-          {          
-          /* decide whether next element of merge comes from p or q */
-          if (psize == 0)
-             {
-             /* p is empty; e must come from q. */
-             e = q; q = q->next; qsize--;
-             }
-          else if (qsize == 0 || !q)
-             {
-             /* q is empty; e must come from p. */
-             e = p; p = p->next; psize--;
-             }
-          else if (strcmp(p->item, q->item) <= 0)
-             {
-             /* First element of p is lower (or same);
-              * e must come from p. */
-             e = p; p = p->next; psize--;
-             }
-          else
-             {
-             /* First element of q is lower; e must come from q. */
-             e = q; q = q->next; qsize--;
-             }
-          
-          /* add the next element to the merged list */
-          if (tail)
-             {
-             tail->next = e;
-             }
-          else
-             {
-             list = e;
-             }
-          tail = e;
-          }
-       
-       /* now p has stepped `insize' places along, and q has too */
-       p = q;
-       }
-    tail->next = NULL;
-    
-    /* If we have done only one merge, we're finished. */
+CfOut(cf_verbose,""," -> Package (%s,%s,%s) found",name,version,arch);
 
-    if (nmerges <= 1)   /* allow for nmerges==0, the empty list case */
-       {
-       return list;
-       }
+if ((pi = (struct CfPackageItem *)malloc(sizeof(struct CfPackageItem))) == NULL)
+   {
+   CfOut(cf_error,"malloc","Can't allocate new package\n");
+   return false;
+   }
 
-    /* Otherwise repeat, merging lists twice the size */
-    insize *= 2;
-    }
+if (list)
+   {
+   pi->next = *list;
+   }
+else
+   {
+   pi->next = NULL;
+   }
+
+pi->name = strdup(name);
+pi->version = strdup(version);
+pi->arch = strdup(arch);
+*list = pi;
+
+/* Finally we need these for later schedule exec, once this iteration context has gone */
+
+pi->pp = DeRefCopyPromise("this",pp);
+return true;
 }
 
+
+/*****************************************************************************/
+
+int PrependListPackageItem(struct CfPackageItem **list,char *item,struct Attributes a,struct Promise *pp)
+
+{ char name[CF_MAXVARSIZE];
+  char arch[CF_MAXVARSIZE];
+  char version[CF_MAXVARSIZE];
+  char vbuff[CF_MAXVARSIZE];
+
+strncpy(vbuff,ExtractFirstReference(a.packages.package_list_name_regex,item),CF_MAXVARSIZE-1);
+sscanf(vbuff,"%s",name); /* trim */
+
+strncpy(vbuff,ExtractFirstReference(a.packages.package_list_version_regex,item),CF_MAXVARSIZE-1);
+sscanf(vbuff,"%s",version); /* trim */
+
+if (a.packages.package_list_arch_regex)
+   {
+   strncpy(vbuff,ExtractFirstReference(a.packages.package_list_arch_regex,item),CF_MAXVARSIZE-1);
+   sscanf(vbuff,"%s",arch); /* trim */
+   }
+else
+   {
+   strncpy(arch,"default",CF_MAXVARSIZE-1);
+   }
+
+if (strcmp(name,"CF_NOMATCH") == 0 || strcmp(version,"CF_NOMATCH") == 0 || strcmp(arch,"CF_NOMATCH") == 0)
+   {
+   return false;
+   }
+
+Debug(" -? Package line \"%s\"\n",item);
+Debug(" -?      with name \"%s\"\n",name);
+Debug(" -?      with version \"%s\"\n",version);
+Debug(" -?      with architecture \"%s\"\n",arch);
+
+return PrependPackageItem(list,name,version,arch,a,pp);
+}

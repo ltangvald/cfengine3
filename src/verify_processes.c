@@ -36,7 +36,7 @@
 
 void VerifyProcessesPromise(struct Promise *pp)
 
-{ struct Attributes a;
+{ struct Attributes a = {0};
 
 a = GetProcessAttributes(pp);
 ProcessSanityChecks(a,pp);
@@ -62,14 +62,20 @@ if (a.signals != NULL && a.process_stop != NULL)
 promised_zero = (a.process_count.min_range == 0 && a.process_count.max_range == 0);
 promised_any = (a.process_count.min_range == CF_NOINT);
 
-
 if (a.restart_class)
    {
    if (IsStringIn(a.signals,"term") || IsStringIn(a.signals,"kill"))
       {
       CfOut(cf_inform,""," -> (warning) Promise %s kills then restarts - never strictly converges",pp->promiser);
       PromiseRef(cf_inform,pp);
-      }   
+      }
+
+   if (a.haveprocess_count)
+      {
+      CfOut(cf_error,""," !! process_count and restart_class should not be used in the same promise as this makes no sense",pp->promiser);
+      PromiseRef(cf_inform,pp);
+      ret = false;
+      }
    }
 
 if (promised_zero && a.restart_class)
@@ -105,7 +111,7 @@ else
    snprintf(lockname,CF_BUFSIZE-1,"proc-%s-norestart",pp->promiser);
    }
  
-thislock = AcquireLock(lockname,VUQNAME,CFSTARTTIME,a,pp);
+thislock = AcquireLock(lockname,VUQNAME,CFSTARTTIME,a,pp,false);
 
 if (thislock.lock == NULL)
    {
@@ -120,16 +126,20 @@ DeleteScalar("this","promiser");
 YieldCurrentLock(thislock);
 }
 
-
 /*******************************************************************/
 
-int LoadProcessTable(struct Item **procdata,char *psopts)
-
-{ 
+int LoadProcessTable(struct Item **procdata)
+{
+if (PROCESSTABLE)
+   {
+   CfOut(cf_verbose,""," -> Reusing cached process state");
+   return true;
+   }
+ 
 #ifdef MINGW
 return NovaWin_LoadProcessTable(procdata);
 #else
-return Unix_LoadProcessTable(procdata,psopts);
+return Unix_LoadProcessTable(procdata);
 #endif
 }
 
@@ -190,15 +200,22 @@ if (do_signals && matches > 0)
    {
    if (a.process_stop != NULL)
       {
-      if (IsExecutable(GetArg0(a.process_stop)))
+      if (DONTDO)
          {
-         ShellCommandReturnsZero(a.process_stop,false);
+         cfPS(cf_error,CF_WARN,"",pp,a," -- Need to keep process-stop promise for %s, but only a warning is promised",pp->promiser);         
          }
       else
          {
-         cfPS(cf_verbose,CF_FAIL,"",pp,a,"Process promise to stop %s could not be kept because %s the stop operator failed",pp->promiser,a.process_stop);
-         DeleteItemList(killlist);
-         return;
+         if (IsExecutable(GetArg0(a.process_stop)))
+            {
+            ShellCommandReturnsZero(a.process_stop,false);
+            }
+         else
+            {
+            cfPS(cf_verbose,CF_FAIL,"",pp,a,"Process promise to stop %s could not be kept because %s the stop operator failed",pp->promiser,a.process_stop);
+            DeleteItemList(killlist);
+            return;
+            }
          }
       }
    else
@@ -215,7 +232,7 @@ DeleteItemList(killlist);
  
 if (!need_to_restart)
    {
-   cfPS(cf_verbose,CF_NOP,"",pp,a," -- Matches in range for %s - process count promise kept\n",pp->promiser);
+   cfPS(cf_verbose,CF_NOP,"",pp,a," -> No restart promised for %s\n",pp->promiser);
    return;
    }
 else
@@ -227,7 +244,7 @@ else
    else 
       {
       cfPS(cf_inform,CF_CHG,"",pp,a," -> Making a one-time restart promise for %s",pp->promiser);
-      NewBundleClass(a.restart_class,pp->bundle);
+      NewClass(a.restart_class);
       }
    }
 }
@@ -243,7 +260,6 @@ int FindPidMatches(struct Item *procdata,struct Item **killlist,struct Attribute
   char *names[CF_PROCCOLS];      /* ps headers */
   int start[CF_PROCCOLS];
   int end[CF_PROCCOLS];
-  struct CfRegEx rex;
 
 if (procdata == NULL)
    {
@@ -255,7 +271,7 @@ GetProcessColumnNames(procdata->name,(char **)names,start,end);
 for (ip = procdata->next; ip != NULL; ip=ip->next)
    {
    CF_NODES++;
-   
+
    if (BlockTextMatch(pp->promiser,ip->name,&s,&e))
       {
       if (!SelectProcess(ip->name,names,start,end,a,pp))
@@ -263,15 +279,20 @@ for (ip = procdata->next; ip != NULL; ip=ip->next)
          continue;
          }
 
+      if (EMPTY(ip->name))
+         {
+         continue;
+         }
+      
       pid = ExtractPid(ip->name,names,start,end);
-
+      
       if (pid == -1)
          {
          CfOut(cf_verbose,"","Unable to extract pid while looking for %s\n",pp->promiser);
          continue;
          }
       
-      Debug("Found matching pid %d\n",pid);
+      CfOut(cf_verbose,""," ->  Found matching pid %d\n     (%s)",pid,ip->name);
       
       matches++;
       
@@ -287,7 +308,7 @@ for (ip = procdata->next; ip != NULL; ip=ip->next)
             }
          }
 
-      if (pid < 4)
+      if (pid < 4 && a.signals)
          {
          CfOut(cf_verbose,"","Will not signal or restart processes 0,1,2,3 (occurred while looking for %s)\n",pp->promiser);
          continue;
@@ -302,9 +323,9 @@ for (ip = procdata->next; ip != NULL; ip=ip->next)
          continue;
          }
       
-      if (pid == cfengine_pid)
+      if (pid == cfengine_pid && a.signals)
          {
-         CfOut(cf_verbose,"","cf-agent will not kill itself!\n");
+         CfOut(cf_verbose,""," !! cf-agent will not signal itself!\n");
          continue;
          }
       

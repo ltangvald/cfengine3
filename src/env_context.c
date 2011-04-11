@@ -32,144 +32,304 @@
 #include "cf3.defs.h"
 #include "cf3.extern.h"
 
+#include "logic_expressions.h"
+
 extern char *DAY_TEXT[];
 
-/*****************************************************************************/
+/**********************************************************************/
+/* Utilities */
+/**********************************************************************/
 
-void ValidateClassSyntax(char *str)
+/* Return expression with error position highlighted. Result is on the heap. */
 
-{ char *cp = str;
-  int pcount = 0;
+static char *HighlightExpressionError(const char *str, int position)
+{
+char *errmsg = malloc(strlen(str) + 3);
+char *firstpart = strndup(str, position);
+char *secondpart = strndup(str + position, strlen(str) - position);
 
-if (*cp == '&' || *cp == '|' || *cp == '.' || *cp == ')') 
+sprintf(errmsg, "%s->%s", firstpart, secondpart);
+
+free(secondpart);
+free(firstpart);
+
+return errmsg;
+}
+
+/**********************************************************************/
+/* Debugging output */
+
+static void IndentL(int level)
+{
+int i;
+if (level > 0)
    {
-   yyerror("Illegal initial character for class specification");
+   putc('\n', stderr);
+   for(i = 0; i < level; ++i)
+      {
+      putc(' ', stderr);
+      }
+   }
+}
+
+/**********************************************************************/
+
+static int IncIndent(int level, int inc)
+{
+if (level < 0)
+   {
+   return -level + inc;
+   }
+else
+   {
+   return level + inc;
+   }
+}
+
+/**********************************************************************/
+
+static void EmitStringExpression(StringExpression *e, int level)
+{
+if (!e)
+   {
    return;
    }
 
-for (; *cp; cp++)
+switch (e->op)
    {
-   if (*cp == '(')
-      {
-      if (*(cp-1) == ')')
-         {
-         yyerror("Illegal use of parenthesis - you have ')(' with no intervening operator in your class specification");
-         return;
-         }
+   case CONCAT:
+      IndentL(level);
+      fputs("(concat ", stderr);
+      EmitStringExpression(e->val.concat.lhs, -IncIndent(level, 8));
+      EmitStringExpression(e->val.concat.rhs, IncIndent(level, 8));
+      fputs(")", stderr);
+      break;
+   case LITERAL:
+      IndentL(level);
+      fprintf(stderr, "\"%s\"", e->val.literal.literal);
+      break;
+   case VARREF:
+      IndentL(level);
+      fputs("($ ", stderr);
+      EmitStringExpression(e->val.varref.name, -IncIndent(level, 3));
+      break;
+   default:
+      FatalError("Unknown type of string expression: %d\n", e->op);
+      break;
+   }
+}
 
-      pcount++;
-      }
-   else if (*cp == ')')
-      {
-      if (--pcount < 0)
-         {
-         yyerror("Unbalanced parenthesis - too many ')' in class specification");
-         return;
-         }
-      if (*(cp-1) == '(')
-         {
-         yyerror("Empty parenthesis '()' illegal in class specifications");
-         return;
-         }
-      }
+/**********************************************************************/
 
-// Rule out x&|y, x&.y, etc (but allow x&!y)
-   else if (*cp == '.')
-      {
-      if (*(cp-1) == '|' || *(cp-1) == '&' || *(cp-1) == '!')
-         {
-         yyerror("Illegal operator combination");
-         return;
-         }
-      }
-   else if (*cp == '&')
-      {
-      if (*(cp-1) == '|' || *(cp-1) == '.' || *(cp-1) == '!')
-         {
-         yyerror("Illegal operator combination");
-         return;
-         }
-      }
-   else if (*cp == '|')
-      {
-      if (*(cp-1) == '&' || *(cp-1) == '.' || *(cp-1) == '!')
-         {
-         yyerror("Illegal operator combination");
-         return;
-         }
-      }
+static void EmitExpression(Expression *e, int level)
+{
+if (!e)
+   {
+   return;
    }
 
-if (pcount)
+switch (e->op)
    {
-   yyerror("Unbalanced parenthesis - too many '(' in class specification");
-   return;
+   case OR:
+   case AND:
+      IndentL(level);
+      fprintf(stderr, "(%s ", e->op == OR ? "|" : "&");
+      EmitExpression(e->val.andor.lhs, -IncIndent(level, 3));
+      EmitExpression(e->val.andor.rhs, IncIndent(level, 3));
+      fputs(")", stderr);
+      break;
+   case NOT:
+      IndentL(level);
+      fputs("(- ", stderr);
+      EmitExpression(e->val.not.arg, -IncIndent(level, 3));
+      fputs(")", stderr);
+      break;
+   case EVAL:
+      IndentL(level);
+      fputs("(eval ", stderr);
+      EmitStringExpression(e->val.eval.name, -IncIndent(level, 6));
+      fputs(")", stderr);
+      break;
+   default:
+      FatalError("Unknown logic expression type: %d\n", e->op);
    }
 }
 
 /*****************************************************************************/
+/* Syntax-checking and evaluating various expressions */
+/*****************************************************************************/
 
-void KeepClassContextPromise(struct Promise *pp)
+static void EmitParserError(const char *str, int position)
+{
+char *errmsg = HighlightExpressionError(str, position);
+yyerror(errmsg);
+free(errmsg);
+}
 
-{ struct Attributes a;
+/**********************************************************************/
 
-a = GetClassContextAttributes(pp);
+/* To be used from parser only (uses yyerror) */
+void ValidateClassSyntax(char *str)
+{
+ParseResult res = ParseExpression(str, 0, strlen(str));
 
-if (!FullTextMatch("[a-zA-Z0-9_]+",pp->promiser))
+if (DEBUG || D1 || D2)
    {
-   CfOut(cf_verbose,"","Class identifier \"%s\" contains illegal characters - canonifying",pp->promiser);
-   snprintf(pp->promiser, strlen(pp->promiser) + 1, "%s", CanonifyName(pp->promiser));
+   EmitExpression(res.result, 0);
+   putc('\n', stderr);
    }
 
-if (a.context.broken)
+if (res.result)
    {
-   cfPS(cf_error,CF_FAIL,"",pp,a,"Irreconcilable constraints in classes for %s (broken promise)",pp->promiser);
-   return;
+   FreeExpression(res.result);
    }
 
-if (strcmp(pp->bundletype,"common") == 0)
+if (!res.result || res.position != strlen(str))
    {
-   if (EvalClassExpression(a.context.expression,pp))
-      {
-      CfOut(cf_verbose,""," ?> defining additional global class %s\n",pp->promiser);
+   EmitParserError(str, res.position);
+   }
+}
 
-      if (!ValidClassName(pp->promiser))
-         {
-         cfPS(cf_error,CF_FAIL,"",pp,a," !! Attempted to name a class \"%s\", which is an illegal class identifier",pp->promiser);
-         }
-      else
-         {
-         NewClass(pp->promiser);
-         }
-      }
+/**********************************************************************/
 
-   /* These are global and loaded once */
-   //*(pp->donep) = true;
+static bool ValidClassName(const char *str)
+{
+ParseResult res = ParseExpression(str, 0, strlen(str));
 
-   return;
+if (res.result)
+   {
+   FreeExpression(res.result);
    }
 
-if (strcmp(pp->bundletype,THIS_AGENT) == 0 || FullTextMatch("edit_.*",pp->bundletype))
+return res.result && res.position == strlen(str);
+}
+
+/**********************************************************************/
+
+static ExpressionValue EvalTokenAsClass(const char *classname, void *param)
+{
+if (IsItemIn(VNEGHEAP, classname))
    {
-   if (EvalClassExpression(a.context.expression,pp))
-      {
-      Debug(" ?> defining explicit class %s\n",pp->promiser);
-
-      if (!ValidClassName(pp->promiser))
-         {
-         cfPS(cf_error,CF_FAIL,"",pp,a," !! Attempted to name a class \"%s\", which is an illegal class identifier",pp->promiser);
-         }
-      else
-         {
-         NewBundleClass(pp->promiser,pp->bundle);
-         }
-      }
-
-   // Private to bundle, can be reloaded
-
-   *(pp->donep) = false;   
-   return;
+   return false;
    }
+if (IsItemIn(VDELCLASSES, classname))
+   {
+   return false;
+   }
+if (InAlphaList(VHEAP, classname))
+   {
+   return true;
+   }
+if (InAlphaList(VADDCLASSES, classname))
+   {
+   return true;
+   }
+return false;
+}
+
+/**********************************************************************/
+
+static char *EvalVarRef(const char *varname, void *param)
+{
+/*
+ * There should be no unexpanded variables when we evaluate any kind of
+ * logic expressions, until parsing of logic expression changes and they are
+ * not pre-expanded before evaluation.
+ */
+return NULL;
+}
+
+/**********************************************************************/
+
+int IsDefinedClass(char *class)
+{
+ParseResult res;
+
+if (!class)
+   {
+   return true;
+   }
+
+res = ParseExpression(class, 0, strlen(class));
+
+if (!res.result)
+   {
+   char *errexpr = HighlightExpressionError(class, res.position);
+   CfOut(cf_error,"","Unable to parse class expression: %s", errexpr);
+   free(errexpr);
+   return false;
+   }
+else
+   {
+   ExpressionValue r = EvalExpression(res.result,
+                                      &EvalTokenAsClass, &EvalVarRef,
+                                      NULL);
+   FreeExpression(res.result);
+
+   Debug("Evaluate(%s) -> %d\n", class, r);
+
+   /* r is EvalResult which could be ERROR */
+   return r == true;
+   }
+}
+
+/**********************************************************************/
+
+int IsExcluded(char *exception)
+{
+return !IsDefinedClass(exception);
+}
+
+/**********************************************************************/
+
+static ExpressionValue EvalTokenFromList(const char *token, void *param)
+{
+return InAlphaList(*(struct AlphaList *)param, token);
+}
+
+/**********************************************************************/
+
+static bool EvalWithTokenFromList(const char *expr, struct AlphaList *token_list)
+{
+ParseResult res = ParseExpression(expr, 0, strlen(expr));
+
+if (!res.result)
+   {
+   char *errexpr = HighlightExpressionError(expr, res.position);
+   CfOut(cf_error, "", "Syntax error in expression: %s", errexpr);
+   free(errexpr);
+   return false; /* FIXME: return error */
+   }
+else
+   {
+   ExpressionValue r = EvalExpression(res.result,
+                                      &EvalTokenFromList,
+                                      &EvalVarRef,
+                                      token_list);
+
+   FreeExpression(res.result);
+
+   /* r is EvalResult which could be ERROR */
+   return r == true;
+   }
+}
+
+/**********************************************************************/
+
+/* Process result expression */
+
+bool EvalProcessResult(const char *process_result, struct AlphaList *proc_attr)
+{
+return EvalWithTokenFromList(process_result, proc_attr);
+}
+
+/**********************************************************************/
+
+/* File result expressions */
+
+bool EvalFileResult(const char *file_result, struct AlphaList *leaf_attr)
+{
+return EvalWithTokenFromList(file_result, leaf_attr);
 }
 
 /*****************************************************************************/
@@ -177,8 +337,8 @@ if (strcmp(pp->bundletype,THIS_AGENT) == 0 || FullTextMatch("edit_.*",pp->bundle
 void DeleteEntireHeap()
 
 {
-DeleteItemList(VHEAP);
-VHEAP = NULL;
+DeleteAlphaList(&VHEAP);
+InitAlphaList(&VHEAP);
 }
 
 /*****************************************************************************/
@@ -186,9 +346,9 @@ VHEAP = NULL;
 void DeletePrivateClassContext()
 
 {
-DeleteItemList(VADDCLASSES);
+DeleteAlphaList(&VADDCLASSES);
+InitAlphaList(&VADDCLASSES);
 DeleteItemList(VDELCLASSES);
-VADDCLASSES = NULL;
 VDELCLASSES = NULL;
 }
 
@@ -196,9 +356,11 @@ VDELCLASSES = NULL;
 
 void PushPrivateClassContext()
 
-{
-PushStack(&PRIVCLASSHEAP,VADDCLASSES);
-VADDCLASSES = NULL;
+{ struct AlphaList *ap = malloc(sizeof(struct AlphaList));
+
+// copy to heap
+PushStack(&PRIVCLASSHEAP,CopyAlphaListPointers(ap,&VADDCLASSES));
+InitAlphaList(&VADDCLASSES);
 }
 
 /*****************************************************************************/
@@ -206,9 +368,12 @@ VADDCLASSES = NULL;
 void PopPrivateClassContext()
 
 { struct Item *list;
-
-DeleteItemList(VADDCLASSES);
-PopStack(&PRIVCLASSHEAP,(void *)&VADDCLASSES,sizeof(VADDCLASSES));
+  struct AlphaList *ap;
+ 
+DeleteAlphaList(&VADDCLASSES);
+PopStack(&PRIVCLASSHEAP,(void *)&ap,sizeof(VADDCLASSES));
+CopyAlphaListPointers(&VADDCLASSES,ap);
+free(ap);
 }
 
 /*****************************************************************************/
@@ -238,7 +403,7 @@ if (ReadDB(dbp,name,&state,sizeof(state)))
       if (now < state.expires)
          {
          CfOut(cf_verbose,""," -> Persisent state %s is already in a preserved state --  %d minutes to go\n",name,(state.expires-now)/60);
- CloseDB(dbp);
+         CloseDB(dbp);
          return;
          }
       }
@@ -288,6 +453,11 @@ void LoadPersistentContext()
   time_t now = time(NULL);
   struct CfState q;
   char filename[CF_BUFSIZE];
+
+if (LOOKUP)
+  {
+  return;
+  }
 
 Banner("Loading persistent classes");
   
@@ -340,7 +510,7 @@ void AddEphemeralClasses(struct Rlist *classlist)
 
 for (rp = classlist; rp != NULL; rp = rp->next)
    {
-   if (!IsItemIn(VHEAP,rp->item))
+   if (!InAlphaList(VHEAP,rp->item))
       {
       NewClass(rp->item);
       }
@@ -365,7 +535,7 @@ for (sp = local; *sp != '\0'; sp++)
    {
    memset(currentitem,0,CF_MAXVARSIZE);
 
-   sscanf(sp,"%250[^.:,]",currentitem);
+   sscanf(sp,"%250[^,]",currentitem);
 
    sp += strlen(currentitem);
       
@@ -380,32 +550,33 @@ for (sp = local; *sp != '\0'; sp++)
 
 /*********************************************************************/
 
-void NegateClassesFromString(char *class,struct Item **heap)
+void NegateClassesFromString(char *classlist,struct Item **heap)
 
-{ char *sp = class;
-  char cbuff[CF_MAXVARSIZE];
+{ char *sp, currentitem[CF_MAXVARSIZE],local[CF_MAXVARSIZE];
 
-while(*sp != '\0')
+if ((classlist == NULL) || strlen(classlist) == 0)
    {
-   sscanf(sp,"%255[^.]",cbuff);
+   return;
+   }
 
-   while ((*sp != '\0') && ((*sp !='.')||(*sp == '&')))
-      {
-      sp++;
-      }
+memset(local,0,CF_MAXVARSIZE);
+strncpy(local,classlist,CF_MAXVARSIZE-1);
 
-   if ((*sp == '.') || (*sp == '&'))
-      {
-      sp++;
-      }
+for (sp = local; *sp != '\0'; sp++)
+   {
+   memset(currentitem,0,CF_MAXVARSIZE);
 
-   if (IsHardClass(cbuff))
+   sscanf(sp,"%250[^,]",currentitem);
+
+   sp += strlen(currentitem);
+
+   if (IsHardClass(currentitem))
       { char err[CF_BUFSIZE];
-      sprintf (err,"Cannot negate the reserved class [%s]\n",cbuff);
+      sprintf (err,"Cannot negate the reserved class [%s]\n",currentitem);
       FatalError(err);
       }
 
-   AppendItem(heap,cbuff,NULL);
+   AppendItem(heap,currentitem,NULL);
    }
 }
 
@@ -451,7 +622,7 @@ int IsHardClass(char *sp)  /* true if string matches a hardwired class e.g. hpux
   static char *names[] =
      {
      "any","agent","Morning","Afternoon","Evening","Night","Q1","Q2","Q3","Q4",
-     "SuSE","suse","fedora","Ubuntu","cfengine","ipv4","lsb_compliant","localhost",
+     "SuSE","suse","fedora","Ubuntu","cfengine_","ipv4","lsb_compliant","localhost",
      NULL
      };
  
@@ -566,7 +737,7 @@ else
 
 void SaveClassEnvironment()
 
-{ struct Item *ip;
+{ struct AlpahList *ap;
   char file[CF_BUFSIZE];
   FILE *fp;
  
@@ -578,22 +749,8 @@ if ((fp = fopen(file,"w")) == NULL)
    return;
    }
 
-for (ip = VHEAP; ip != NULL; ip=ip->next)
-   {
-   if (!IsItemIn(VNEGHEAP,ip->name))
-      {
-      fprintf(fp,"%s\n",ip->name);
-      }
-   }
- 
-for (ip = VADDCLASSES; ip != NULL; ip=ip->next)
-   {
-   if (!IsItemIn(VNEGHEAP,ip->name))
-      {
-      fprintf(fp,"%s\n",ip->name);
-      }
-   }
-
+ListAlphaList(fp,VHEAP,'\n');
+ListAlphaList(fp,VADDCLASSES,'\n');
 fclose(fp);
 }
 
@@ -601,12 +758,12 @@ fclose(fp);
 /* Level                                                                     */
 /*****************************************************************************/
 
-int EvalClassExpression(struct Constraint *cp,struct Promise *pp)
+static int EvalClassExpression(struct Constraint *cp,struct Promise *pp)
 
 { int result_and = true;
   int result_or = false;
   int result_xor = 0;
-  int result,total = 0;
+  int result = 0,total = 0;
   char *lval = cp->lval,buffer[CF_MAXVARSIZE];
   struct Rlist *rp;
   double prob,cum = 0,fluct;
@@ -637,8 +794,7 @@ switch (cp->type)
    {
    case CF_FNCALL:
        
-       fp = (struct FnCall *)cp->rval;
-       /* Special expansion of functions for control, best effort only */
+       fp = (struct FnCall *)cp->rval;        /* Special expansion of functions for control, best effort only */
        newret = EvaluateFunctionCall(fp,pp);
        DeleteFnCall(fp);
        cp->rval = newret.item;
@@ -720,6 +876,13 @@ cum = 0.0;
 
 /* If we get here, anything remaining on the RHS must be a clist */
 
+if (cp->type != CF_LIST)
+   {
+   CfOut(cf_error,""," !! RHS of promise body attribute \"%s\" is not a list\n",cp->lval);
+   PromiseRef(cf_error,pp);
+   return true;
+   }
+
 for (rp = (struct Rlist *)cp->rval; rp != NULL; rp = rp->next)
    {
    if (rp->type != CF_SCALAR)
@@ -731,7 +894,7 @@ for (rp = (struct Rlist *)cp->rval; rp != NULL; rp = rp->next)
 
    result_and = result_and && result;
    result_or  = result_or || result;
-   result_xor += result;
+   result_xor ^= result;
 
    if (total > 0) // dist class
       {
@@ -778,6 +941,71 @@ return false;
 
 /*******************************************************************/
 
+void KeepClassContextPromise(struct Promise *pp)
+
+{ struct Attributes a;
+
+a = GetClassContextAttributes(pp);
+
+if (!FullTextMatch("[a-zA-Z0-9_]+",pp->promiser))
+   {
+   CfOut(cf_verbose,"","Class identifier \"%s\" contains illegal characters - canonifying",pp->promiser);
+   snprintf(pp->promiser, strlen(pp->promiser) + 1, "%s", CanonifyName(pp->promiser));
+   }
+
+if (a.context.broken)
+   {
+   cfPS(cf_error,CF_FAIL,"",pp,a,"Irreconcilable constraints in classes for %s (broken promise)",pp->promiser);
+   return;
+   }
+
+if (strcmp(pp->bundletype,"common") == 0)
+   {
+   if (EvalClassExpression(a.context.expression,pp))
+      {
+      CfOut(cf_verbose,""," ?> defining additional global class %s\n",pp->promiser);
+
+      if (!ValidClassName(pp->promiser))
+         {
+         cfPS(cf_error,CF_FAIL,"",pp,a," !! Attempted to name a class \"%s\", which is an illegal class identifier",pp->promiser);
+         }
+      else
+         {
+         NewClass(pp->promiser);
+         }
+      }
+
+   /* These are global and loaded once */
+   //*(pp->donep) = true;
+
+   return;
+   }
+
+if (strcmp(pp->bundletype,THIS_AGENT) == 0 || FullTextMatch("edit_.*",pp->bundletype))
+   {
+   if (EvalClassExpression(a.context.expression,pp))
+      {
+      Debug(" ?> defining explicit class %s\n",pp->promiser);
+
+      if (!ValidClassName(pp->promiser))
+         {
+         cfPS(cf_error,CF_FAIL,"",pp,a," !! Attempted to name a class \"%s\", which is an illegal class identifier",pp->promiser);
+         }
+      else
+         {
+         NewBundleClass(pp->promiser,pp->bundle);
+         }
+      }
+
+   // Private to bundle, can be reloaded
+
+   *(pp->donep) = false;   
+   return;
+   }
+}
+
+/*******************************************************************/
+
 void NewClass(char *oclass)
 
 { struct Item *ip;
@@ -805,12 +1033,12 @@ if (IsRegexItemIn(ABORTHEAP,class))
    exit(1);
    }
 
-if (IsItemIn(VHEAP,class))
+if (InAlphaList(VHEAP,class))
    {
    return;
    }
 
-AppendItem(&VHEAP,class,NULL);
+PrependAlphaList(&VHEAP,class);
 
 for (ip = ABORTHEAP; ip != NULL; ip = ip->next)
    {
@@ -837,7 +1065,7 @@ if (!ABORTBUNDLE)
 
 /*********************************************************************/
 
-void NewPrefixedClasses(char *name,char *classlist)
+static void NewPrefixedClasses(char *name,char *classlist)
 
 { char *sp, currentitem[CF_MAXVARSIZE],local[CF_MAXVARSIZE],pref[CF_BUFSIZE];
  
@@ -873,9 +1101,10 @@ for (sp = local; *sp != '\0'; sp++)
 
 void DeleteClass(char *class)
 
-{
-DeleteItemLiteral(&VHEAP,class);
-DeleteItemLiteral(&VADDCLASSES,class);
+{ int i = (int)*class;
+
+DeleteItemLiteral(&(VHEAP.list[i]),class);
+DeleteItemLiteral(&(VADDCLASSES.list[i]),class);
 }
 
 /*******************************************************************/
@@ -908,17 +1137,17 @@ if (IsRegexItemIn(ABORTHEAP,copy))
    exit(1);
    }
 
-if (IsItemIn(VHEAP,copy))
+if (InAlphaList(VHEAP,copy))
    {
    CfOut(cf_error,"","WARNING - private class \"%s\" in bundle \"%s\" shadows a global class - you should choose a different name to avoid conflicts",copy,bundle);
    }
 
-if (IsItemIn(VADDCLASSES,copy))
+if (InAlphaList(VADDCLASSES,copy))
    {
    return;
    }
 
-AppendItem(&VADDCLASSES,copy,CONTEXTID);
+PrependAlphaList(&VADDCLASSES,copy);
 
 for (ip = ABORTHEAP; ip != NULL; ip = ip->next)
    {
@@ -945,254 +1174,177 @@ if (!ABORTBUNDLE)
 
 /*********************************************************************/
 
-int IsExcluded(char *exception)
+struct Rlist *SplitContextExpression(char *context,struct Promise *pp)
 
-{
-if (!IsDefinedClass(exception))
-   {
-   Debug2("%s is excluded!\n",exception);
-   return true;
-   }  
-
-return false;
-}
-
-/*********************************************************************/
-
-int IsDefinedClass(char *class) 
-
-  /* Evaluates a.b.c|d.e.f etc and returns true if the class */
-  /* is currently true, given the defined heap and negations */
-
-{ int ret;
-
-if (class == NULL)
-   {
-   return true;
-   }
-
-Debug("IsDefinedClass(%s,VADDCLASSES)\n",class);
-
-ret = EvaluateORString(class,VADDCLASSES,0);
-
-return ret;
-}
-
-
-/*********************************************************************/
-/* Level 2                                                           */
-/*********************************************************************/
-
-int EvaluateORString(char *class,struct Item *list,int fromIsInstallable)
-
-{ char *sp, cbuff[CF_BUFSIZE];
+{ struct Rlist *list = NULL;
+  char *sp,*spsub,cbuff[CF_MAXVARSIZE],csub[CF_MAXVARSIZE];
   int result = false;
-
-if (class == NULL)
+  
+if (context == NULL)
    {
-   return false;
+   PrependRScalar(&list,"any",CF_SCALAR);
    }
+else
+   {
+   for (sp = context; *sp != '\0'; sp++)
+      {
+      while (*sp == '|')
+         {
+         sp++;
+         }
+      
+      memset(cbuff,0,CF_MAXVARSIZE);
+      
+      sp += GetORAtom(sp,cbuff);
+      
+      if (strlen(cbuff) == 0)
+         {
+         break;
+         }
+      
+      if (IsBracketed(cbuff))
+         {
+         // Fully bracketed atom (protected)
+         cbuff[strlen(cbuff)-1] = '\0';
+         PrependRScalar(&list,cbuff+1,CF_SCALAR);
+         }
+      else
+         {
+         if (HasBrackets(cbuff,pp))             
+            {
+            struct Rlist *andlist = SplitRegexAsRList(cbuff,"[.&]+",99,false);
+            struct Rlist *rp,*orlist = NULL;
+            char buff[CF_MAXVARSIZE];
+            char orstring[CF_MAXVARSIZE] = {0};
+            char andstring[CF_MAXVARSIZE] = {0};
 
-Debug("\n--------\nEvaluateORString(%s)\n",class);
+            // Apply distribution P.(A|B) -> P.A|P.B
+            
+            for (rp = andlist; rp != NULL; rp=rp->next)
+               {
+               if (IsBracketed(rp->item))
+                  {
+                  // This must be an OR string to be ORed and split into a list
+                  *((char *)rp->item+strlen((char *)rp->item)-1) = '\0';
+
+                  if (strlen(orstring) > 0)
+                     {
+                     strcat(orstring,"|");
+                     }
+                  
+                  Join(orstring,(char *)(rp->item)+1,CF_MAXVARSIZE);
+                  }
+               else
+                  {
+                  if (strlen(andstring) > 0)
+                     {
+                     strcat(andstring,".");
+                     }
+                  
+                  Join(andstring,rp->item,CF_MAXVARSIZE);
+                  }
+
+               // foreach ORlist, AND with AND string
+               }
+
+            if (strlen(orstring) > 0)
+               {
+               orlist = SplitRegexAsRList(orstring,"[|]+",99,false);
+               
+               for (rp = orlist; rp != NULL; rp=rp->next)
+                  {
+                  snprintf(buff,CF_MAXVARSIZE,"%s.%s",rp->item,andstring);
+                  PrependRScalar(&list,buff,CF_SCALAR);
+                  }
+               }
+            else
+               {
+               PrependRScalar(&list,andstring,CF_SCALAR);
+               }
+            
+            DeleteRlist(orlist);
+            DeleteRlist(andlist);
+            }
+         else
+            {
+            // Clean atom
+            PrependRScalar(&list,cbuff,CF_SCALAR);
+            }
+         }
+      
+      if (*sp == '\0')
+         {
+         break;
+         }
+      }
+   }
  
-for (sp = class; *sp != '\0'; sp++)
-   {
-   while (*sp == '|')
-      {
-      sp++;
-      }
-
-   memset(cbuff,0,CF_BUFSIZE);
-
-   sp += GetORAtom(sp,cbuff);
-
-   if (strlen(cbuff) == 0)
-      {
-      break;
-      }
-
-   if (IsBracketed(cbuff)) /* Strip brackets */
-      {
-      cbuff[strlen(cbuff)-1] = '\0';
-
-      result |= EvaluateORString(cbuff+1,list,fromIsInstallable);
-      Debug("EvalORString-temp-result-y=%d (%s)\n",result,cbuff+1);
-      }
-   else
-      {
-      result |= EvaluateANDString(cbuff,list,fromIsInstallable);
-      Debug("EvalORString-temp-result-n=%d (%s)\n",result,cbuff);
-      }
-
-   if (*sp == '\0')
-      {
-      break;
-      }
-   }
-
-Debug("EvaluateORString(%s) returns %d\n",class,result); 
-return result;
+return list;
 }
 
 /*********************************************************************/
 
-int ValidClassName(char *name)
-{
-if (FullTextMatch(CF_CLASSRANGE,name))
-   {
-   return true;
-   }
-else
+int IsBracketed(char *s)
+
+ /* return true if the entire string is bracketed, not just if
+    if contains brackets */
+
+{ int i, level= 0, yes = 0;
+
+if (*s != '(')
    {
    return false;
    }
-}
 
-/*********************************************************************/
-/* Level 3                                                           */
-/*********************************************************************/
-
-int EvaluateANDString(char *class,struct Item *list,int fromIsInstallable)
-
-{ char *sp, *atom;
-  char cbuff[CF_BUFSIZE];
-  int count = 1;
-  int negation = false;
-
-Debug("EvaluateANDString(%s)\n",class);
-
-count = CountEvalAtoms(class);
-sp = class;
- 
-while(*sp != '\0')
+if (*(s+strlen(s)-1) != ')')
    {
-   negation = false;
+   return false;
+   }
 
-   while (*sp == '!')
+if (strstr(s,")("))
+   {
+   CfOut(cf_error,""," !! Class expression \"%s\" has broken brackets",s);
+   return false;
+   }
+
+for (i = 0; i < strlen(s); i++)
+   {
+   if (s[i] == '(')
       {
-      negation = !negation;
-      sp++;
-      }
-
-   memset(cbuff,0,CF_BUFSIZE);
-
-   sp += GetANDAtom(sp,cbuff) + 1;
-
-   atom = cbuff;
-
-     /* Test for parentheses */
-   
-   if (IsBracketed(cbuff))
-      {
-      atom = cbuff+1;
-
-      Debug("Checking AND Atom %s?\n",atom);
-      
-      cbuff[strlen(cbuff)-1] = '\0';
-      
-      if (EvaluateORString(atom,list,fromIsInstallable))
+      yes++;
+      level++;
+      if (i > 0 && !IsIn(s[i-1],".&|!("))
          {
-         if (negation)
-            {
-            Debug("EvalANDString-temp-result-neg1=false\n");
-            return false;
-            }
-         else
-            {
-            Debug("EvalORString-temp-result count=%d\n",count);
-            count--;
-            }
+         CfOut(cf_error,""," !! Class expression \"%s\" has a missing operator in front of '('",s);
          }
-      else
-         {
-         if (negation)
-            {
-            Debug("EvalORString-temp-result2 count=%d\n",count);
-            count--;
-            }
-         else
-            {
-            return false;
-            }
-         }
-
-      continue;
-      }
-   else
-      {
-      atom = cbuff;
       }
    
-   /* End of parenthesis check */
-   
-   if (*sp == '.' || *sp == '&')
+   if (s[i] == ')')
       {
-      sp++;
-      }
-
-   Debug("Checking OR atom (%s)?\n",atom);
-
-   if (IsItemIn(VNEGHEAP,atom)||IsItemIn(VDELCLASSES,atom))
-      {
-      if (negation)
+      yes++;
+      level--;
+      if (i < strlen(s)-1 && !IsIn(s[i+1],".&|!)"))
          {
-         Debug("EvalORString-temp-result3 count=%d\n",count);
-         count--;
+         CfOut(cf_error,""," !! Class expression \"%s\" has a missing operator after of ')'",s);
          }
-      else
-         {
-         return false;
-         }
-      } 
-   else if (IsItemIn(VHEAP,atom))
-      {
-      if (negation)
-         {
-         Debug("EvaluateANDString(%s) returns false by negation 1\n",class);
-         return false;
-         }
-      else
-         {
-         Debug("EvalORString-temp-result3.5 count=%d\n",count);
-         count--;
-         }
-      } 
-   else if (IsItemIn(list,atom))
-      {
-      if (negation && !fromIsInstallable)
-         {
-         Debug("EvaluateANDString(%s) returns false by negation 2\n",class);
-         return false;
-         }
-      else
-         {
-         Debug("EvalORString-temp-result3.6 count=%d\n",count);
-         count--;
-         }
-      } 
-   else if (negation)    /* ! (an undefined class) == true */
-      {
-      Debug("EvalORString-temp-result4 count=%d\n",count);
-      count--;
-      }
-   else       
-      {
-      Debug("EvaluateANDString(%s) returns false ny negation 3\n",class);
-      return false;
       }
    }
 
- 
-if (count == 0)
+
+if (level != 0)
    {
-   Debug("EvaluateANDString(%s) returns true\n",class);
-   return(true);
+   CfOut(cf_error,""," !! Class expression \"%s\" has broken brackets",s);
+   return false;  /* premature ) */
    }
-else
+
+if (yes > 2)
    {
-   Debug("EvaluateANDString(%s) returns false\n",class);
-   return(false);
+   // e.g. (a|b).c.(d|e)
+   return false;
    }
+
+
+return true;
 }
 
 /*********************************************************************/
@@ -1224,121 +1376,57 @@ while ((*sp != '\0') && !((*sp == '|') && (bracklevel == 0)))
 
 *spc = '\0';
 
-Debug("\nGetORATom(%s)->%s\n",start,buffer); 
-return len;
-}
-
-/*********************************************************************/
-/* Level 4                                                           */
-/*********************************************************************/
-
-int GetANDAtom(char *start,char *buffer)
-
-{ char *sp = start;
-  char *spc = buffer;
-  int bracklevel = 0, len = 0;
-
-while ((*sp != '\0') && !(((*sp == '.')||(*sp == '&')) && (bracklevel == 0)))
-   {
-   if (*sp == '(')
-      {
-      Debug("+(\n");
-      bracklevel++;
-      }
-
-   if (*sp == ')')
-      {
-      Debug("-)\n");
-      bracklevel--;
-      }
-
-   *spc++ = *sp++;
-
-   len++;
-   }
-
-*spc = '\0';
-Debug("\nGetANDATom(%s)->%s\n",start,buffer);  
-
+Debug("\nGetORATom(%s)->%s\n",start,buffer);
 return len;
 }
 
 /*********************************************************************/
 
-int CountEvalAtoms(char *class)
+int HasBrackets(char *s,struct Promise *pp)
 
-{ char *sp;
-  int count = 0, bracklevel = 0;
-  
-for (sp = class; *sp != '\0'; sp++)
-   {
-   if (*sp == '(')
-      {
-      Debug("+(\n");
-      bracklevel++;
-      continue;
-      }
+ /* return true if contains brackets */
 
-   if (*sp == ')')
-      {
-      Debug("-)\n");
-      bracklevel--;
-      continue;
-      }
-   
-   if ((bracklevel == 0) && ((*sp == '.')||(*sp == '&')))
-      {
-      count++;
-      }
-   }
+{ int i, level= 0, yes = 0;
 
-// This is checked in the lexer now, and so can be eliminated?
-//
-// if (bracklevel != 0)
-//    {
-//    char output[CF_BUFSIZE];
-//    snprintf(output,CF_BUFSIZE,"Bracket mismatch, in [class=\"%s\"], level = %d\n",class,bracklevel);
-//    yyerror(output);
-//    FatalError("Aborted");
-//    }
-
-return count+1;
-}
-
-/*********************************************************************/
-
-int IsBracketed(char *s)
-
- /* return true if the entire string is bracketed, not just if
-    if contains brackets */
-
-{ int i, level= 0;
-
-if (*s != '(')
-   {
-   return false;
-   }
-
-for (i = 0; i < strlen(s)-1; i++)
+for (i = 0; i < strlen(s); i++)
    {
    if (s[i] == '(')
       {
+      yes++;
       level++;
+      if (i > 0 && !IsIn(s[i+1],".&|!("))
+         {
+         CfOut(cf_error,""," !! Class expression \"%s\" has a missing operator in front of '('",s);
+         }
       }
    
    if (s[i] == ')')
       {
       level--;
-      }
-
-   if (level == 0)
-      {
-      return false;  /* premature ) */
+      if (i < strlen(s)-1 && !IsIn(s[i+1],".&|!)"))
+         {
+         CfOut(cf_error,""," !! Class expression \"%s\" has a missing operator after ')'",s);
+         }
       }
    }
 
-return true;
+if (level != 0)
+   {
+   CfOut(cf_error,""," !! Class expression \"%s\" has unbalanced brackets",s);
+   PromiseRef(cf_error,pp);
+   return true;
+   }
+
+if (yes > 1)
+   {
+   CfOut(cf_error,""," !! Class expression \"%s\" has multiple brackets",s);
+   PromiseRef(cf_error,pp);
+   }
+else if (yes)
+   {
+   return true;
+   }
+
+return false;
 }
-
-
 

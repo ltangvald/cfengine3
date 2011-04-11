@@ -215,7 +215,7 @@ else if (pid == 0)                     /* child */
 
       if (execv(arg[0],argv) == -1)
          {
-         CfOut(cf_error,"execvp","Command %s failed",argv);
+         CfOut(cf_error,"execv","Command %s failed (%d args)",argv[0],argc - 1);
          exit(1);
          }
 
@@ -308,13 +308,11 @@ for (ip = siglist; ip != NULL; ip=ip->next)
          
          if (kill((pid_t)pid,signal) < 0)
             {
-            cfPS(cf_verbose,CF_FAIL,"kill",pp,a," !! Couldn't send promised signal \'%s\' (%d) to pid %d\n",rp->item,signal,pid);
-            continue;
+            cfPS(cf_verbose,CF_FAIL,"kill",pp,a," !! Couldn't send promised signal \'%s\' (%d) to pid %d (might be dead)\n",rp->item,signal,pid);
             }
          else
             {
             cfPS(cf_inform,CF_CHG,"",pp,a," -> Signalled \'%s\' (%d) to observed process match \'%s\'\n",rp->item,signal,ip->name);
-            break;
             }
          }
       else
@@ -331,12 +329,13 @@ return killed;
 
 /* from verify_processes.c */
 
-int Unix_LoadProcessTable(struct Item **procdata,char *psopts)
+int Unix_LoadProcessTable(struct Item **procdata)
 
 { FILE *prp;
-  char pscomm[CF_MAXLINKSIZE], vbuff[CF_BUFSIZE];
+  char pscomm[CF_MAXLINKSIZE], vbuff[CF_BUFSIZE], *sp;
   struct Item *rootprocs = NULL;
   struct Item *otherprocs = NULL;
+  const char *psopts = GetProcessOptions();
 
 snprintf(pscomm,CF_MAXLINKSIZE,"%s %s",VPSCOMM[VSYSTEMHARDCLASS],psopts);
 
@@ -352,6 +351,17 @@ while (!feof(prp))
    {
    memset(vbuff,0,CF_BUFSIZE);
    CfReadLine(vbuff,CF_BUFSIZE,prp);
+
+   for (sp = vbuff+strlen(vbuff)-1; sp > vbuff && isspace(*sp); sp--)
+      {
+      *sp = '\0';
+      }
+   
+   if (ForeignZone(vbuff))
+      {
+      continue;
+      }
+
    AppendItem(procdata,vbuff,"");
    }
 
@@ -373,12 +383,15 @@ while (DeleteItemContaining(&otherprocs,"root"))
    {
    }
 
-PrependItem(&rootprocs,otherprocs->name,NULL);
+if (otherprocs)
+   {
+   PrependItem(&rootprocs,otherprocs->name,NULL);
+   }
 
 snprintf(vbuff,CF_MAXVARSIZE,"%s/state/cf_rootprocs",CFWORKDIR);
 RawSaveItemList(rootprocs,vbuff);
 DeleteItemList(rootprocs);
-    
+
 snprintf(vbuff,CF_MAXVARSIZE,"%s/state/cf_otherprocs",CFWORKDIR);
 RawSaveItemList(otherprocs,vbuff);
 DeleteItemList(otherprocs);

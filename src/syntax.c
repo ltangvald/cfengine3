@@ -40,8 +40,15 @@ void CheckBundle(char *name,char *type)
 
 { struct Bundle *bp;
   char output[CF_BUFSIZE];
+  char *reserved[] = { "sys", "const", "mon", "edit", "match", "mon", "this", NULL };
 
 Debug("Checking for bundle (%s,%s)\n",name,type);
+  
+if (IsStrIn(name,reserved,false))
+   {
+   snprintf(output,CF_BUFSIZE,"Use of a reserved context as a bundle name \"%s\" ",name);
+   ReportError(output);      
+   }
 
 for (bp = BUNDLES; bp != NULL; bp=bp->next)
    {
@@ -64,7 +71,7 @@ for (bp = BODIES; bp != NULL; bp=bp->next)
    {
    if ((strcmp(name,bp->name) == 0) && (strcmp(type,bp->type) == 0))
       {
-      snprintf(output,CF_BUFSIZE,"Redefinition of body %s for %s is a broken promise",name,type);
+      snprintf(output,CF_BUFSIZE,"Redefinition of body \"%s\" for \"%s\" is a broken promise",name,type);
       ReportError(output);
       }
    }
@@ -241,9 +248,59 @@ for (i = 0; CF_COMMON_EDITBODIES[i].lval != NULL; i++)
 
 if (!lmatch || !allowed)
    {
-   snprintf(output,CF_BUFSIZE,"Constraint lvalue %s is not allowed in bundle category \'%s\'",lval,type);
+   snprintf(output,CF_BUFSIZE,"Constraint lvalue \'%s\' is not allowed in bundle category \'%s\'",lval,type);
    ReportError(output);
    }
+}
+
+/******************************************************************************************/
+
+int LvalWantsBody(char *stype,char *lval)
+
+{ int lmatch = false;
+  int i,j,k,l, allowed = false;
+  struct SubTypeSyntax *ss;
+  struct BodySyntax *bs,*bs2;
+  enum cfdatatype ltype;
+  char output[CF_BUFSIZE];
+
+for  (i = 0; i < CF3_MODULES; i++)
+   {
+   if ((ss = CF_ALL_SUBTYPES[i]) == NULL)
+      {
+      continue;
+      }
+  
+   for (j = 0; ss[j].subtype != NULL; j++)
+      {
+      if ((bs = ss[j].bs) == NULL)
+         {
+         continue;
+         }
+      
+      if (strcmp(ss[j].subtype,stype) != 0)
+         {
+         continue;
+         }
+
+      for (l = 0; bs[l].range != NULL; l++)
+         {
+         if (strcmp(bs[l].lval,lval) == 0)
+            {
+            if (bs[l].dtype == cf_body)
+               {
+               return true;
+               }
+            else
+               {
+               return false;
+               }
+            }
+         }
+      }
+   }
+
+return false;
 }
 
 /******************************************************************************************/
@@ -362,7 +419,7 @@ for  (i = 0; i < CF3_MODULES; i++)
 
 if (!lmatch)
    {
-   snprintf(output,CF_BUFSIZE,"Constraint lvalue %s is not allowed in \'%s\' constraint body",lval,type);
+   snprintf(output,CF_BUFSIZE,"Constraint lvalue \"%s\" is not allowed in \'%s\' constraint body",lval,type);
    ReportError(output);
    }
 }
@@ -629,16 +686,14 @@ return true;
 
 int CheckParseClass(char *lval,char *s,char *range)
 
-{ regex_t rx;
-  regmatch_t pmatch;
-  char output[CF_BUFSIZE];
+{ char output[CF_BUFSIZE];
 
 if (s == NULL)
    {
    return false;
    }
   
-Debug("\nCheckParseString(%s => %s/%s)\n",lval,s,range);
+Debug("\nCheckParseClass(%s => %s/%s)\n",lval,s,range);
   
 if (strlen(range) == 0)
    {
@@ -978,6 +1033,47 @@ if (!err)
    {
    Debug("CheckParseOpts - syntax verified\n\n");
    }
+}
+
+/****************************************************************************/
+
+int CheckParseVariableName(char *name)
+
+{ char *reserved[] = { "promiser", "handle", "promise_filename", "promise_linenumber", NULL };
+ char *sp,scopeid[CF_MAXVARSIZE],vlval[CF_MAXVARSIZE];
+  int count = 0;
+  
+if (IsStrIn(name,reserved,false))
+   {
+   return false;
+   }
+
+scopeid[0] = '\0';
+
+if (strchr(name,'.'))
+   {
+   for (sp = name; *sp != '\0'; sp++)
+      {
+      if (*sp == '.')
+         {
+         count++;
+
+         if (count > 1)
+            {
+            return false;
+            }
+         }      
+      }
+   
+   sscanf(name,"%[^.].%s",scopeid,vlval);
+
+   if (strlen(scopeid) == 0 || strlen(vlval) == 0)
+      {
+      return false;
+      }
+   }
+
+return true;
 }
 
 /****************************************************************************/

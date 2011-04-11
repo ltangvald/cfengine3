@@ -1,22 +1,25 @@
-/* 
-   Copyright (C) 2008 - Cfengine AS
+/*
+   Copyright (C) Cfengine AS
 
    This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
-   Free Software Foundation; either version 3, or (at your option) any
-   later version. 
+   Free Software Foundation; version 3.
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
+
   You should have received a copy of the GNU General Public License
-  
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
+  To the extent this program is licensed as part of the Enterprise
+  versions of Cfengine, the applicable Commerical Open Source License
+  (COSL) may apply to this file if you as a licensee so wish it. See
+  included file COSL.txt.
 */
 
 /*****************************************************************************/
@@ -33,16 +36,9 @@
 #undef VERSION
 #undef Verbose
 
+#define CF3_REVISION "$Rev: 2014 $"
+
 #include "conf.h"
-
-#ifdef HAVE_PCRE_H
-#include <pcre.h>
-#endif
-
-#ifdef HAVE_PCRE_PCRE_H
-#include <pcre/pcre.h>
-#endif
-
 
 #ifndef NGROUPS
 # define NGROUPS 20
@@ -52,12 +48,12 @@
 /* Fundamental (meta) types                                              */
 /*************************************************************************/
 
-#define CF3COPYRIGHT "(C) Cfengine AS 2008-"
+#define CF3COPYRIGHT "Copyright (C) Cfengine AS 2008,2010-"
 
-
-#define LIC_DAY "1"
-#define LIC_MONTH "July"
-#define LIC_YEAR "2000"
+#define LIC_DAY "15"
+#define LIC_MONTH "December"
+#define LIC_YEAR "2001"
+#define LIC_COMPANY "PARTNER TEST LICENSE - NOT FOR PRODUCTION"
 
 #define CF_SCALAR 's'
 #define CF_LIST   'l'
@@ -77,6 +73,7 @@
 #define CF_INBUNDLE 2
 
 #define CF_MAX_NESTING 3
+#define CF_MAX_REPLACE 20
 #define CF_DONEPASSES  4
 
 #define CF_TIME_SIZE 32
@@ -106,17 +103,17 @@
 struct PromiseParser
    {
    char *block;                     /* body/bundle  */
-   char *blocktype;
-   char *blockid;
+   char blocktype[CF_MAXVARSIZE];
+   char blockid[CF_MAXVARSIZE];
 
-   char *filename;
+   char filename[CF_MAXVARSIZE];
    int line_pos;
    int line_no;
 
    int arg_nesting;
    int list_nesting;
       
-   char *lval;
+   char lval[CF_MAXVARSIZE];
    void *rval;
    char rtype;
    int isbody;
@@ -124,9 +121,9 @@ struct PromiseParser
    char *promiser;
    void *promisee;
 
-   char *currentid;
+   char currentid[CF_MAXVARSIZE];
+   char currenttype[CF_MAXVARSIZE];
    char *currentstring;
-   char *currenttype;
    char *currentclasses;
 
    struct Bundle *currentbundle;
@@ -204,6 +201,7 @@ enum cfx_format
 #define CF_RUNC     "runagent"
 #define CF_REPORTC  "reporter"
 #define CF_KEYGEN   "keygenerator"
+#define CF_HUBC     "hub"
 
 enum cfagenttype
    {
@@ -216,6 +214,7 @@ enum cfagenttype
    cf_know,
    cf_report,
    cf_keygen,
+   cf_hub,
    cf_noagent
    };
 
@@ -235,6 +234,7 @@ enum cfgcontrol
    cfg_licenses,
    cfg_syslog_host,
    cfg_syslog_port,
+   cfg_fips_mode,
    cfg_noagent
    };
     
@@ -247,6 +247,7 @@ enum cfacontrol
    cfa_addclasses,
    cfa_agentaccess,
    cfa_agentfacility,
+   cfa_alwaysvalidate,
    cfa_auditing,
    cfa_binarypaddingchar,
    cfa_bindtointerface,
@@ -271,6 +272,7 @@ enum cfacontrol
    cfa_mountfilesystems,
    cfa_nonalphanumfiles,
    cfa_repchar,
+   cfa_refresh_processes,
    cfa_repository,
    cfa_secureinput,
    cfa_sensiblecount,
@@ -323,6 +325,7 @@ enum cfrcontrol
    cfr_background,
    cfr_maxchild,
    cfr_output_to_file,
+   cfr_timeout,
    cfr_notype
    };
 
@@ -330,23 +333,24 @@ enum cfrcontrol
 
 enum cfscontrol
    {
-   cfs_cfruncommand,
-   cfs_maxconnections,
-   cfs_denybadclocks,
-   cfs_allowconnects,
-   cfs_denyconnects,
    cfs_allowallconnects,
-   cfs_trustkeysfrom,
+   cfs_allowconnects,
    cfs_allowusers,
-   cfs_dynamicaddresses,
-   cfs_skipverify,
-   cfs_logallconnections,
-   cfs_logencryptedtransfers,
-   cfs_hostnamekeys,
    cfs_auditing,
    cfs_bindtointerface,
-   cfs_serverfacility,
+   cfs_cfruncommand,
+   cfs_denybadclocks,
+   cfs_denyconnects,
+   cfs_dynamicaddresses,
+   cfs_hostnamekeys,
+   cfs_keyttl,
+   cfs_logallconnections,
+   cfs_logencryptedtransfers,
+   cfs_maxconnections,
    cfs_portnumber,
+   cfs_serverfacility,
+   cfs_skipverify,
+   cfs_trustkeysfrom,
    cfs_notype,
    };
 
@@ -355,9 +359,11 @@ enum cfscontrol
 enum cfkcontrol
    {
    cfk_builddir,
+   cfk_docroot,
    cfk_genman,
    cfk_graph_dir,
    cfk_graph_output,
+   cfk_goalpatterns,
    cfk_htmlbanner,
    cfk_htmlfooter,
    cfk_tm_prefix,
@@ -394,6 +400,17 @@ enum cfrecontrol
    cfre_stylesheet,
    cfre_timestamps,
    cfre_notype
+   };
+
+/*************************************************************************/
+
+enum cfhcontrol
+   {
+   cfh_export_zenoss,
+   cfh_federation,
+   cfh_schedule,
+   cfh_port,
+   cfh_notype
    };
 
 /*************************************************************************/
@@ -447,26 +464,33 @@ enum cfeditorder
 
 #define CF_SIGNALRANGE "hup,int,trap,kill,pipe,cont,abrt,stop,quit,term,child,usr1,usr2,bus,segv"
 #define CF_BOOL      "true,false,yes,no,on,off"
-#define CF_LINKRANGE "symlink,hardlink,relative,absolute,none"
+#define CF_LINKRANGE "symlink,hardlink,relative,absolute"
 #define CF_TIMERANGE "0,2147483647"
 #define CF_VALRANGE  "0,99999999999"
 #define CF_INTRANGE  "-99999999999,9999999999"
+#define CF_INTLISTRANGE  "[-0-9_$(){}\\[\\].]+"
 #define CF_REALRANGE "-9.99999E100,9.99999E100"
 #define CF_CHARRANGE "^.$"
+#define CF_NULL_VALUE "cf_null"
 
 #define CF_MODERANGE   "[0-7augorwxst,+-]+"
 #define CF_BSDFLAGRANGE "[+-]*[(arch|archived|nodump|opaque|sappnd|sappend|schg|schange|simmutable|sunlnk|sunlink|uappnd|uappend|uchg|uchange|uimmutable|uunlnk|uunlink)]+"
-#define CF_CLASSRANGE  "[a-zA-Z0-9_!&@@$|.()]+"
-#define CF_IDRANGE     "[a-zA-Z0-9_$()\\[\\].]+"
+#define CF_CLASSRANGE  "[a-zA-Z0-9_!&@@$|.()\\[\\]{}]+"
+#define CF_IDRANGE     "[a-zA-Z0-9_$(){}\\[\\].]+"
 #define CF_USERRANGE   "[a-zA-Z0-9_$.-]+"
-#define CF_IPRANGE     "[a-zA-Z0-9_$.:-]+"
-#define CF_FNCALLRANGE "[a-zA-Z0-9_().$@]+"
+#define CF_IPRANGE     "[a-zA-Z0-9_$(){}.:-]+"
+#define CF_FNCALLRANGE "[a-zA-Z0-9_(){}.$@]+"
 #define CF_NAKEDLRANGE "@[(][a-zA-Z0-9]+[)]"
 #define CF_ANYSTRING   ".*"
 #define CF_PATHRANGE   "\042?(([a-zA-Z]:\\\\.*)|(/.*))"  // can start with e.g. c:\... or "c:\...  |  unix
 #define CF_LOGRANGE    "stdout|udp_syslog|(\042?[a-zA-Z]:\\\\.*)|(/.*)"
 
 #define CF_FACILITY "LOG_USER,LOG_DAEMON,LOG_LOCAL0,LOG_LOCAL1,LOG_LOCAL2,LOG_LOCAL3,LOG_LOCAL4,LOG_LOCAL5,LOG_LOCAL6,LOG_LOCAL7"
+
+// Put this here now for caching efficiency
+
+#define NOVA_SOFTWARE_INSTALLED "software_packages.csv"
+#define NOVA_SYNONYM "has synonym"
 
 /*************************************************************************/
 
@@ -529,22 +553,28 @@ enum fncalltype
    cfn_execresult,
    cfn_fileexists,
    cfn_filesexist,
-   cfn_getfields,
-   cfn_getindices,
+   cfn_filesize,
    cfn_getenv,
+   cfn_getfields,
    cfn_getgid,
+   cfn_getindices,
    cfn_getuid,
+   cfn_getusers,
+   cfn_getvalues,
    cfn_grep,
    cfn_groupexists,
    cfn_hash,
    cfn_hashmatch,
    cfn_host2ip,
+   cfn_ip2host,
    cfn_hostinnetgroup,
    cfn_hostrange,
    cfn_hostsseen,
+   cfn_hubknowledge,
    cfn_iprange,
    cfn_irange,
    cfn_isdir,
+   cfn_isexecutable,
    cfn_isgreaterthan,
    cfn_islessthan,
    cfn_islink,
@@ -553,14 +583,20 @@ enum fncalltype
    cfn_isvariable,
    cfn_join,
    cfn_lastnode,
+   cfn_laterthan,
    cfn_ldaparray,
    cfn_ldaplist,
    cfn_ldapvalue,
    cfn_now,
    cfn_date,
+   cfn_parseintarray,
+   cfn_parserealarray,
+   cfn_parsestringarray,
+   cfn_parsestringarrayidx,
    cfn_peers,
    cfn_peerleader,
    cfn_peerleaders,
+   cfn_product,
    cfn_randomint,
    cfn_readfile,
    cfn_readintarray,
@@ -568,6 +604,7 @@ enum fncalltype
    cfn_readrealarray,
    cfn_readreallist,
    cfn_readstringarray,
+   cfn_readstringarrayidx,
    cfn_readstringlist,   
    cfn_readtcp,
    cfn_regarray,
@@ -585,6 +622,7 @@ enum fncalltype
    cfn_splayclass,
    cfn_splitstring,
    cfn_strcmp,
+   cfn_sum,
    cfn_translatepath,
    cfn_usemodule,
    cfn_userexists,
@@ -630,6 +668,7 @@ struct edit_context
    struct Item *file_start;
    struct Item *file_classes;
    int num_edits;
+   int empty_first;
    };
 
 /*************************************************************************/
@@ -669,6 +708,7 @@ struct PromiseIdent
    {
    char *handle;
    char *filename;
+   char *classes;
    int lineno;
    struct PromiseIdent *next;
    };
@@ -737,6 +777,19 @@ struct Scope                         /* $(bundlevar) $(scope.name) */
    struct CfAssoc *hashtable[CF_HASHTABLESIZE]; /* Variable heap  */
    struct Scope *next;
    };
+
+/*******************************************************************/
+
+struct Variable  /* Used to represent contents of var in DBM file -
+		    scope.name is key */
+   {
+   struct Event e;
+   enum cfdatatype dtype;
+   char rtype;
+   char rval[CF_MAXVARSIZE];    // as string, \0-terminated
+   };
+
+#define VARSTRUCTUSAGE(v) (sizeof(v) - sizeof(v.rval) + strlen(v.rval) + 1)
 
 /*******************************************************************/
 
@@ -899,6 +952,7 @@ enum package_actions
   cfa_deletepack,
   cfa_reinstall,
   cfa_update,
+  cfa_addupdate,
   cfa_patch,
   cfa_verifypack,
   cfa_pa_none
@@ -936,13 +990,17 @@ enum cf_thread_mutex
   cft_dbhandle,
   cft_policy,       // protects structs for refreshing policy files
   cft_db_lastseen,  // lastseen dbs (in cf-serverd)
-  cft_no_tpolicy
+  cft_no_tpolicy,
+  cft_report,
+  cft_vscope,           // protects VSCOPE
+  cft_server_keyseen  // protects   SERVER_KEYSEEN
   };
 
 enum cf_status
   {
   cfn_repaired,
   cfn_notkept,
+  cfn_kept,
   cfn_nop
   };
 
@@ -986,7 +1044,8 @@ typedef enum
   INHERIT_ACCESS_ONLY,
   INHERIT_DEFAULT_ONLY,
   INHERIT_ACCESS_AND_DEFAULT
-  }inherit_t;
+  }
+inherit_t;
 
 enum insert_match
    {
@@ -996,24 +1055,79 @@ enum insert_match
    cf_exact_match
    };
 
+enum monitord_rep
+   {
+   mon_rep_mag,
+   mon_rep_week,
+   mon_rep_yr
+   };
+
+enum software_rep
+   {
+   sw_rep_installed,
+   sw_rep_patch_avail,
+   sw_rep_patch_installed
+   };
+
+enum promiselog_rep
+   {
+   plog_repaired,
+   plog_notkept
+   };
+
+enum time_window
+   {
+   time_hour,
+   time_day,
+   time_week
+   };
+
+/*************************************************************************/
+
+enum cfd_menu
+   {
+   cfd_menu_delta,
+   cfd_menu_full,
+   cfd_menu_relay,
+   cfd_menu_error
+   };
+
+/*************************************************************************/
+
+enum cfl_view
+   {
+   cfl_view_sumcomp_wk,
+   cfl_view_sumrepaired_wk,
+   cfl_view_sumnotkept_wk,
+   cfl_view_repairedreason,
+   cfl_view_notkeptreason,
+   cfl_view_error
+   };
+
+
 /*************************************************************************/
 /* Runtime constraint structures                                         */
 /*************************************************************************/
 
 #define OVECCOUNT 30
 
-struct CfRegEx
-{
-#if defined HAVE_PCRE_H || defined HAVE_PCRE_PCRE_H
-   pcre *rx;
-   const char *err;
-   int err_offset;
-#else
-   regex_t rx;
-#endif
-   int failed;
-   char *regexp;
-};
+/*******************************************************************/
+
+struct CfKeyBinding
+   {
+   char *name;
+   RSA *key;
+   char *address;
+   time_t timestamp;
+   };
+
+/*************************************************************************/
+
+struct CfKeyHostSeen
+   {
+   char address[CF_ADDRSIZE];
+   struct QPoint Q;   
+   };
 
 /*************************************************************************/
 
@@ -1085,6 +1199,9 @@ struct DefineClasses
    struct Rlist *del_change;
    struct Rlist *del_kept;
    struct Rlist *del_notkept;
+   struct Rlist *retcode_kept;
+   struct Rlist *retcode_repaired;
+   struct Rlist *retcode_failed;
    };
 
 
@@ -1094,48 +1211,45 @@ struct DefineClasses
 
 struct Topic
    {
-   char *topic_type;
+   int id;
+   char *topic_context;
    char *topic_name;
-   char *topic_comment;
-   struct Occurrence *occurrences;
+   double evc;
+   struct Rlist *synonyms;
    struct TopicAssociation *associations;
    struct Topic *next;
    };
 
 struct TopicAssociation
    {
-   char *assoc_type;
+   char *fwd_context;
    char *fwd_name;
    char *bwd_name;
    struct Rlist *associates;
-   char *associate_topic_type;
+   char *bwd_context;
    struct TopicAssociation *next;
    };
 
 struct Occurrence
    {
+   char *occurrence_context;
    char *locator; /* Promiser */
    enum representations rep_type;
    struct Rlist *represents; /* subtype represented by promiser */
    struct Occurrence *next;
    };
 
+struct Inference
+   {
+   char *inference; // Promiser
+   char *precedent;
+   char *qualifier;
+   struct Inference *next;
+   };
 
 /*************************************************************************/
 /* SQL Database connectors                                               */
 /*************************************************************************/
-
-#ifdef HAVE_MYSQL_MYSQL_H
-#include <mysql/mysql.h>
-#endif
-
-#ifdef HAVE_PGSQL_LIBPQ_FE_H
-#include <pgsql/libpq-fe.h>
-#endif
-
-#ifdef HAVE_LIBPQ_FE_H
-#include <libpq-fe.h>
-#endif
 
 enum cfdbtype
    {
@@ -1146,23 +1260,16 @@ enum cfdbtype
 
 typedef struct 
    {
-#ifdef HAVE_MYSQL_MYSQL_H
-   MYSQL my_conn;
-   MYSQL_RES *my_res;
-#endif
-#if defined HAVE_PGSQL_LIBPQ_FE_H || defined HAVE_LIBPQ_FE_H
-   PGconn *pq_conn;
-   PGresult   *pq_res;
-#endif
    int connected;
    int result;
    int row;
-   int maxcolumns;
-   int maxrows;
+   unsigned int maxcolumns;
+   unsigned int maxrows;
    int column;
    char **rowdata;
    char *blank;
    enum cfdbtype type;
+   void *data; /* Generic pointer to RDBMS-specific data */
    }
 CfdbConn;
 
@@ -1232,6 +1339,7 @@ struct FileCopy
    int verify;
    int purge;
    short portnumber;
+   short timeout;
    };
 
 struct ServerItem
@@ -1729,8 +1837,11 @@ struct Attributes
 
    char *fwd_name;
    char *bwd_name;
+   struct Rlist *precedents;
+   struct Rlist *qualifiers;
    struct Rlist *associates;
    struct Rlist *represents;
+   struct Rlist *synonyms;
    char *rep_type;
    char *path_root;
    char *web_root;
@@ -1741,15 +1852,52 @@ enum cf_meter
 meter_compliance_week,
 meter_compliance_day,
 meter_compliance_hour,
-meter_patch_day,
-meter_soft_day,
+meter_perf_day,
+meter_other_day,
 meter_comms_hour,
 meter_anomalies_day,
 meter_endmark
 };
 
+/*************************************************************************/
+/* definitions for test suite                                            */
+/*************************************************************************/
+
+// Classes: 601 - 650
+#define CF_CLASS_ALL 0
+#define CF_CLASS_REPORT 2
+#define CF_CLASS_VARS 4
+#define CF_CLASS_SLIST 8
+#define CF_CLASS_STRING 16
+#define CF_CLASS_PROCESS 32
+#define CF_CLASS_FILE 64
+#define CF_CLASS_DIR 128
+#define CF_CLASS_CMD 256
+#define CF_CLASS_OTHER 512
+#define CF_CLASS_TOP10 1024
+
+/*************************************************************************/
+/* common macros                                                         */
+/*************************************************************************/
+
+#define EMPTY(str) ((str == NULL) || (str[0] == '\0'))
+#define BEGINSWITH(str,start) (strncmp(str,start,strlen(start)) == 0)
+#define CFSTRDUP(str) ((str != NULL) ? strdup(str) : NULL)
+#define CFFREE(ptr) if(ptr) free(ptr)
+
+// classes not interesting in reports
+#define IGNORECLASS(c)                                                         \
+ (strncmp(c,"Min",3) == 0 || strncmp(c,"Hr",2) == 0 || strcmp(c,"Q1") == 0     \
+  || strcmp(c,"Q2") == 0 || strcmp(c,"Q3") == 0 || strcmp(c,"Q4") == 0         \
+  || strncmp(c,"GMT_Hr",6) == 0  || strncmp(c,"Yr",2) == 0                     \
+  || strncmp(c,"Day",3) == 0 || strcmp(c,"license_expired") == 0               \
+  || strcmp(c,"any") == 0 || strcmp(c,"from_cfexecd") == 0                     \
+  || IsStrIn(c,MONTH_TEXT,false) || IsStrIn(c,DAY_TEXT,false)                  \
+  || IsStrIn(c,SHIFT_TEXT,false))
+
+
 #include "prototypes3.h"
 
-#ifdef HAVE_LIBCFNOVA
+#ifdef HAVE_NOVA
 #include <cf.nova.h>
 #endif

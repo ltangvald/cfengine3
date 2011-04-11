@@ -1,16 +1,18 @@
 
-AM_CFLAGS = @CFLAGS@ @GCC_CFLAG@
+AM_CFLAGS = @CFLAGS@ @GCC_CFLAG@ -fPIC -DPIC
 INCLUDES = @BERKELEY_DB_CFLAGS@ @OPENSSL_LIB_CPPFLAGS@
 
-noinst_LIBRARIES = libcfpub.a
+AM_CPPFLAGS = $(NOVA_CFLAGS) $(CONSTELLATION_CFLAGS)
 
-libcfpub_a_SOURCES =							\
+noinst_LTLIBRARIES = libcfpub.la
+
+libcfpub_la_SOURCES =							\
 	getopt.c							\
 	getopt1.c							\
-	full-write.c							\
 	regex.c								\
-	getloadavg.c							\
 	snprintf.c
+
+libcfpub_la_LIBADD = $(LTLIBOBJS)
 
 EXTRA_DIST =								\
 	getopt.h							\

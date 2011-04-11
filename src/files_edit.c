@@ -38,6 +38,12 @@ struct edit_context *NewEditContext(char *filename,struct Attributes a,struct Pr
 
 { struct edit_context *ec;
 
+if (!IsAbsoluteFileName(filename))
+   {
+   CfOut(cf_error,"","Relative file name %s was marked for editing but has no invariant meaning\n",filename);
+   return NULL;
+   }
+ 
 if ((ec = malloc(sizeof(struct edit_context))) == NULL)
    {
    return NULL;
@@ -47,6 +53,7 @@ ec->filename = filename;
 ec->file_start = NULL;
 ec->file_classes = NULL;
 ec->num_edits = 0;
+ec->empty_first = a.edits.empty_before_use;
 
 if (!LoadFileAsItemList(&(ec->file_start),filename,a,pp))
    {
@@ -55,7 +62,7 @@ if (!LoadFileAsItemList(&(ec->file_start),filename,a,pp))
 
 if (a.edits.empty_before_use)
    {
-   CfOut(cf_verbose,"","Build file model from a blank slate (emptying)\n");
+   CfOut(cf_verbose,""," -> Build file model from a blank slate (emptying)\n");
    DeleteItemList(ec->file_start);
    ec->file_start = NULL;
    }
@@ -134,7 +141,7 @@ if (cfstat(file,&statbuf) == -1)
 
 if (a.edits.maxfilesize != 0 && statbuf.st_size > a.edits.maxfilesize)
    {
-   CfOut(cf_inform,""," !! File %s is bigger than the limit edit.max_file_size = %d bytes\n",file,a.edits.maxfilesize);
+   CfOut(cf_inform,""," !! File %s is bigger than the limit edit.max_file_size = %d > %d bytes\n",file,statbuf.st_size,a.edits.maxfilesize);
    return(false);
    }
 
@@ -255,7 +262,7 @@ if (fclose(fp) == -1)
    return false;
    }
  
-cfPS(cf_inform,CF_CHG,"",pp,a,"Edited file %s \n",file); 
+cfPS(cf_inform,CF_CHG,"",pp,a," -> Edited file %s \n",file); 
 
 if (cf_rename(file,backup) == -1)
    {
@@ -295,4 +302,73 @@ if (selinux_enabled)
 #endif
 
 return true;
+}
+
+/*********************************************************************/
+
+int AppendIfNoSuchLine(char *filename, char *line)
+/* Appends line to the file with path filename if it is not already
+   there. line should not contain newline.
+   Returns true if the line is there on exit, false on error. */
+{
+  FILE *fread,*fappend;
+  char lineCp[CF_MAXVARSIZE], lineBuf[CF_MAXVARSIZE];
+  int lineExists = false;
+  int result = false;
+  size_t written = 0;
+  
+  if ((fread = fopen(filename,"rw")) == NULL)
+   {
+   CfOut(cf_error,"fopen","!! Cannot open the file \"%s\" for read", filename);
+   return false;
+   }
+  
+  while(CfReadLine(lineBuf,sizeof(lineBuf),fread))  // strips newlines automatically
+    {
+    if(strcmp(line,lineBuf) == 0)
+      {
+      lineExists = true;
+      result = true;
+      break;
+      }
+    }
+
+  fclose(fread);
+
+
+  if(!lineExists)
+    // we are at EOF and line does not exist already
+    {
+      if((fappend = fopen(filename,"a")) == NULL)
+	{
+	CfOut(cf_error,"fopen","!! Cannot open the file \"%s\" for append", filename);
+	return false;
+	}
+      
+      if(line[strlen(line) - 1] == '\n')
+	{
+	snprintf(lineCp,sizeof(lineCp),"%s",line);
+	}
+      else
+	{
+	snprintf(lineCp,sizeof(lineCp),"%s\n",line);
+	}
+
+      written = fwrite(lineCp, sizeof(char), strlen(lineCp), fappend);
+	
+      if(written == strlen(lineCp))
+	{
+	result = true;
+	}
+      else
+	{
+	CfOut(cf_error, "fwrite", "!! Could not write %d characters to \"%s\" (wrote %d)", strlen(lineCp), filename, written);
+	result = false;
+	}
+      
+      fclose(fappend);
+    }
+  
+
+  return result;
 }

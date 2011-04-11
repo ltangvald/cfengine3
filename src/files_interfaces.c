@@ -210,9 +210,9 @@ cf_closedir(dirh);
 void VerifyFilePromise(char *path,struct Promise *pp)
 
 { struct stat osb,oslb,dsb,dslb;
-  struct Attributes a;
+  struct Attributes a = {0};
   struct CfLock thislock;
-  int exists,success,rlevel = 0,isthere,save = true;
+  int exists,success,rlevel = 0,isthere,save = true,isdirectory = false;
 
 a = GetFilesAttributes(pp);
 
@@ -221,7 +221,7 @@ if (!FileSanityChecks(path,a,pp))
    return;
    }
 
-thislock = AcquireLock(path,VUQNAME,CFSTARTTIME,a,pp);
+thislock = AcquireLock(path,VUQNAME,CFSTARTTIME,a,pp,false);
 
 if (thislock.lock == NULL)
    {
@@ -291,7 +291,7 @@ if (exists && !VerifyFileLeaf(path,&oslb,a,pp))
       return;
       }
    }
-
+     
 if (cfstat(path,&osb) == -1)
    {
    if (a.create||a.touch)
@@ -343,7 +343,7 @@ if (a.link.link_children)
    }
 
 /* Phase 1 - */
-
+     
 if (exists && (a.havedelete||a.haverename||a.haveperms||a.havechange||a.transformer))
    {
    lstat(path,&oslb); /* if doesn't exist have to stat again anyway */
@@ -392,7 +392,7 @@ if (a.havecopy)
 
 if (a.havelink && a.link.link_children)
    {
-   ScheduleLinkChildrenOperation(path,a,pp);
+   ScheduleLinkChildrenOperation(path,a.link.source,1,a,pp);
    }
 else if (a.havelink)
    {
@@ -404,6 +404,13 @@ else if (a.havelink)
 if (a.haveedit)
    {
    ScheduleEditOperation(path,a,pp);
+   }
+
+// Once more in case a file has been created as a result of editing or copying
+
+if (cfstat(path,&osb) != -1 && S_ISREG(osb.st_mode))
+   {
+   VerifyFileLeaf(path,&oslb,a,pp);
    }
 
 SaveSetuid(a,pp);
@@ -534,7 +541,7 @@ void PurgeLocalFiles(struct Item *filelist,char *localdir,struct Attributes attr
 { DIR *dirh;
   struct stat sb; 
   struct dirent *dirp;
-  char filename[CF_BUFSIZE];
+  char filename[CF_BUFSIZE] = {0};
 
 Debug("PurgeLocalFiles(%s)\n",localdir);
 
@@ -582,9 +589,12 @@ for (dirp = readdir(dirh); dirp != NULL; dirp = readdir(dirh))
    if (!IsItemIn(filelist,dirp->d_name))
       {
       strncpy(filename,localdir,CF_BUFSIZE-2);
-      AddSlash(filename);
-      strncat(filename,dirp->d_name,CF_BUFSIZE-2);
       
+      AddSlash(filename);
+
+      Join(filename,dirp->d_name,CF_BUFSIZE-1);
+      
+
       if (DONTDO)
          {
          printf(" !! Need to purge %s from copy dest directory\n",filename);
@@ -599,7 +609,7 @@ for (dirp = readdir(dirh); dirp != NULL; dirp = readdir(dirh))
             }
          else if (S_ISDIR(sb.st_mode))
             {
-            struct Attributes purgeattr;
+            struct Attributes purgeattr = {0};
             memset(&purgeattr,0,sizeof(purgeattr));
 
             /* Deletion is based on a files promise */
@@ -618,6 +628,12 @@ for (dirp = readdir(dirh); dirp != NULL; dirp = readdir(dirh))
                {
                cfPS(cf_verbose,CF_INTERPT,"rmdir",pp,attr," !! Couldn't empty directory %s while purging\n",filename);
                }
+
+
+	    if (chdir("..") != 0)
+	       {
+	       CfOut(cf_error, "chdir", "!! Can't step out of directory \"%s\" before deletion",filename);
+	       }
             
             if (rmdir(filename) == -1)
                {
@@ -654,6 +670,8 @@ if(attr.copy.copy_links != NULL)
    CfOut(cf_verbose, "", "copy_from.copylink_patterns is ignored on Windows (source files cannot be symbolic links)");
    }
 #endif  /* MINGW */
+
+attr.link.when_no_file = cfa_force;
 
 if (attr.copy.servers)
    {
@@ -1174,7 +1192,7 @@ int CfReadLine(char *buff,int size,FILE *fp)
 buff[0] = '\0';
 buff[size - 1] = '\0';                        /* mark end of buffer */
 
-if (fgets(buff, size, fp) == NULL)
+if (fgets(buff,size,fp) == NULL)
    {
    *buff = '\0';                   /* EOF */
    return false;
@@ -1219,6 +1237,13 @@ int FileSanityChecks(char *path,struct Attributes a,struct Promise *pp)
 if (a.havelink && a.havecopy)
    {
    CfOut(cf_error,""," !! Promise constraint conflicts - %s file cannot both be a copy of and a link to the source",path);
+   PromiseRef(cf_error,pp);
+   return false;
+   }
+
+if (a.havelink && !a.link.source)
+   {
+   CfOut(cf_error,""," !! Promise to establish a link at %s has no source",path);
    PromiseRef(cf_error,pp);
    return false;
    }
@@ -1313,7 +1338,7 @@ return true;
 
 void LoadSetuid(struct Attributes a,struct Promise *pp)
 
-{ struct Attributes b;
+{ struct Attributes b = {0};
   char filename[CF_BUFSIZE];
 
 b = a;
@@ -1333,7 +1358,7 @@ if (!LoadFileAsItemList(&VSETUIDLIST,filename,b,pp))
 
 void SaveSetuid(struct Attributes a,struct Promise *pp)
 
-{ struct Attributes b;
+{ struct Attributes b = {0};
   char filename[CF_BUFSIZE];
 
 b = a;
@@ -1345,7 +1370,7 @@ MapName(filename);
 
 PurgeItemList(&VSETUIDLIST,"SETUID/SETGID");
 
-if (VSETUIDLIST && !CompareToFile(VSETUIDLIST,filename,a,pp))
+if (!CompareToFile(VSETUIDLIST,filename,a,pp))
    {
    SaveItemListAsFile(VSETUIDLIST,filename,b,pp);
    }
@@ -1379,7 +1404,7 @@ switch (attr.copy.compare)
        
        if (ok_to_copy)
           { 
-          CfOut(cf_verbose,""," !! Image file %s has a wrong MD5 checksum (should be copy of %s)\n",destfile,sourcefile);
+          CfOut(cf_verbose,""," !! Image file %s has a wrong digest/checksum (should be copy of %s)\n",destfile,sourcefile);
           return ok_to_copy;
           }
        break;
@@ -1515,6 +1540,10 @@ switch (attr.copy.link_type)
    case cfa_absolute:
        status = VerifyAbsoluteLink(destfile,linkbuf,attr,pp);
        break;
+
+   case cfa_hardlink:
+       status = VerifyHardLink(destfile,linkbuf,attr,pp);
+       break;
        
    default:
        FatalError("LinkCopy software error");
@@ -1630,7 +1659,7 @@ if (sstat.st_nlink > 1)  /* Preserve hard links, if possible */
 
 if (attr.copy.servers != NULL && strcmp(attr.copy.servers->item,"localhost") != 0)
    {
-   Debug("This is a remote copy from server: %s\n",attr.copy.servers->item);
+   Debug("This is a remote copy from server: %s\n",(char *)attr.copy.servers->item);
    remote = true;
    }
 
@@ -1720,7 +1749,7 @@ if (!discardbackup)
    if (attr.copy.backup == cfa_timestamp)
       {
       stampnow = time((time_t *)NULL);   
-      snprintf(stamp,CF_BUFSIZE-1,"_%d_%s", CFSTARTTIME, CanonifyName(cf_ctime(&stampnow)));
+      snprintf(stamp,CF_BUFSIZE-1,"_%lu_%s", CFSTARTTIME, CanonifyName(cf_ctime(&stampnow)));
 
       if (!JoinSuffix(backup,stamp))
          {

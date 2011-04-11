@@ -32,26 +32,6 @@
 #include "cf3.defs.h"
 #include "cf3.extern.h"
 
-/*****************************************************************************/
-
-FILE *cf_fopen(char *file,char *type)
-
-{
-/* Windows native eventually? */
-
-return fopen(file,type);
-}
-
-/*****************************************************************************/
-
-int cf_fclose(FILE *fp)
-
-{
-/* Windows native eventually? */
-
-return fclose(fp);
-}
-
 /*******************************************************************/
 /* Pipe API - OS function mapping                                  */
 /*******************************************************************/
@@ -130,6 +110,62 @@ return Unix_cf_pclose_def(pfp, a, pp);
 /* End pipe API                                                    */
 /*******************************************************************/
 
+int VerifyCommandRetcode(int retcode, int fallback, struct Attributes a, struct Promise *pp)
+{
+  char retcodeStr[128] = {0};
+  int result = true;
+  int matched = false;
+
+if(a.classes.retcode_kept || a.classes.retcode_repaired || a.classes.retcode_failed)
+  {
+  
+  snprintf(retcodeStr,sizeof(retcodeStr),"%d",retcode);
+    
+  if(KeyInRlist(a.classes.retcode_kept, retcodeStr))
+    {
+    cfPS(cf_inform,CF_NOP,"",pp,a,"-> Command related to promiser \"%s\" returned code defined as promise kept (%d)", pp->promiser, retcode);
+    result = true;
+    matched = true;
+    }
+
+  if(KeyInRlist(a.classes.retcode_repaired, retcodeStr))
+    {
+    cfPS(cf_inform,CF_CHG,"",pp,a,"-> Command related to promiser \"%s\" returned code defined as promise repaired (%d)", pp->promiser, retcode);
+    result = true;
+    matched = true;
+    }
+
+  if(KeyInRlist(a.classes.retcode_failed, retcodeStr))
+    {
+    cfPS(cf_inform,CF_FAIL,"",pp,a,"!! Command related to promiser \"%s\" returned code defined as promise failed (%d)", pp->promiser, retcode);
+    result = false;
+    matched = true;
+    }
+
+  if(!matched)
+    {
+    CfOut(cf_verbose, "", "Command related to promiser \"%s\" returned code %d -- did not match any failed, repaired or kept lists", pp->promiser, retcode);
+    }
+
+  }
+ else if(fallback)  // default: 0 is success, != 0 is failure
+   {
+   if (retcode == 0)
+     {
+     cfPS(cf_verbose,CF_CHG,"",pp,a," -> Finished command related to promiser \"%s\" -- succeeded",pp->promiser);
+     result = true;
+     }
+   else
+     {
+     cfPS(cf_inform,CF_FAIL,"",pp,a," !! Finished command related to promiser \"%s\" -- an error occurred (returned %d)",pp->promiser, retcode);
+     result = false;
+     }
+   }
+
+ return result;
+}
+
+
 
 #ifndef MINGW
 
@@ -140,7 +176,7 @@ return Unix_cf_pclose_def(pfp, a, pp);
 /*****************************************************************************/
 
 pid_t *CHILDREN;
-int    MAX_FD = 20; /* Max number of simultaneous pipes */
+int    MAX_FD = 128; /* Max number of simultaneous pipes */
 
 /*****************************************************************************/
 
@@ -183,6 +219,8 @@ if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
 
 if ((pid = fork()) == -1)
    {
+   close(pd[0]);
+   close(pd[1]);
    return NULL;
    }
 
@@ -277,11 +315,13 @@ else
    
    if (fileno(pp) >= MAX_FD)
       {
-      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD, check for defunct children", fileno(pp), pid);
+      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD in Unix_cf_popen, check for defunct children", fileno(pp), pid);
       }
    else
       {
+      ThreadLock(cft_count);
       CHILDREN[fileno(pp)] = pid;
+      ThreadUnlock(cft_count);
       }
 
    return pp;
@@ -308,13 +348,21 @@ if ((*type != 'r' && *type != 'w') || (type[1] != '\0'))
    return NULL;
    }
 
+if (!ThreadLock(cft_count))
+   {
+   return NULL;
+   }
+
 if (CHILDREN == NULL)   /* first time */
    {
    if ((CHILDREN = calloc(MAX_FD,sizeof(pid_t))) == NULL)
       {
+      ThreadUnlock(cft_count);
       return NULL;
       }
    }
+
+ThreadUnlock(cft_count);
 
 if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
    {
@@ -323,6 +371,8 @@ if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
 
 if ((pid = fork()) == -1)
    {
+   close(pd[0]);
+   close(pd[1]);
    return NULL;
    }
 
@@ -442,11 +492,13 @@ else
    
    if (fileno(pp) >= MAX_FD)
       {
-      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD, check for defunct children", fileno(pp), pid);
+      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD in Unix_cf_popensetuid, check for defunct children", fileno(pp), pid);
       }
    else
       {
+      ThreadLock(cft_count);
       CHILDREN[fileno(pp)] = pid;
+      ThreadUnlock(cft_count);
       }
    
    return pp;
@@ -474,13 +526,21 @@ if ((*type != 'r' && *type != 'w') || (type[1] != '\0'))
    return NULL;
    }
 
+if (!ThreadLock(cft_count))
+   {
+   return NULL;
+   }
+
 if (CHILDREN == NULL)   /* first time */
    {
    if ((CHILDREN = calloc(MAX_FD,sizeof(pid_t))) == NULL)
       {
+      ThreadUnlock(cft_count);
       return NULL;
       }
    }
+
+ThreadUnlock(cft_count);
 
 if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
    {
@@ -489,6 +549,8 @@ if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
 
 if ((pid = fork()) == -1)
    {
+   close(pd[0]);
+   close(pd[1]);
    return NULL;
    }
 
@@ -563,11 +625,13 @@ else
    
    if (fileno(pp) >= MAX_FD)
       {
-      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD, check for defunct children", fileno(pp), pid);
+      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD in Unix_cf_popen_sh, check for defunct children", fileno(pp), pid);
       }
    else
       {
+      ThreadLock(cft_count);
       CHILDREN[fileno(pp)] = pid;
+      ThreadUnlock(cft_count);
       }
    
    return pp;
@@ -593,13 +657,21 @@ if ((*type != 'r' && *type != 'w') || (type[1] != '\0'))
    return NULL;
    }
 
+if (!ThreadLock(cft_count))
+   {
+   return NULL;
+   }
+
 if (CHILDREN == NULL)   /* first time */
    {
    if ((CHILDREN = calloc(MAX_FD,sizeof(pid_t))) == NULL)
       {
+      ThreadUnlock(cft_count);
       return NULL;
       }
    }
+
+ThreadUnlock(cft_count);
 
 if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
    {
@@ -608,6 +680,8 @@ if (pipe(pd) < 0)        /* Create a pair of descriptors to this process */
 
 if ((pid = fork()) == -1)
    {
+   close(pd[0]);
+   close(pd[1]);
    return NULL;
    }
 
@@ -705,13 +779,15 @@ else
    
    if (fileno(pp) >= MAX_FD)
       {
-      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD, check for defunct children", fileno(pp), pid);
+      CfOut(cf_error,"","File descriptor %d of child %d higher than MAX_FD in Unix_cf_popen_shsetuid, check for defunct children", fileno(pp), pid);
       cf_pwait(pid);
       return NULL;
       }
    else
       {
+      ThreadLock(cft_count);
       CHILDREN[fileno(pp)] = pid;
+      ThreadUnlock(cft_count);
       }
    return pp;
    }
@@ -740,7 +816,12 @@ while(waitpid(pid,&status,0) < 0)
       }
    }
 
-return status; 
+if (!WIFEXITED(status))
+   {
+   return -1;
+   }
+
+return WEXITSTATUS(status);
  
 #else
 
@@ -758,7 +839,7 @@ if (WIFSIGNALED(status))
    return -1;
    }
  
-if (! WIFEXITED(status))
+if (!WIFEXITED(status))
    {
    return -1;
    }
@@ -776,17 +857,25 @@ int Unix_cf_pclose(FILE *pp)
 
 Debug("Unix_cf_pclose(pp)\n");
 
-if (CHILDREN == NULL)  /* popen hasn't been called */
+if (!ThreadLock(cft_count))
    {
    return -1;
    }
+
+if (CHILDREN == NULL)  /* popen hasn't been called */
+   {
+   ThreadUnlock(cft_count);
+   return -1;
+   }
+
+ThreadUnlock(cft_count);
 
 ALARM_PID = -1;
 fd = fileno(pp);
 
 if (fd >= MAX_FD)
    {
-   CfOut(cf_error,"","File descriptor %d of child higher than MAX_FD, check for defunct children", fd);
+   CfOut(cf_error,"","File descriptor %d of child higher than MAX_FD in Unix_cf_pclose, check for defunct children", fd);
    pid = -1;
    }
 else
@@ -795,8 +884,10 @@ else
       {
       return -1;
       }
-   
+
+   ThreadLock(cft_count);
    CHILDREN[fd] = 0;
+   ThreadUnlock(cft_count);
    }
 
 if (fclose(pp) == EOF)
@@ -810,23 +901,33 @@ return cf_pwait(pid);
 /*******************************************************************/
 
 int Unix_cf_pclose_def(FILE *pfp,struct Attributes a,struct Promise *pp)
-
+/**
+ * Defines command failure/success with cfPS based on exit code.
+ */
 { int fd, status, wait_result;
   pid_t pid;
 
 Debug("Unix_cf_pclose_def(pfp)\n");
 
-if (CHILDREN == NULL)  /* popen hasn't been called */
+if (!ThreadLock(cft_count))
    {
    return -1;
    }
+
+if (CHILDREN == NULL)  /* popen hasn't been called */
+   {
+   ThreadUnlock(cft_count);
+   return -1;
+   }
+
+ThreadUnlock(cft_count);
 
 ALARM_PID = -1;
 fd = fileno(pfp);
 
 if (fd >= MAX_FD)
    {
-   CfOut(cf_error,"","File descriptor %d of child higher than MAX_FD, check for defunct children", fd);
+   CfOut(cf_error,"","File descriptor %d of child higher than MAX_FD in Unix_cf_pclose_def, check for defunct children", fd);
    fclose(pfp);
    return -1;
    }
@@ -836,7 +937,9 @@ if ((pid = CHILDREN[fd]) == 0)
    return -1;
    }
 
+ThreadLock(cft_count);
 CHILDREN[fd] = 0;
+ThreadUnlock(cft_count);
 
 if (fclose(pfp) == EOF)
    {
@@ -855,15 +958,13 @@ while(waitpid(pid,&status,0) < 0)
       }
    }
 
-if (status == 0)
+if (!WIFEXITED(status))
    {
-   Debug(" -> Finished script %s ok\n",pp->promiser);
-   cfPS(cf_verbose,CF_CHG,"",pp,a," -> Finished script - succeeded %s\n",pp->promiser);
+   cfPS(cf_inform,CF_FAIL,"",pp,a," !! Finished script \"%s\" - failed (abnormal termination)",pp->promiser);
+   return -1;
    }
-else
-   {
-   cfPS(cf_inform,CF_INTERPT,"",pp,a," !! Finished script %s -- an error occurred\n",pp->promiser);
-   }
+
+VerifyCommandRetcode(WEXITSTATUS(status),true,a,pp);
 
 return status; 
  
@@ -886,26 +987,11 @@ if (WIFSIGNALED(status))
 
 if (!WIFEXITED(status))
    {
-   cfPS(cf_inform,CF_FAIL,"",pp,a," !! Finished script - failed %s\n",pp->promiser);
+   cfPS(cf_inform,CF_FAIL,"",pp,a," !! Finished script \"%s\" - failed (abnormal termination)",pp->promiser);
    return -1;
    }
 
-if (WEXITSTATUS(status) == 0)
-   {
-   cfPS(cf_verbose,CF_CHG,"",pp,a," -> Finished script - succeeded %s\n",pp->promiser);
-   }
-else
-   {
-   if (errno != EINTR)
-      {
-      cfPS(cf_inform,CF_FAIL,"",pp,a," !! Finished script - failed %s\n",pp->promiser);
-      return -1;
-      }
-   else
-      {
-      cfPS(cf_inform,CF_INTERPT,"",pp,a," !! Script %s - interrupt\n",pp->promiser);
-      }
-   }
+VerifyCommandRetcode(WEXITSTATUS(status),true,a,pp);
 
 return (WEXITSTATUS(status));
 #endif

@@ -1,23 +1,27 @@
-/* 
-   Copyright (C) 2008 - Cfengine AS
+/*
+   Copyright (C) Cfengine AS
 
    This file is part of Cfengine 3 - written and maintained by Cfengine AS.
- 
+
    This program is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by the
-   Free Software Foundation; either version 3, or (at your option) any
-   later version. 
+   Free Software Foundation; version 3.
+
    This program is distributed in the hope that it will be useful,
    but WITHOUT ANY WARRANTY; without even the implied warranty of
    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
    GNU General Public License for more details.
- 
+
   You should have received a copy of the GNU General Public License
-  
   along with this program; if not, write to the Free Software
   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
 
+  To the extent this program is licensed as part of the Enterprise
+  versions of Cfengine, the applicable Commerical Open Source License
+  (COSL) may apply to this file if you as a licensee so wish it. See
+  included file COSL.txt.
 */
+
 /*****************************************************************************/
 /*                                                                           */
 /* File: cf3.extern.h                                                        */
@@ -28,21 +32,30 @@
 
 /* See variables in cf3globals.c and syntax.c */
 
+extern struct Topic *TOPICHASH[CF_HASHTABLESIZE];
 extern struct PromiseParser P;
 extern int REQUIRE_COMMENTS;
+extern int FIPS_MODE;
 extern char POLICY_SERVER[CF_BUFSIZE];
+extern int ALWAYS_VALIDATE;
 extern int VIEWS;
 extern int LICENSES;
 extern char EXPIRY[32];
+extern char LICENSE_COMPANY[CF_SMALLBUF];
 extern int IGNORE_MISSING_INPUTS;
 extern int IGNORE_MISSING_BUNDLES;
 extern char WEBDRIVER[CF_MAXVARSIZE];
+extern char DOCROOT[CF_MAXVARSIZE];
 extern char BANNER[2*CF_BUFSIZE];
 extern char FOOTER[CF_BUFSIZE];
 extern char STYLESHEET[CF_BUFSIZE];
 extern int CF_NODES;
 extern int CF_EDGES;
-
+extern int KEYTTL;
+extern struct Rlist *SERVER_KEYSEEN;
+extern unsigned int CFTEST_CLASS;
+extern enum cfhashes CF_DEFAULT_DIGEST;
+extern int CF_DEFAULT_DIGEST_LEN;
 extern struct Item *EDIT_ANCHORS;
 
 extern struct Bundle *BUNDLES;
@@ -63,6 +76,7 @@ extern struct Item *DONELIST;
 extern struct Rlist *CBUNDLESEQUENCE;
 extern struct Item *ROTATED;
 extern double FORGETRATE;
+extern struct Rlist *GOALS;
 
 extern struct Rlist *CF_STCK;
 extern int EDIT_MODEL;
@@ -86,7 +100,6 @@ extern char HASHDB[CF_BUFSIZE];
 extern int FSTAB_EDITS;
 extern char GRAPHDIR[CF_BUFSIZE];
 
-
 extern int CFA_MAXTHREADS;
 extern char *THIS_BUNDLE;
 extern char THIS_AGENT[CF_MAXVARSIZE];
@@ -97,6 +110,7 @@ extern int FACILITY;
 extern char SYSLOGHOST[CF_MAXVARSIZE];
 extern unsigned short SYSLOGPORT;
 extern time_t PROMISETIME;
+extern time_t CF_LOCKHORIZON;
 extern int ABORTBUNDLE;
 extern struct Item *ABORTBUNDLEHEAP;
 extern int LASTSEENEXPIREAFTER;
@@ -104,6 +118,7 @@ extern int LASTSEEN;
 extern char *DEFAULT_COPYTYPE;
 extern struct Rlist *SERVERLIST;
 extern struct Item *PROCESSTABLE;
+extern struct Item *PROCESSREFRESH;
 extern struct Item *FSTABLIST;
 extern struct Rlist *MOUNTEDFSLIST;
 extern struct CfPackageManager *INSTALLED_PACKAGE_LISTS;
@@ -119,9 +134,15 @@ extern char *SHIFT_TEXT[];
 extern char FILE_SEPARATOR;
 extern char FILE_SEPARATOR_STR[2];
 
-extern time_t DATESTAMPS[CF_OBSERVABLES];
 extern char AGGREGATION[CF_BUFSIZE];
 extern char *UNITS[CF_OBSERVABLES];
+
+extern char SQL_DATABASE[CF_MAXVARSIZE];
+extern char SQL_OWNER[CF_MAXVARSIZE];
+extern char SQL_PASSWD[CF_MAXVARSIZE];
+extern char SQL_SERVER[CF_MAXVARSIZE];
+extern char SQL_CONNECT_NAME[CF_MAXVARSIZE];
+extern enum cfdbtype SQL_TYPE;
 
 extern double VAL_KEPT;
 extern double VAL_REPAIRED;
@@ -144,6 +165,7 @@ extern struct BodySyntax CF_BODY_TRANSACTION[];
 extern struct BodySyntax CF_VARBODY[];
 extern struct BodySyntax CF_CLASSBODY[];
 extern struct BodySyntax CFG_CONTROLBODY[];
+extern struct BodySyntax CFH_CONTROLBODY[];
 extern struct BodySyntax CFA_CONTROLBODY[];
 extern struct BodySyntax CFS_CONTROLBODY[];
 extern struct BodySyntax CFE_CONTROLBODY[];

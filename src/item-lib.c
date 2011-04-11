@@ -35,19 +35,41 @@
 
 /*********************************************************************/
 
+int ItemListSize(struct Item *list)
+
+{ int size = 0;
+  struct Item *ip;
+ 
+for (ip = list; ip != NULL; ip=ip->next)
+   {
+   if (ip->name)
+      {
+      size += strlen(ip->name);
+      }
+   }
+
+return size;
+}
+
+/*********************************************************************/
+
 void PurgeItemList(struct Item **list,char *name)
 
-{ struct Item *ip;
+{ struct Item *ip,*copy = NULL;
   struct stat sb;
- 
-for (ip = *list; ip != NULL; ip=ip->next)
+
+CopyList(&copy,*list);
+  
+for (ip = copy; ip != NULL; ip=ip->next)
    {
    if (cfstat(ip->name,&sb) == -1)
       {
       CfOut(cf_verbose,""," -> Purging file \"%s\" from %s list as it no longer exists",ip->name,name);
-      DeleteItem(list,ip);
+      DeleteItemLiteral(list,ip->name);
       }
    }
+
+DeleteItemList(copy);
 }
 
 /*********************************************************************/
@@ -74,7 +96,56 @@ return NULL;
 
 /*********************************************************************/
 
-int IsItemIn(struct Item *list,char *item)
+struct Item *ReturnItemInClass(struct Item *list,char *item,char *classes)
+
+{ struct Item *ptr; 
+
+if ((item == NULL) || (strlen(item) == 0))
+   {
+   return NULL;
+   }
+ 
+for (ptr = list; ptr != NULL; ptr=ptr->next)
+   {
+   if (strcmp(ptr->name,item) == 0 && strcmp(ptr->classes,classes) == 0)
+      {
+      return ptr;
+      }
+   }
+ 
+return NULL;
+}
+
+/*********************************************************************/
+
+int GetItemIndex(struct Item *list,char *item)
+/*
+ * Returns index of first occurence of item.
+ */
+{ struct Item *ptr; 
+  int i = 0;
+
+if ((item == NULL) || (strlen(item) == 0))
+   {
+   return -1;
+   }
+ 
+for (ptr = list; ptr != NULL; ptr=ptr->next)
+   {
+   if (strcmp(ptr->name,item) == 0)
+      {
+      return i;
+      }
+
+   i++;
+   }
+ 
+return -1;
+}
+
+/*********************************************************************/
+
+int IsItemIn(struct Item *list,const char *item)
 
 { struct Item *ptr; 
 
@@ -127,18 +198,75 @@ return false;
 
 /*********************************************************************/
 
-void IdempPrependItem(struct Item **liststart,char *itemstring,char *classes)
+struct Item *IdempPrependItem(struct Item **liststart,char *itemstring,char *classes)
+
+{
+  struct Item *ip;
+
+  ip = ReturnItemIn(*liststart,itemstring);
+
+  if(ip)
+    {
+    return ip;
+    }
+
+ PrependItem(liststart,itemstring,classes);
+
+ return *liststart;
+}
+
+/*********************************************************************/
+
+struct Item *IdempPrependItemClass(struct Item **liststart,char *itemstring,char *classes)
+
+{
+  struct Item *ip;
+
+  ip = ReturnItemInClass(*liststart,itemstring,classes);
+
+  if(ip)  // already exists
+    {
+    return ip;
+    }
+
+  PrependItem(liststart,itemstring,classes);
+
+  return *liststart;
+}
+
+
+/*********************************************************************/
+
+void IdempItemCount(struct Item **liststart,char *itemstring,char *classes)
+
+{ struct Item *ip;
+ 
+if (ip = ReturnItemIn(*liststart,itemstring))
+   {
+   ip->counter++;
+   }
+else
+   {
+   PrependItem(liststart,itemstring,classes);
+   }
+
+// counter+1 is the histogram of occurrences
+}
+
+/*********************************************************************/
+
+void IdempAppendItem(struct Item **liststart,char *itemstring,char *classes)
 
 {
 if (!IsItemIn(*liststart,itemstring))
    {
-   PrependItem(liststart,itemstring,classes);
+   AppendItem(liststart,itemstring,classes);
    }
 }
 
 /*********************************************************************/
 
-void PrependItem(struct Item **liststart,char *itemstring,char *classes)
+struct Item * PrependItem(struct Item **liststart,char *itemstring,char *classes)
 
 { struct Item *ip;
   char *sp,*spe = NULL;
@@ -162,6 +290,49 @@ strcpy(sp,itemstring);
 ip->name = sp;
 ip->next = *liststart;
 ip->counter = 0;
+ip->time = 0;
+*liststart = ip;
+
+if (classes != NULL)
+   {
+   strcpy(spe,classes);
+   ip->classes = spe;
+   }
+else
+   {
+   ip->classes = NULL;
+   }
+
+return *liststart;
+}
+
+/*********************************************************************/
+
+void PrependFullItem(struct Item **liststart,char *itemstring,char *classes,int counter,time_t t)
+
+{ struct Item *ip;
+  char *sp,*spe = NULL;
+
+if ((ip = (struct Item *)malloc(sizeof(struct Item))) == NULL)
+   {
+   FatalError("memory allocation in prepend item");
+   }
+
+if ((sp = malloc(strlen(itemstring)+2)) == NULL)
+   {
+   FatalError("memory allocation in prepend item");
+   }
+
+if ((classes != NULL) && (spe = malloc(strlen(classes)+2)) == NULL)
+   {
+   FatalError("Memory allocation in prepend item");
+   }
+
+strcpy(sp,itemstring);
+ip->name = sp;
+ip->next = *liststart;
+ip->counter = counter;
+ip->time = t;
 *liststart = ip;
 
 if (classes != NULL)
@@ -175,9 +346,10 @@ else
    }
 }
 
+
 /*********************************************************************/
 
-void AppendItemList(struct Item **liststart,char *itemstring)
+void AppendItem(struct Item **liststart,char *itemstring,char *classes)
 
 { struct Item *ip, *lp;
 
@@ -208,7 +380,15 @@ else
 
 ip->next = NULL;
 ip->counter = 0;
-ip->classes = NULL; /* unused now */
+
+if (classes)
+   {
+   ip->classes = strdup(classes); /* unused now */
+   }
+else
+   {
+   ip->classes = NULL;
+   }
 }
 
 /*********************************************************************/
@@ -349,9 +529,11 @@ return list1;
 /* Search                                                                  */
 /***************************************************************************/
 
-int SelectItemMatching(char *regex,struct Item *begin_ptr,struct Item *end_ptr,struct Item **match,struct Item **prev,char *fl)
+int SelectItemMatching(struct Item *start,char *regex,struct Item *begin_ptr,struct Item *end_ptr,struct Item **match,struct Item **prev,char *fl)
 
-{
+{ struct Item *ip;
+ int ret = false;
+
 *match = CF_UNDEFINED_ITEM;
 *prev = CF_UNDEFINED_ITEM;
 
@@ -364,18 +546,26 @@ if (fl && (strcmp(fl,"first") == 0))
    {
    if (SelectNextItemMatching(regex,begin_ptr,end_ptr,match,prev))
       {
-      return true;
+      ret = true;
       }
    }
 else
    {
    if (SelectLastItemMatching(regex,begin_ptr,end_ptr,match,prev))
       {
-      return true;
+      ret = true;
       }
    }
 
-return false;
+if (*match != CF_UNDEFINED_ITEM && *prev == CF_UNDEFINED_ITEM)
+   {
+   for (ip = start; ip != NULL && ip != *match; ip = ip->next)
+      {
+      *prev = ip;
+      }
+   }
+
+return ret;
 }
 
 /*********************************************************************/ 
@@ -411,7 +601,7 @@ return false;
 
 int SelectLastItemMatching(char *regexp,struct Item *begin,struct Item *end,struct Item **match,struct Item **prev) 
 
-{ struct Item *ip,*ip_last = NULL,*ip_prev = CF_UNDEFINED_ITEM;;
+{ struct Item *ip,*ip_last = NULL,*ip_prev = CF_UNDEFINED_ITEM;
  
 *match = CF_UNDEFINED_ITEM;
 *prev = CF_UNDEFINED_ITEM;
@@ -441,338 +631,45 @@ if (ip_last)
 return false;
 }
 
-/*******************************************************************/
+/*********************************************************************/ 
 
-/* Borrowed this algorithm from merge-sort implementation */
+int MatchRegion(char *chunk,struct Item *location,struct Item *begin,struct Item *end)
 
-struct Item *SortItemListNames(struct Item *list) /* Alphabetical */
+{ struct Item *ip = location;
+  char *sp,buf[CF_BUFSIZE];
 
-{ struct Item *p, *q, *e, *tail, *oldhead;
-  int insize, nmerges, psize, qsize, i;
-
-if (list == NULL)
-   { 
-   return NULL;
-   }
- 
-insize = 1;
-
-while (true)
+for (sp = chunk; sp <= chunk+strlen(chunk); sp++)
    {
-   p = list;
-   oldhead = list;                /* only used for circular linkage */
-   list = NULL;
-   tail = NULL;
-   
-   nmerges = 0;  /* count number of merges we do in this pass */
-   
-   while (p)
+   memset(buf,0,CF_BUFSIZE);
+   sscanf(sp,"%[^\n]",buf);
+   sp += strlen(buf);
+
+   if (!FullTextMatch(buf,ip->name))
       {
-      nmerges++;  /* there exists a merge to be done */
-      /* step `insize' places along from p */
-      q = p;
-      psize = 0;
-      
-      for (i = 0; i < insize; i++)
+      return false;
+      }
+   
+   if (ip == end)
+      {
+      return false;
+      }
+
+   if (ip->next)
+      {
+      ip = ip->next;
+      }
+   else
+      {
+      if (++sp <= chunk+strlen(chunk))
          {
-         psize++;
-
-         q = q->next;
-
-         if (!q)
-            {
-            break;
-            }
+         return false;
          }
       
-      /* if q hasn't fallen off end, we have two lists to merge */
-      qsize = insize;
-      
-      /* now we have two lists; merge them */
-      while (psize > 0 || (qsize > 0 && q))
-         {          
-          /* decide whether next element of merge comes from p or q */
-         if (psize == 0)
-            {
-            /* p is empty; e must come from q. */
-            e = q;
-            q = q->next;
-            qsize--;
-            }
-         else if (qsize == 0 || !q)
-            {
-            /* q is empty; e must come from p. */
-            e = p;
-            p = p->next;
-            psize--;
-            }
-         else if (strcmp(p->name, q->name) <= 0)
-            {
-            /* First element of p is lower (or same);
-             * e must come from p. */
-            e = p;
-            p = p->next;
-            psize--;
-            }
-         else
-            {
-            /* First element of q is lower; e must come from q. */
-            e = q;
-            q = q->next;
-            qsize--;
-            }
-         
-         /* add the next element to the merged list */
-         if (tail)
-            {
-            tail->next = e;
-            }
-         else
-            {
-            list = e;
-            }
-         
-         tail = e;
-         }
-      
-      /* now p has stepped `insize' places along, and q has too */
-      p = q;
+      break;
       }
-
-   tail->next = NULL;
-   
-   /* If we have done only one merge, we're finished. */
-   
-   if (nmerges <= 1)   /* allow for nmerges==0, the empty list case */
-      {
-      return list;
-      }
-   
-   /* Otherwise repeat, merging lists twice the size */
-   insize *= 2;
    }
-}
 
-/*******************************************************************/
-
-struct Item *SortItemListCounters(struct Item *list) /* Biggest first */
-
-{ struct Item *p, *q, *e, *tail, *oldhead;
-  int insize, nmerges, psize, qsize, i;
-
-if (list == NULL)
-   { 
-   return NULL;
-   }
- 
-insize = 1;
-
-while (true)
-   {
-   p = list;
-   oldhead = list;                /* only used for circular linkage */
-   list = NULL;
-   tail = NULL;
-   
-   nmerges = 0;  /* count number of merges we do in this pass */
-   
-   while (p)
-      {
-      nmerges++;  /* there exists a merge to be done */
-      /* step `insize' places along from p */
-      q = p;
-      psize = 0;
-      
-      for (i = 0; i < insize; i++)
-         {
-         psize++;
-         q = q->next;
-         
-         if (!q)
-            {
-            break;
-            }
-         }
-      
-      /* if q hasn't fallen off end, we have two lists to merge */
-      qsize = insize;
-      
-      /* now we have two lists; merge them */
-
-      while (psize > 0 || (qsize > 0 && q))
-         {          
-         /* decide whether next element of merge comes from p or q */
-         if (psize == 0)
-            {
-            /* p is empty; e must come from q. */
-            e = q;
-            q = q->next;
-            qsize--;
-            }
-         else if (qsize == 0 || !q)
-            {
-            /* q is empty; e must come from p. */
-            e = p;
-            p = p->next;
-            psize--;
-            }
-         else if (p->counter - q->counter >= 0)
-            {
-            /* First element of p is higher (or same);
-             * e must come from p. */
-            e = p;
-            p = p->next;
-            psize--;
-            }
-         else
-            {
-            /* First element of q is lower; e must come from q. */
-            e = q;
-            q = q->next;
-            qsize--;
-            }
-         
-         /* add the next element to the merged list */
-
-         if (tail)
-            {
-            tail->next = e;
-            }
-         else
-            {
-            list = e;
-            }
-         
-         tail = e;
-         }
-      
-      /* now p has stepped `insize' places along, and q has too */
-      p = q;
-      }
-
-   tail->next = NULL;
-   
-   /* If we have done only one merge, we're finished. */
-   
-   if (nmerges <= 1)   /* allow for nmerges==0, the empty list case */
-      {
-      return list;
-      }
-   
-   /* Otherwise repeat, merging lists twice the size */
-   insize *= 2;
-   }
-}
-
-/*******************************************************************/
-
-struct Item *SortItemListTimes(struct Item *list) /* Biggest first */
-
-{ struct Item *p, *q, *e, *tail, *oldhead;
-  int insize, nmerges, psize, qsize, i;
-
-if (list == NULL)
-   { 
-   return NULL;
-   }
- 
-insize = 1;
-
-while (true)
-   {
-   p = list;
-   oldhead = list;                /* only used for circular linkage */
-   list = NULL;
-   tail = NULL;
-   
-   nmerges = 0;  /* count number of merges we do in this pass */
-   
-   while (p)
-      {
-      nmerges++;  /* there exists a merge to be done */
-      /* step `insize' places along from p */
-      q = p;
-      psize = 0;
-      
-      for (i = 0; i < insize; i++)
-         {
-         psize++;
-         q = q->next;
-         
-         if (!q)
-            {
-            break;
-            }
-         }
-      
-      /* if q hasn't fallen off end, we have two lists to merge */
-      qsize = insize;
-      
-      /* now we have two lists; merge them */
-
-      while (psize > 0 || (qsize > 0 && q))
-         {          
-         /* decide whether next element of merge comes from p or q */
-         if (psize == 0)
-            {
-            /* p is empty; e must come from q. */
-            e = q;
-            q = q->next;
-            qsize--;
-            }
-         else if (qsize == 0 || !q)
-            {
-            /* q is empty; e must come from p. */
-            e = p;
-            p = p->next;
-            psize--;
-            }
-         else if (p->time - q->time >= 0)
-            {
-            /* First element of p is higher (or same);
-             * e must come from p. */
-            e = p;
-            p = p->next;
-            psize--;
-            }
-         else
-            {
-            /* First element of q is lower; e must come from q. */
-            e = q;
-            q = q->next;
-            qsize--;
-            }
-         
-         /* add the next element to the merged list */
-
-         if (tail)
-            {
-            tail->next = e;
-            }
-         else
-            {
-            list = e;
-            }
-         
-         tail = e;
-         }
-      
-      /* now p has stepped `insize' places along, and q has too */
-      p = q;
-      }
-
-   tail->next = NULL;
-   
-   /* If we have done only one merge, we're finished. */
-   
-   if (nmerges <= 1)   /* allow for nmerges==0, the empty list case */
-      {
-      return list;
-      }
-   
-   /* Otherwise repeat, merging lists twice the size */
-   insize *= 2;
-   }
+return true;
 }
 
 /*********************************************************************/
@@ -784,15 +681,15 @@ void InsertAfter(struct Item **filestart,struct Item *ptr,char *string)
 { struct Item *ip;
   char *sp;
 
-if (*filestart == NULL || ptr == *filestart || ptr == CF_UNDEFINED_ITEM)
+if (*filestart == NULL || ptr == CF_UNDEFINED_ITEM)
    {
-   AppendItemList(filestart,string);
+   AppendItem(filestart,string,NULL);
    return;
    }
 
 if (ptr == NULL)
    {
-   AppendItemList(filestart,string);
+   AppendItem(filestart,string,NULL);
    return;
    }
 
@@ -971,57 +868,6 @@ return s;
 /* Basic operations                                                  */
 /*********************************************************************/
 
-void AppendItem (struct Item **liststart,char *itemstring,char *classes)
-
-{ struct Item *ip, *lp;
-  char *sp,*spe = NULL;
-
-if ((ip = (struct Item *)malloc(sizeof(struct Item))) == NULL)
-   {
-   FatalError("Memory allocation failure");
-   }
-
-if ((sp = malloc(strlen(itemstring)+CF_EXTRASPC)) == NULL)
-   {
-   FatalError("Memory allocation failure");
-   }
-
-if (*liststart == NULL)
-   {
-   *liststart = ip;
-   }
-else
-   {
-   for (lp = *liststart; lp->next != NULL; lp=lp->next)
-      {
-      }
-
-   lp->next = ip;
-   }
-
-if ((classes != NULL) && (spe = malloc(strlen(classes)+2)) == NULL)
-   {
-   CfOut(cf_error,"","malloc failure");
-   }
-
-strcpy(sp,itemstring);
-ip->name = sp;
-ip->next = NULL;
-ip->counter = 0;
- 
-if (classes != NULL)
-   {
-   strcpy(spe,classes);
-   ip->classes = spe;
-   }
-else
-   {
-   ip->classes = NULL;
-   }
-}
-
-/*********************************************************************/
-
 void IncrementItemListCounter(struct Item *list,char *item)
 
 { struct Item *ptr; 
@@ -1132,27 +978,24 @@ return(false);
 void DeleteItemList(struct Item *item)  /* delete starting from item */
  
 {
-if (item != NULL)
-   {
-   if (item->next)
-      {
-      DeleteItemList(item->next);
-      item->next = NULL;
-      }
+  struct Item *ip, *next;
 
-   if (item->name != NULL)
-      {
-      Debug("Unappending %s\n",item->name);
-      free (item->name);
-      }
+  for(ip = item; ip != NULL; ip = next)
+    {
+      next = ip->next;  // save before free
 
-   if (item->classes != NULL)
-      {
-      free (item->classes);
-      }
-
-   free((char *)item);
-   }
+      if (ip->name != NULL)
+	{
+	  free (ip->name);
+	}
+      
+      if (ip->classes != NULL)
+	{
+	  free (ip->classes);
+	}
+      
+      free((char *)ip);
+    }
 }
 
 /*********************************************************************/
@@ -1181,11 +1024,14 @@ if (item != NULL)
       }
    else
       {
-      for (ip = *liststart; ip->next != item; ip=ip->next)
+      for (ip = *liststart; ip != NULL && ip->next != item && ip->next != NULL; ip=ip->next)
          {
          }
 
-      ip->next = sp;
+      if (ip != NULL)
+         {
+         ip->next = sp;
+         }
       }
 
    free((char *)item);
@@ -1309,8 +1155,6 @@ int DeleteItemGeneral(struct Item **list,char *string,enum matchtypes type)
 
 { struct Item *ip,*last = NULL;
   int match = 0, matchlen = 0;
-  regex_t rx,rxcache;
-  regmatch_t pmatch;
 
 if (list == NULL)
    {
@@ -1357,7 +1201,6 @@ switch (type)
        case NOTregexComplete:
        case regexComplete:
            /* To fix a bug on some implementations where rx gets emptied */
-           memcpy(&rx,&rxcache,sizeof(rx));
            match = FullTextMatch(string,ip->name);
            
            if (type == NOTregexComplete)
@@ -1481,6 +1324,11 @@ Debug("CompareToFile(%s)\n",file);
 if (cfstat(file,&statbuf) == -1)
    {
    return false;
+   }
+
+if (liststart == NULL && statbuf.st_size == 0)
+   {
+   return true;
    }
 
 if (liststart == NULL)

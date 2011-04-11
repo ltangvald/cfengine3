@@ -149,32 +149,65 @@ CloseDB(dbp);
 
 /***************************************************************/
 
-void NoteClassUsage(struct Item *baselist)
+void NoteClassUsage(struct AlphaList baselist)
 
 { CF_DB *dbp;
   CF_DBC *dbcp;
   void *stored;
   char *key,name[CF_BUFSIZE];
-  int ksize,vsize;
+  int i,j,ksize,vsize;
   struct Event e,entry,newe;
   double lsea = CF_WEEK * 52; /* expire after a year */
   time_t now = time(NULL);
   struct Item *ip,*list = NULL;
+  struct AlphaList *ap;
   double lastseen,delta2;
   double vtrue = 1.0;      /* end with a rough probability */
 
+/* Only do this for the default policy, too much "downgrading" otherwise */
+
+if (MINUSF) 
+   {
+   return;
+   }
+
 Debug("RecordClassUsage\n");
 
-for (ip = baselist; ip != NULL; ip=ip->next)
+for (i = 0; i < CF_ALPHABETSIZE; i++)
    {
-   if (IsHardClass(ip->name))
+   for (ip = baselist.list[i]; ip != NULL; ip=ip->next)
       {
-      continue;
-      }
+      if (IGNORECLASS(ip->name))
+         {
+         Debug("Ignoring class %s (not packing)", ip->name);
+         continue;
+         }
+
+      for (j = 0; j < 4; j++)
+         {
+         if (strcmp(ip->name,SHIFT_TEXT[j]) == 0)
+            {
+            continue;
+            }
+         }
+
+      for (j = 0; j < 7; j++)
+         {
+         if (strcmp(ip->name,DAY_TEXT[j]) == 0)
+            {
+            continue;
+            }
+         }
+
+      for (j = 0; j < 12; j++)
+         {
+         if (strcmp(ip->name,MONTH_TEXT[j]) == 0)
+            {
+            continue;
+            }
+         }
    
-   if (!IsItemIn(list,ip->name))
-      {
-      PrependItem(&list,ip->name,NULL);
+      IdempPrependItem(&list,ip->name,NULL);
       }
    }
 
@@ -195,9 +228,9 @@ for (ip = list; ip != NULL; ip=ip->next)
       lastseen = now - e.t;
       newe.t = now;
       newe.Q.q = vtrue;
-      newe.Q.expect = GAverage(vtrue,e.Q.expect,0.3);
+      newe.Q.expect = GAverage(vtrue,e.Q.expect,0.7);
       delta2 = (vtrue - e.Q.expect)*(vtrue - e.Q.expect);
-      newe.Q.var = GAverage(delta2,e.Q.var,0.3);
+      newe.Q.var = GAverage(delta2,e.Q.var,0.7);
       }
    else
       {
@@ -227,6 +260,8 @@ for (ip = list; ip != NULL; ip=ip->next)
 if (!NewDBCursor(dbp,&dbcp))
    {
    CfOut(cf_inform,""," !! Unable to scan class db");
+   CloseDB(dbp);
+   DeleteItemList(list);
    return;
    }
 
@@ -236,7 +271,7 @@ while(NextDB(dbp,dbcp,&key,&ksize,&stored,&vsize))
    {
    double measure,av,var;
    time_t then;
-   char tbuf[CF_BUFSIZE],eventname[CF_BUFSIZE];
+   char eventname[CF_BUFSIZE];
 
    memset(eventname,0,CF_BUFSIZE);
    strncpy(eventname,(char *)key,ksize);
@@ -251,9 +286,6 @@ while(NextDB(dbp,dbcp,&key,&ksize,&stored,&vsize))
       var = entry.Q.var;
       lastseen = now - then;
             
-      snprintf(tbuf,CF_BUFSIZE-1,"%s",cf_ctime(&then));
-      tbuf[strlen(tbuf)-9] = '\0';                     /* Chop off second and year */
-
       if (lastseen > lsea)
          {
          Debug("Class usage record %s expired\n",eventname);
@@ -279,20 +311,134 @@ DeleteItemList(list);
 
 /***************************************************************/
 
-void LastSaw(char *hostname,enum roles role)
+void LastSaw(char *username,char *ipaddress,unsigned char digest[EVP_MAX_MD_SIZE+1],enum roles role)
 
-{ CF_DB *dbp,*dbpent;
-  char name[CF_BUFSIZE],databuf[CF_BUFSIZE],varbuf[CF_BUFSIZE],rtype;
+{ char databuf[CF_BUFSIZE],varbuf[CF_BUFSIZE],rtype;
   time_t now = time(NULL);
-  struct QPoint q,newq;
-  double lastseen,delta2;
-  int lsea = LASTSEENEXPIREAFTER, intermittency = false;
+  int known = false;
+  struct Rlist *rp;
+  struct CfKeyBinding *kp;
 
-if (strlen(hostname) == 0)
+if (strlen(ipaddress) == 0)
    {
-   CfOut(cf_inform,"","LastSeen registry for empty hostname with role %d",role);
+   CfOut(cf_inform,"","LastSeen registry for empty IP with role %d",role);
    return;
    }
+
+ThreadLock(cft_output);
+
+switch (role)
+   {
+   case cf_accept:
+       snprintf(databuf,CF_BUFSIZE-1,"-%s",HashPrint(CF_DEFAULT_DIGEST,digest));
+       break;
+   case cf_connect:
+       snprintf(databuf,CF_BUFSIZE-1,"+%s",HashPrint(CF_DEFAULT_DIGEST,digest));
+       break;
+   }
+
+ThreadUnlock(cft_output);
+
+ThreadLock(cft_server_keyseen);
+
+for (rp = SERVER_KEYSEEN; rp !=  NULL; rp=rp->next)
+   {
+   kp = (struct CfKeyBinding *) rp->item;
+
+   if (strcmp(kp->name,databuf) == 0)
+      {
+      known = true;
+      kp->timestamp = now;
+      CfOut(cf_verbose,""," -> Last saw %s (%s) now",ipaddress,databuf);
+
+      // Refresh address
+      
+      ThreadLock(cft_system);
+
+      if (kp->address)
+         {
+         free(kp->address);
+         }
+      
+      kp->address = strdup(ipaddress);
+      ThreadUnlock(cft_system);
+      ThreadUnlock(cft_server_keyseen);
+      return;
+      }
+   }
+
+CfOut(cf_verbose,""," -> Last saw %s (%s) first time now",ipaddress,databuf);
+
+ThreadLock(cft_system);
+kp = (struct CfKeyBinding *)malloc((sizeof(struct CfKeyBinding)));
+ThreadUnlock(cft_system);
+
+if (kp == NULL)
+   {
+   ThreadUnlock(cft_server_keyseen);
+   return;
+   }
+
+rp = PrependRlist(&SERVER_KEYSEEN,"nothing",CF_SCALAR);
+
+ThreadLock(cft_system);
+free(rp->item);
+rp->item = kp;
+
+kp->address = strdup(ipaddress);
+
+if ((kp->name = strdup(databuf)) == NULL)
+   {
+   free(kp);
+   ThreadUnlock(cft_system);
+   ThreadUnlock(cft_server_keyseen);
+   return;
+   }
+
+ThreadUnlock(cft_system);
+
+kp->key = HavePublicKey(username,ipaddress,databuf+1);
+kp->timestamp = now;
+
+ThreadUnlock(cft_server_keyseen);
+}
+
+/***************************************************************/
+
+void UpdateLastSeen()
+
+{ double lsea = LASTSEENEXPIREAFTER;
+  int intermittency = false,qsize,ksize;
+  struct CfKeyHostSeen q,newq; 
+  double lastseen,delta2;
+  void *stored;
+  CF_DB *dbp = NULL,*dbpent = NULL;
+  CF_DBC *dbcp;
+  char name[CF_BUFSIZE],*key;
+  struct Rlist *rp;
+  struct CfKeyBinding *kp;
+  time_t now = time(NULL);
+  static time_t then;
+  
+if (now < then + 300 && then > 0 && then <= now + 300)
+   {
+   // Rate limiter
+   return;
+   }
+
+then = now;
+
+CfOut(cf_verbose,""," -> Writing last-seen observations");
+
+ThreadLock(cft_server_keyseen);
+
+if (SERVER_KEYSEEN == NULL)
+   {
+   ThreadUnlock(cft_server_keyseen);
+   CfOut(cf_verbose,""," -> Keyring is empty");
+   return;
+   }
+
 
 if (BooleanControl("control_agent",CFA_CONTROLBODY[cfa_intermittency].lval))
    {
@@ -300,94 +446,129 @@ if (BooleanControl("control_agent",CFA_CONTROLBODY[cfa_intermittency].lval))
    intermittency = true;
    }
 
-CfOut(cf_verbose,"","LastSaw host %s now\n",hostname);
-
-ThreadLock(cft_getaddr);
-
-switch (role)
-   {
-   case cf_accept:
-       snprintf(databuf,CF_BUFSIZE-1,"-%s",Hostname2IPString(hostname));
-       break;
-   case cf_connect:
-       snprintf(databuf,CF_BUFSIZE-1,"+%s",Hostname2IPString(hostname));
-       break;
-   }
-
-ThreadUnlock(cft_getaddr);
-
-/* Tidy old versions - temporary */
 snprintf(name,CF_BUFSIZE-1,"%s/%s",CFWORKDIR,CF_LASTDB_FILE);
 MapName(name);
 
-
-if (!ThreadLock(cft_db_lastseen))
-   {
-   return;
-   }
-
 if (!OpenDB(name,&dbp))
    {
-   ThreadUnlock(cft_db_lastseen);
+   ThreadUnlock(cft_server_keyseen);
    return;
    }
 
-if (intermittency)
+/* First scan for hosts that have moved address and purge their records so that
+   the database always has a 1:1 relationship between keyhash and IP address    */
+
+if (!NewDBCursor(dbp,&dbcp))
    {
-   /* Open special file for peer entropy record - INRIA intermittency */
-   snprintf(name,CF_BUFSIZE-1,"%s/lastseen/%s.%s",CFWORKDIR,CF_LASTDB_FILE,hostname);
-   MapName(name);
-   
-   if (!OpenDB(name,&dbpent))
+   ThreadUnlock(cft_server_keyseen);
+   CfOut(cf_inform,""," !! Unable to scan class db");
+   return;
+   }
+
+while(NextDB(dbp,dbcp,&key,&ksize,&stored,&qsize))
+   {
+   memcpy(&q,stored,sizeof(q));
+
+   lastseen = (double)now - q.Q.q;
+
+   if (lastseen > lsea)
       {
-      ThreadUnlock(cft_db_lastseen);
-      return;
+      CfOut(cf_verbose,""," -> Last-seen record for %s expired after %.1lf > %.1lf hours\n",key,lastseen/3600,lsea/3600);
+      DeleteDB(dbp,key);
       }
+
+   for (rp = SERVER_KEYSEEN; rp !=  NULL; rp=rp->next)
+      {
+      kp = (struct CfKeyBinding *) rp->item;
+      
+      if ((strcmp(q.address,kp->address) == 0) && (strcmp(key+1,kp->name+1) != 0))
+         {
+         CfOut(cf_verbose,""," ! Deleting %s's address (%s=%d) as this host %s seems to have moved elsewhere (%s=5d)",key,kp->address,strlen(kp->address),kp->name,q.address,strlen(q.address));
+         DeleteDB(dbp,key);
+         }
+      }
+
    }
 
+DeleteDBCursor(dbp,dbcp);
+
+/* Now perform updates with the latest data */
+
+for (rp = SERVER_KEYSEEN; rp !=  NULL; rp=rp->next)
+   {
+   kp = (struct CfKeyBinding *) rp->item;
+
+   now = kp->timestamp;
    
-if (ReadDB(dbp,databuf,&q,sizeof(q)))
-   {
-   lastseen = (double)now - q.q;
-   newq.q = (double)now;                   /* Last seen is now-then */
-   newq.expect = GAverage(lastseen,q.expect,0.3);
-   delta2 = (lastseen - q.expect)*(lastseen - q.expect);
-   newq.var = GAverage(delta2,q.var,0.3);
-   }
-else
-   {
-   lastseen = 0.0;
-   newq.q = (double)now;
-   newq.expect = 0.0;
-   newq.var = 0.0;
-   }
-
-ThreadLock(cft_getaddr);
-
-if (lastseen > (double)lsea)
-   {
-   CfOut(cf_verbose,"","Last seen %s expired\n",databuf);
-   DeleteDB(dbp,databuf);   
-   }
-else
-   {
-   WriteDB(dbp,databuf,&newq,sizeof(newq));
-
    if (intermittency)
       {
-      WriteDB(dbpent,GenTimeKey(now),&newq,sizeof(newq));
+      /* Open special file for peer entropy record - INRIA intermittency */
+      snprintf(name,CF_BUFSIZE-1,"%s/lastseen/%s.%s",CFWORKDIR,CF_LASTDB_FILE,kp->name);
+      MapName(name);
+      
+      if (!OpenDB(name,&dbpent))
+         {
+         continue;
+         }
+      }
+   
+   if (ReadDB(dbp,kp->name,&q,sizeof(q)))
+      {
+      lastseen = (double)now - q.Q.q;
+      
+      if (q.Q.q <= 0)
+         {
+         lastseen = 300;
+         q.Q.expect = 0;
+         q.Q.var = 0;
+         }
+      
+      newq.Q.q = (double)now;
+      newq.Q.expect = GAverage(lastseen,q.Q.expect,0.4);
+      delta2 = (lastseen - q.Q.expect)*(lastseen - q.Q.expect);
+      newq.Q.var = GAverage(delta2,q.Q.var,0.4);
+      strncpy(newq.address,kp->address,CF_ADDRSIZE-1);
+      }
+   else
+      {
+      lastseen = 0.0;
+      newq.Q.q = (double)now;
+      newq.Q.expect = 0.0;
+      newq.Q.var = 0.0;
+      strncpy(newq.address,kp->address,CF_ADDRSIZE-1);
+      }
+   
+   if (lastseen > lsea)
+      {
+      CfOut(cf_verbose,""," -> Last-seen record for %s expired after %.1lf > %.1lf hours\n",kp->name,lastseen/3600,lsea/3600);
+      DeleteDB(dbp,kp->name);
+      }
+   else
+      {
+      CfOut(cf_verbose,""," -> Last saw %s (alias %s) at %s (noexpiry %.1lf <= %.1lf)\n",kp->name,kp->address,ctime(&now),lastseen/3600,lsea/3600);
+
+      ThreadLock(cft_dbhandle);
+      WriteDB(dbp,kp->name,&newq,sizeof(newq));
+      ThreadUnlock(cft_dbhandle);
+      
+      if (intermittency)
+         {
+         WriteDB(dbpent,GenTimeKey(now),&newq,sizeof(newq));
+         }
+      }
+   
+   if (intermittency && dbpent)
+      {
+      CloseDB(dbpent);
       }
    }
 
-ThreadUnlock(cft_getaddr);
-
-if (intermittency)
-   {
-   CloseDB(dbpent);
-   }
+ThreadUnlock(cft_server_keyseen);
 
 CloseDB(dbp);
-ThreadUnlock(cft_db_lastseen);
+
+// Should we purge the list DeleteRlist(SERVER_KEYSEEN)?
+// Careful to dealloc Keyring
 }
 
 /*****************************************************************************/

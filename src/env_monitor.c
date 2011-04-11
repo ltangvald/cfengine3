@@ -45,9 +45,7 @@ included file COSL.txt.
 /* Globals                                                                   */
 /*****************************************************************************/
 
-unsigned int HISTOGRAM[CF_OBSERVABLES][7][CF_GRAINS];
-
-int HISTO = true;
+static double HISTOGRAM[CF_OBSERVABLES][7][CF_GRAINS];
 
 /* persistent observations */
 
@@ -61,14 +59,11 @@ int BATCH_MODE = false;
 double ITER = 0.0;           /* Iteration since start */
 double AGE,WAGE;             /* Age and weekly age of database */
 
-char BATCHFILE[CF_BUFSIZE];
-char STATELOG[CF_BUFSIZE];
 char ENVFILE_NEW[CF_BUFSIZE];
 char ENVFILE[CF_BUFSIZE];
 
 short ACPI = false;
 short LMSENSORS = false;
-short SCLI = false;
 short TCPDUMP = false;
 short TCPPAUSE = false;
 FILE *TCPPIPE;
@@ -93,10 +88,6 @@ int LDT_FULL = false;
 
 /* Entropy etc */
 
-double ENTROPY = 0.0;
-double LAST_HOUR_ENTROPY = 0.0;
-double LAST_DAY_ENTROPY = 0.0;
-
 struct Item *PREVIOUS_STATE = NULL;
 struct Item *ENTROPIES = NULL;
 
@@ -110,8 +101,6 @@ long LASTT[CF_OBSERVABLES];
 
 void MonInitialize(void);
 void StartServer (int argc, char **argv);
-void yyerror (char *s);
-void RotateFiles (char *s, int n);
 
 void GetDatabaseAge (void);
 void LoadHistogram  (void);
@@ -124,7 +113,6 @@ void Sniff(void);
 
 void GatherProcessData (void);
 void GatherCPUData (void);
-void Unix_GatherCPUData(void);
 void GatherDiskData (void);
 void GatherLoadData (void);
 void GatherSocketData (void);
@@ -139,12 +127,10 @@ void UpdateDistributions (char *timekey, struct Averages *av);
 double WAverage (double newvals,double oldvals, double age);
 double SetClasses (char *name,double variable,double av_expect,double av_var,double localav_expect,double localav_var,struct Item **classlist,char *timekey);
 void SetVariable (char *name,double now, double average, double stddev, struct Item **list);
-void RecordChangeOfState  (struct Item *list,char *timekey);
 double RejectAnomaly (double new,double av,double var,double av2,double var2);
 void SetEntropyClasses (char *service,struct Item *list,char *inout);
 void AnalyzeArrival (char *tcpbuffer);
 void ZeroArrivals (void);
-void CfenvTimeOut (void);
 void IncrementCounter (struct Item **list,char *name);
 void SaveTCPEntropyData (struct Item *list,int i, char *inout);
 int GetFileGrowth(char *filename,enum observables index);
@@ -189,9 +175,6 @@ void MonInitialize()
  snprintf(AVDB,CF_MAXVARSIZE,"%s/state/%s",CFWORKDIR,CF_AVDB_FILE);
  MapName(AVDB);
 
- snprintf(STATELOG,CF_BUFSIZE,"%s/state/%s",CFWORKDIR,CF_STATELOG_FILE);
- MapName(STATELOG);
-
  snprintf(ENVFILE_NEW,CF_BUFSIZE,"%s/state/%s",CFWORKDIR,CF_ENVNEW_FILE);
  MapName(ENVFILE_NEW);
 
@@ -229,11 +212,6 @@ void MonInitialize()
     LDT_SUM[i] = 0;
     LASTQ[i] = 0;
     LASTT[i] = 0;
-   
-    for (j = 0; j < LDT_BUFSIZE; j++)
-       {
-       LDT_BUF[i][j];
-       }
     }
 
  srand((unsigned int)time(NULL)); 
@@ -265,7 +243,7 @@ void MonInitialize()
 
 void GetDatabaseAge()
 
-{ int err_no;
+{
  CF_DB *dbp;
 
  if (!OpenDB(AVDB,&dbp))
@@ -294,35 +272,50 @@ void GetDatabaseAge()
 void LoadHistogram()
 
 { FILE *fp;
- int position,i,day; 
+  int i,day,position;
+  double maxval[CF_OBSERVABLES];
 
- if (HISTO)
-    {
-    char filename[CF_BUFSIZE];
+   char filename[CF_BUFSIZE];
    
-    snprintf(filename,CF_BUFSIZE,"%s/state/histograms",CFWORKDIR);
+   snprintf(filename,CF_BUFSIZE,"%s/state/histograms",CFWORKDIR);
    
-    if ((fp = fopen(filename,"r")) == NULL)
-       {
-       CfOut(cf_verbose,"fopen","Unable to load histogram data");
-       return;
-       }
-
-    for (position = 0; position < CF_GRAINS; position++)
-       {
-       fscanf(fp,"%d ",&position);
+   if ((fp = fopen(filename,"r")) == NULL)
+      {
+      CfOut(cf_verbose,"fopen","Unable to load histogram data");
+      return;
+      }
+   
+   for (i = 0; i < CF_OBSERVABLES; i++)
+      {
+      maxval[i] = 1.0;
+      }
+  
+   for (position = 0; position < CF_GRAINS; position++)
+      {
+      fscanf(fp,"%d ",&position);
       
-       for (i = 0; i < CF_OBSERVABLES; i++)
-          {
-          for (day = 0; day < 7; day++)
-             {
-             fscanf(fp,"%d ",&(HISTOGRAM[i][day][position]));
-             }
-          }
-       }
+      for (i = 0; i < CF_OBSERVABLES; i++)
+         {
+         for (day = 0; day < 7; day++)
+            {
+            fscanf(fp,"%lf ",&(HISTOGRAM[i][day][position]));
+            }
+
+         if (HISTOGRAM[i][day][position] < 0)
+            {
+            HISTOGRAM[i][day][position] = 0;
+            }
+
+         if (HISTOGRAM[i][day][position] > maxval[i])
+            {
+            maxval[i] = HISTOGRAM[i][day][position];
+            }
+
+         HISTOGRAM[i][day][position] *= 1000.0/maxval[i];
+         }
+      }
    
-    fclose(fp);
-    }
+   fclose(fp);
 } 
 
 /*********************************************************************/
@@ -331,7 +324,6 @@ void StartServer(int argc,char **argv)
 
 { char *timekey;
  struct Averages averages;
- int i;
  struct Promise *pp = NewPromise("monitor_cfengine","the monitor daemon");
  struct Attributes dummyattr;
  struct CfLock thislock;
@@ -362,7 +354,7 @@ void StartServer(int argc,char **argv)
  dummyattr.transaction.ifelapsed = 0;
  dummyattr.transaction.expireafter = 0;
 
- thislock = AcquireLock(pp->promiser,VUQNAME,CFSTARTTIME,dummyattr,pp);
+ thislock = AcquireLock(pp->promiser,VUQNAME,CFSTARTTIME,dummyattr,pp,false);
 
  if (thislock.lock == NULL)
     {
@@ -400,7 +392,7 @@ void StartServer(int argc,char **argv)
 /* Level 3                                                           */
 /*********************************************************************/
   
-void CfenvTimeOut()
+static void CfenvTimeOut(int signum)
  
 {
 alarm(0);
@@ -442,12 +434,12 @@ void OpenSniffer()
 
 void Sniff()
 
-{ int i;
+{
  char tcpbuffer[CF_BUFSIZE];
  
 CfOut(cf_verbose,"","Reading from tcpdump...\n");
 memset(tcpbuffer,0,CF_BUFSIZE);      
-signal(SIGALRM,(void *)CfenvTimeOut);
+signal(SIGALRM,CfenvTimeOut);
 alarm(SLEEPTIME);
 TCPPAUSE = false;
 
@@ -485,16 +477,13 @@ fflush(TCPPIPE);
 
 void GetQ()
 
-{ int i;
+{
 
 Debug("========================= GET Q ==============================\n");
 
 ENTROPIES = NULL;
 
-for (i = 0; i < CF_OBSERVABLES; i++)
-   {
-   CF_THIS[i] = 0.0;
-   }
+ZeroArrivals();
 
 GatherProcessData();
 GatherCPUData();
@@ -530,7 +519,7 @@ return ConvTimeKey(str);
 struct Averages EvalAvQ(char *t)
 
 { struct Averages *currentvals,newvals;
-  double This[CF_OBSERVABLES],delta2;
+  double This[CF_OBSERVABLES];
   char name[CF_MAXVARSIZE];
   int i; 
 
@@ -618,7 +607,7 @@ return newvals;
 
 void LeapDetection()
 
-{ int i,j,last_pos = LDT_POS;;
+{ int i,last_pos = LDT_POS;
   double n1,n2,d;
   double padding = 0.2;
 
@@ -628,7 +617,7 @@ if (++LDT_POS >= LDT_BUFSIZE)
    
    if (!LDT_FULL)
       {
-      CfOut(cf_log,"","LDT Buffer full at %d\n",LDT_BUFSIZE);
+      Debug("LDT Buffer full at %d\n",LDT_BUFSIZE);
       LDT_FULL = true;
       }
    }
@@ -692,7 +681,7 @@ void ArmClasses(struct Averages av,char *timekey)
 
 { double sigma;
  struct Item *classlist = NULL, *ip;
- int i,j,k,pos;
+ int i,j,k;
  FILE *fp;
  char buff[CF_BUFSIZE],ldt_buff[CF_BUFSIZE],name[CF_MAXVARSIZE];
  static int anomaly[CF_OBSERVABLES][LDT_BUFSIZE];
@@ -1032,7 +1021,7 @@ void GatherProcessData()
   int numRootProcs = 0;
   int numOtherProcs = 0;
 
-if(!GatherProcessUsers(&userList, &numProcUsers, &numRootProcs, &numOtherProcs))
+if (!GatherProcessUsers(&userList, &numProcUsers, &numRootProcs, &numOtherProcs))
    {
    return;
    }
@@ -1063,17 +1052,6 @@ int GatherProcessUsers(struct Item **userList, int *userListSz, int *numRootProc
 
 /*****************************************************************************/
 
-void GatherCPUData()
-{
-#ifdef MINGW
-NovaWin_GatherCPUData(CF_THIS);
-#else
-Unix_GatherCPUData();
-#endif
-}
-
-/*****************************************************************************/
-
 void GatherDiskData()
 
 { char accesslog[CF_BUFSIZE];
@@ -1089,8 +1067,6 @@ CfOut(cf_verbose,"","Disk free = %d %%\n",CF_THIS[ob_diskfree]);
 
 switch(VSYSTEMHARDCLASS)
    {
-   linuxx:
-   
    default:
        strcpy(accesslog,"/var/log/apache2/access_log");
        strcpy(errorlog,"/var/log/apache2/error_log");
@@ -1372,7 +1348,7 @@ for (i = 0; i < CF_NETATTR; i++)
 
 struct Averages *GetCurrentAverages(char *timekey)
 
-{ int err_no;
+{
   CF_DB *dbp;
   static struct Averages entry;
 
@@ -1407,7 +1383,7 @@ return &entry;
 
 void UpdateAverages(char *timekey,struct Averages newvals)
 
-{ int err_no;
+{
   CF_DB *dbp;
 
 if (!OpenDB(AVDB,&dbp))
@@ -1430,54 +1406,54 @@ HistoryUpdate(newvals);
 
 void UpdateDistributions(char *timekey,struct Averages *av)
 
-{ int position; 
- int day,i,time_to_update = true;
- FILE *fp;
- char filename[CF_BUFSIZE];
+{ int position,day,i;
+  char filename[CF_BUFSIZE];
+  FILE *fp;
  
 /* Take an interval of 4 standard deviations from -2 to +2, divided into CF_GRAINS
    parts. Centre each measurement on CF_GRAINS/2 and scale each measurement by the
    std-deviation for the current time.
 */
- if (HISTO && IsDefinedClass("Min40_45"))
-    {
-    day = Day2Number(timekey);
-   
-    for (i = 0; i < CF_OBSERVABLES; i++)
-       {
-       position = CF_GRAINS/2 + (int)(0.5+(CF_THIS[i] - av->Q[i].expect)*CF_GRAINS/(4*sqrt((av->Q[i].var))));
 
-       if (0 <= position && position < CF_GRAINS)
-          {
-          HISTOGRAM[i][day][position]++;
-          }
-       }
+if (IsDefinedClass("Min40_45"))
+   {
+   day = Day2Number(timekey);
    
+   for (i = 0; i < CF_OBSERVABLES; i++)
+      {
+      position = CF_GRAINS/2 + (int)(0.5+(CF_THIS[i] - av->Q[i].expect)*CF_GRAINS/(4*sqrt((av->Q[i].var))));
       
-    snprintf(filename,CF_BUFSIZE,"%s/state/histograms",CFWORKDIR);
+      if (0 <= position && position < CF_GRAINS)
+         {
+         HISTOGRAM[i][day][position]++;
+         }
+      }
    
-    if ((fp = fopen(filename,"w")) == NULL)
-       {
-       CfOut(cf_error,"fopen","Unable to save histograms");
-       return;
-       }
    
-    for (position = 0; position < CF_GRAINS; position++)
-       {
-       fprintf(fp,"%u ",position);
+   snprintf(filename,CF_BUFSIZE,"%s/state/histograms",CFWORKDIR);
+   
+   if ((fp = fopen(filename,"w")) == NULL)
+      {
+      CfOut(cf_error,"fopen","Unable to save histograms");
+      return;
+      }
+   
+   for (position = 0; position < CF_GRAINS; position++)
+      {
+      fprintf(fp,"%d ",position);
       
-       for (i = 0; i < CF_OBSERVABLES; i++)
-          {
-          for (day = 0; day < 7; day++)
-             {
-             fprintf(fp,"%u ",HISTOGRAM[i][day][position]);
-             }
-          }
-       fprintf(fp,"\n");
-       }
+      for (i = 0; i < CF_OBSERVABLES; i++)
+         {
+         for (day = 0; day < 7; day++)
+            {
+            fprintf(fp,"%.0lf ",HISTOGRAM[i][day][position]);
+            }
+         }
+      fprintf(fp,"\n");
+      }
    
-    fclose(fp);
-    }
+   fclose(fp);
+   }
 }
 
 /*****************************************************************************/
@@ -1531,7 +1507,14 @@ if (aold == 0 && anew == 0)
    return 0;
    }
 
-av = (wnew*anew + wold*aold)/(wnew+wold); 
+/*
+ * AV = (Wnew*Anew + Wold*Aold) / (Wnew + Wold).
+ *
+ * Wnew + Wold always equals to 1, so we omit it for better precision and
+ * performance.
+ */
+
+av = (wnew*anew + wold*aold);
 
 if (av < 0)
    {
@@ -1671,13 +1654,6 @@ void SetVariable(char *name,double value,double average,double stddev,struct Ite
 
  snprintf(var,CF_MAXVARSIZE,"dev_%s=%.2lf",name,stddev);
  AppendItem(classlist,var,""); 
-}
-
-/*****************************************************************************/
-
-void RecordChangeOfState(struct Item *classlist,char *timekey)
-
-{
 }
 
 /*****************************************************************************/
@@ -1967,15 +1943,15 @@ LASTQ[index] = q;
 return (int)(dq+0.5);
 }
 
-/******************************************************************************/
-/* Motherboard sensors - how to standardize this somehow                      *
-/* We're mainly interested in temperature and power consumption, but only the */
-/* temperature is generally available. Several temperatures exist too ...     */
-/******************************************************************************/
+/******************************************************************************
+ * Motherboard sensors - how to standardize this somehow
+ * We're mainly interested in temperature and power consumption, but only the
+ * temperature is generally available. Several temperatures exist too ...
+ ******************************************************************************/
 
 void GatherSensorData()
 
-{ char buffer[CF_BUFSIZE];
+{
 
  Debug("GatherSensorData()\n");
  
@@ -1997,7 +1973,7 @@ void GatherSensorData()
 
         break;
 
-    case solaris:
+    default:
         break;
     }
 }
@@ -2355,50 +2331,53 @@ if (strcmp("measurements",pp->agentsubtype) == 0)
 
 int Unix_GatherProcessUsers(struct Item **userList, int *userListSz, int *numRootProcs, int *numOtherProcs)
     
-{
- FILE *pp;
- char pscomm[CF_BUFSIZE];
- char user[CF_MAXVARSIZE];
- char vbuff[CF_BUFSIZE];
+{ FILE *pp;
+  char pscomm[CF_BUFSIZE];
+  char user[CF_MAXVARSIZE];
+  char vbuff[CF_BUFSIZE];
  
- snprintf(pscomm,CF_BUFSIZE,"%s %s",VPSCOMM[VSYSTEMHARDCLASS],VPSOPTS[VSYSTEMHARDCLASS]);
+snprintf(pscomm,CF_BUFSIZE,"%s %s",VPSCOMM[VSYSTEMHARDCLASS],VPSOPTS[VSYSTEMHARDCLASS]);
 
- if ((pp = cf_popen(pscomm,"r")) == NULL)
-    {
-    return false;
-    }
+if ((pp = cf_popen(pscomm,"r")) == NULL)
+   {
+   return false;
+   }
 
- CfReadLine(vbuff,CF_BUFSIZE,pp); 
+CfReadLine(vbuff,CF_BUFSIZE,pp); 
 
- while (!feof(pp))
-    {
-    CfReadLine(vbuff,CF_BUFSIZE,pp);
-    sscanf(vbuff,"%s",user);
+while (!feof(pp))
+   {
+   CfReadLine(vbuff,CF_BUFSIZE,pp);
+   sscanf(vbuff,"%s",user);
+
+   if (strcmp(user,"USER") == 0)
+      {
+      continue;
+      }
    
-    if (!IsItemIn(*userList,user))
-       {
-       PrependItem(userList,user,NULL);
-       (*userListSz)++;
-       }
+   if (!IsItemIn(*userList,user))
+      {
+      PrependItem(userList,user,NULL);
+      (*userListSz)++;
+      }
+   
+   if (strcmp(user,"root") == 0)
+      {
+      (*numRootProcs)++;
+      }
+   else
+      {
+      (*numOtherProcs)++;
+      }
+   }
 
-    if (strcmp(user,"root") == 0)
-       {
-       (*numRootProcs)++;
-       }
-    else
-       {
-       (*numOtherProcs)++;
-       }
-    }
-
- cf_pclose(pp);
-
- return true;
+cf_pclose(pp);
+return true;
 }
 
 /*****************************************************************************/
 
-void Unix_GatherCPUData()
+void GatherCPUData()
 
 { double q,dq;
   char name[CF_MAXVARSIZE],cpuname[CF_MAXVARSIZE],buf[CF_BUFSIZE];
@@ -2421,8 +2400,8 @@ while (!feof(fp))
    {
    fgets(buf,CF_BUFSIZE,fp);
    
-   sscanf(buf,"%s%ld%ld%ld%ld%ld%ld%ld",&cpuname,&userticks,&niceticks,&systemticks,&idle,&iowait,&irq,&softirq);
-   snprintf(name,16,"cpu%d",count);
+   sscanf(buf,"%s%ld%ld%ld%ld%ld%ld%ld",cpuname,&userticks,&niceticks,&systemticks,&idle,&iowait,&irq,&softirq);
+   snprintf(name,16,"cpu%ld",count);
    
    total_time = (userticks+niceticks+systemticks+idle); 
    

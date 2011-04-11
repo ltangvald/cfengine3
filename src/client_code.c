@@ -35,6 +35,14 @@
 #include "cf3.defs.h"
 #include "cf3.extern.h"
 
+static void CacheServerConnection(struct cfagent_connection *conn,char *server);
+static int TryConnect(struct cfagent_connection *conn, struct timeval *tvp, struct sockaddr *cinp, int cinpSz);
+static void MarkServerOffline(char *server);
+static struct cfagent_connection *ServerConnectionReady(char *server);
+static int ServerOffline(char *server);
+static void FlushFileStream(int sd,int toget);
+static int CacheStat(char *file,struct stat *statbuf,char *stattype,struct Attributes attr,struct Promise *pp);
+
 /*********************************************************************/
 
 void DetermineCfenginePort()
@@ -118,12 +126,12 @@ return NULL;
 struct cfagent_connection *ServerConnection(char *server,struct Attributes attr,struct Promise *pp)
 
 { struct cfagent_connection *conn;
-  
+  char username[CF_SMALLBUF];
+ 
 #ifndef MINGW
 static sigset_t   signal_mask;
 
 signal(SIGPIPE,SIG_IGN);
-
 sigemptyset(&signal_mask);
 sigaddset(&signal_mask,SIGPIPE);
 pthread_sigmask (SIG_BLOCK,&signal_mask, NULL);
@@ -144,13 +152,22 @@ if (strcmp(server,"localhost") == 0)
 conn->authenticated = false;
 conn->encryption_type = CfEnterpriseOptions();
 
+
+/* username of the client - say root from Windows */
+
+#ifdef MINGW
+snprintf(conn->username,CF_SMALLBUF,"root");
+#else
+GetCurrentUserName(conn->username,CF_SMALLBUF);
+#endif  /* NOT MINGW */
+
 if (conn->sd == CF_NOT_CONNECTED)
    {   
-   Debug("Opening server connnection to %s\n",server);
+   Debug("Opening server connection to %s\n",server);
    
    if (!ServerConnect(conn,server,attr,pp))
       {
-      CfOut(cf_inform,"socket"," !! No server is responding on this port");
+      CfOut(cf_inform,""," !! No server is responding on this port");
 
       if (conn->sd != CF_NOT_CONNECTED)
          {
@@ -203,8 +220,11 @@ Debug("Closing current server connection\n");
 
 if (conn)
    {
-   cf_closesocket(conn->sd);
-   conn->sd = CF_NOT_CONNECTED;
+   if (conn->sd > 0)
+      {
+      cf_closesocket(conn->sd);
+      conn->sd = CF_NOT_CONNECTED;
+      }
    DeleteAgentConn(conn);
    }
 }
@@ -562,13 +582,13 @@ pp->cache = NULL;
 
 int CompareHashNet(char *file1,char *file2,struct Attributes attr,struct Promise *pp)
 
-{ static unsigned char d[CF_MD5_LEN];
+{ static unsigned char d[EVP_MAX_MD_SIZE+1];
   char *sp,sendbuffer[CF_BUFSIZE],recvbuffer[CF_BUFSIZE],in[CF_BUFSIZE],out[CF_BUFSIZE];
   int i,tosend,cipherlen;
   struct cfagent_connection *conn = pp->conn;
 
-HashFile(file2,d,cf_md5);
-Debug("Send digest of %s to server, %s\n",file2,HashPrint(cf_md5,d));
+HashFile(file2,d,CF_DEFAULT_DIGEST);
+Debug("Send digest of %s to server, %s\n",file2,HashPrint(CF_DEFAULT_DIGEST,d));
 
 memset(recvbuffer,0,CF_BUFSIZE);
 
@@ -578,12 +598,12 @@ if (attr.copy.encrypt)
 
    sp = in + strlen(in) + CF_SMALL_OFFSET;
 
-   for (i = 0; i < CF_MD5_LEN; i++)
+   for (i = 0; i < CF_DEFAULT_DIGEST_LEN; i++)
       {
       *sp++ = d[i];
       }
    
-   cipherlen = EncryptString(conn->encryption_type,in,out,conn->session_key,strlen(in)+CF_SMALL_OFFSET+CF_MD5_LEN);
+   cipherlen = EncryptString(conn->encryption_type,in,out,conn->session_key,strlen(in)+CF_SMALL_OFFSET+CF_DEFAULT_DIGEST_LEN);
    snprintf(sendbuffer,CF_BUFSIZE,"SMD5 %d",cipherlen);
    memcpy(sendbuffer+CF_PROTO_OFFSET,out,cipherlen);
    tosend = cipherlen + CF_PROTO_OFFSET;
@@ -593,12 +613,12 @@ else
    snprintf(sendbuffer,CF_BUFSIZE,"MD5 %s",file1);
    sp = sendbuffer + strlen(sendbuffer) + CF_SMALL_OFFSET;
 
-   for (i = 0; i < CF_MD5_LEN; i++)
+   for (i = 0; i < CF_DEFAULT_DIGEST_LEN; i++)
       {
       *sp++ = d[i];
       }
    
-   tosend = strlen(sendbuffer)+CF_SMALL_OFFSET+CF_MD5_LEN;
+   tosend = strlen(sendbuffer)+CF_SMALL_OFFSET+CF_DEFAULT_DIGEST_LEN;
    } 
  
 if (SendTransaction(conn->sd,sendbuffer,tosend,CF_DONE) == -1)
@@ -616,12 +636,12 @@ if (ReceiveTransaction(conn->sd,recvbuffer,NULL) == -1)
 
 if (strcmp(CFD_TRUE,recvbuffer) == 0)
    {
-   Debug("MD5 mismatch: (reply - %s)\n",recvbuffer);
+   Debug("Hash mismatch: (reply - %s)\n",recvbuffer);
    return true; /* mismatch */
    }
 else
    {
-   Debug("MD5 matched ok: (reply - %s)\n",recvbuffer);
+   Debug("Hash matched ok: (reply - %s)\n",recvbuffer);
    return false;
    }
  
@@ -844,6 +864,7 @@ while (more)
    {
    if ((cipherlen = ReceiveTransaction(conn->sd,buf,&more)) == -1)
       {
+      free(buf);
       return false;
       }
 
@@ -867,7 +888,7 @@ while (more)
       return false;      
       }
 
-   EVP_DecryptInit(&ctx,CfengineCipher(CfEnterpriseOptions()),conn->session_key,iv);
+   EVP_DecryptInit_ex(&ctx,CfengineCipher(CfEnterpriseOptions()),NULL,conn->session_key,iv);
 
    if (!EVP_DecryptUpdate(&ctx,workbuf,&plainlen,buf,cipherlen))
       {
@@ -877,7 +898,7 @@ while (more)
       return false;
       }
 
-   if (!EVP_DecryptFinal(&ctx,workbuf+plainlen,&finlen))
+   if (!EVP_DecryptFinal_ex(&ctx,workbuf+plainlen,&finlen))
       {
       Debug("Final decrypt failed\n");
       close(dd);
@@ -932,7 +953,9 @@ int ServerConnect(struct cfagent_connection *conn,char *host,struct Attributes a
 
 { int err;
   short shortport;
-  char strport[CF_MAXVARSIZE];
+  char strport[CF_MAXVARSIZE] = {0};
+  struct sockaddr_in cin = {0};
+  struct timeval tv = {0};
 
 if (attr.copy.portnumber == (short)CF_NOINT)
    {
@@ -947,15 +970,28 @@ else
    
 CfOut(cf_verbose,"","Set cfengine port number to %s = %u\n",strport,(int)ntohs(shortport));
 
+if (attr.copy.timeout == (short)CF_NOINT || attr.copy.timeout <= 0)
+   {
+   tv.tv_sec = CONNTIMEOUT;
+   }
+else
+   {
+   tv.tv_sec = attr.copy.timeout;
+   }
+
+CfOut(cf_verbose,"","Set connection timeout to %d\n",tv.tv_sec);
+
+tv.tv_usec = 0;
+
 #if defined(HAVE_GETADDRINFO)
  
 if (!attr.copy.force_ipv4)
    {
-   struct addrinfo query, *response, *ap;
-   struct addrinfo query2, *response2, *ap2;
+   struct addrinfo query = {0}, *response, *ap;
+   struct addrinfo query2 = {0}, *response2, *ap2;
    int err,connected = false;
 
-   memset(&query,0,sizeof(struct addrinfo));   
+   memset(&query,0,sizeof(query));
    query.ai_family = AF_UNSPEC;
    query.ai_socktype = SOCK_STREAM;
 
@@ -967,6 +1003,8 @@ if (!attr.copy.force_ipv4)
    
    for (ap = response; ap != NULL; ap = ap->ai_next)
       {
+      int  res;
+      
       CfOut(cf_verbose,""," -> Connect to %s = %s on port %s\n",host,sockaddr_ntop(ap->ai_addr),strport);
       
       if ((conn->sd = socket(ap->ai_family,ap->ai_socktype,ap->ai_protocol)) == -1)
@@ -974,17 +1012,18 @@ if (!attr.copy.force_ipv4)
          CfOut(cf_inform,"socket"," !! Couldn't open a socket");
          continue;
          }
-      
+
       if (BINDINTERFACE[0] != '\0')
          {
-         memset(&query2,0,sizeof(struct addrinfo));   
-         
-         query.ai_family = AF_UNSPEC;
-         query.ai_socktype = SOCK_STREAM;
+	 memset(&query2,0,sizeof(query2));
+         query2.ai_family = AF_UNSPEC;
+         query2.ai_socktype = SOCK_STREAM;
          
          if ((err = getaddrinfo(BINDINTERFACE,NULL,&query2,&response2)) != 0)
             {
             cfPS(cf_error,CF_FAIL,"",pp,attr," !! Unable to lookup hostname or cfengine service: %s",gai_strerror(err));
+            cf_closesocket(conn->sd);
+            conn->sd = CF_NOT_CONNECTED;
             return false;
             }
          
@@ -1003,20 +1042,13 @@ if (!attr.copy.force_ipv4)
             freeaddrinfo(response2);
             }
          }
-      
-      signal(SIGALRM,(void *)TimeOut);
-      alarm(CF_TIMEOUT);
-      
-      if (connect(conn->sd,ap->ai_addr,ap->ai_addrlen) >= 0)
+
+      if (TryConnect(conn,&tv,ap->ai_addr,ap->ai_addrlen))
          {
          connected = true;
-         alarm(0);
-         signal(SIGALRM,SIG_DFL);
          break;
          }
-
-      alarm(0);
-      signal(SIGALRM,SIG_DFL);
+      
       }
    
    if (connected)
@@ -1037,9 +1069,11 @@ if (!attr.copy.force_ipv4)
    
    if (!connected && pp)
       {
-      cfPS(cf_verbose,CF_FAIL,"connect",pp,attr,"Unable to connect to server %s",host);
+      cfPS(cf_verbose,CF_FAIL,"connect",pp,attr," !! Unable to connect to server %s",host);
       return false;
       }
+
+   return true;
    }
  
  else
@@ -1047,8 +1081,8 @@ if (!attr.copy.force_ipv4)
 #endif /* ---------------------- only have ipv4 ---------------------------------*/ 
 
    {
+   int  res;
    struct hostent *hp;
-   struct sockaddr_in cin;
    memset(&cin,0,sizeof(cin));
    
    if ((hp = gethostbyname(host)) == NULL)
@@ -1077,28 +1111,15 @@ if (!attr.copy.force_ipv4)
    
    conn->family = AF_INET;
    snprintf(conn->remoteip,CF_MAX_IP_LEN-1,"%s",inet_ntoa(cin.sin_addr));
-    
-   signal(SIGALRM,(void *)TimeOut);
-   alarm(CF_TIMEOUT);
-    
-   if (err=connect(conn->sd,(void *)&cin,sizeof(cin)) == -1)
-      {
-      cfPS(cf_verbose,CF_INTERPT,"connect",pp,attr,"Unable to connect to server %s (old ipv4)",host);
-      return false;
-      }
-   
-   alarm(0);
-   signal(SIGALRM,SIG_DFL);
+
+
+   return TryConnect(conn,&tv,(struct sockaddr *)&cin,sizeof(cin));
    }
-
-LastSaw(host,cf_connect);
-return true; 
 }
-
 
 /*********************************************************************/
 
-int ServerOffline(char *server)
+static int ServerOffline(char *server)
     
 { struct Rlist *rp;
   struct cfagent_connection *conn;
@@ -1129,7 +1150,7 @@ return false;
 
 /*********************************************************************/
 
-struct cfagent_connection *ServerConnectionReady(char *server)
+static struct cfagent_connection *ServerConnectionReady(char *server)
 
 { struct Rlist *rp;
   struct cfagent_connection *conn;
@@ -1151,7 +1172,7 @@ for (rp = SERVERLIST; rp != NULL; rp=rp->next)
    
    if (svp->busy)
       {
-      CfOut(cf_verbose,"","Existing connection seems to be busy...\n",ipname);
+      CfOut(cf_verbose,"","Existing connection to %s seems to be active...\n",ipname);
       return NULL;
       }
    
@@ -1190,7 +1211,7 @@ CfOut(cf_verbose,"","Existing connection just became free...\n");
 
 /*********************************************************************/
 
-void MarkServerOffline(char *server)
+static void MarkServerOffline(char *server)
 
 /* Unable to contact the server so don't waste time trying for
    other connections, mark it offline */
@@ -1249,12 +1270,14 @@ if (svp->conn = NewAgentConn())
    svp->conn->sd = CF_COULD_NOT_CONNECT;
    }
 
+svp->busy = false;
+
 ThreadUnlock(cft_getaddr);
 }
 
 /*********************************************************************/
 
-void CacheServerConnection(struct cfagent_connection *conn,char *server)
+static void CacheServerConnection(struct cfagent_connection *conn,char *server)
 
 /* First time we open a connection, so store it */
     
@@ -1282,11 +1305,11 @@ ThreadUnlock(cft_getaddr);
 
 /*********************************************************************/
 
-int CacheStat(char *file,struct stat *statbuf,char *stattype,struct Attributes attr,struct Promise *pp)
+static int CacheStat(char *file,struct stat *statbuf,char *stattype,struct Attributes attr,struct Promise *pp)
 
 { struct cfstat *sp;
 
-Debug("CacheStat(%s,%d)\n",file,pp);
+Debug("CacheStat(%s)\n",file);
 
 for (sp = pp->cache; sp != NULL; sp=sp->next)
    {
@@ -1329,7 +1352,7 @@ return false;
 
 /*********************************************************************/
 
-void FlushFileStream(int sd,int toget)
+static void FlushFileStream(int sd,int toget)
 
 { int i;
   char buffer[2]; 
@@ -1342,5 +1365,111 @@ for (i = 0; i < toget; i++)
    }
 }
 
+
+/*********************************************************************/
+
+static int TryConnect(struct cfagent_connection *conn, struct timeval *tvp, struct sockaddr *cinp, int cinpSz)
+
+/** 
+ * Tries a nonblocking connect and then restores blocking if
+ * successful. Returns true on success, false otherwise.
+ * NB! Do not use recv() timeout - see note below.
+ **/
+    
+#ifdef MINGW
+{
+return NovaWin_TryConnect(conn,tvp,cinp,cinpSz);
+}
+
+#else  /* NOT MINGW */
+
+{ int res;
+  long arg;
+  struct sockaddr_in emptyCin = {0};
+  struct timeval tvRecv = {0};
+
+  if (!cinp)
+     {
+     cinp = (struct sockaddr *)&emptyCin;
+     cinpSz = sizeof(emptyCin);
+     }
+  
+
+   /* set non-blocking socket */
+   arg = fcntl(conn->sd, F_GETFL, NULL);
+
+   if(fcntl(conn->sd, F_SETFL, arg | O_NONBLOCK) == -1)
+     {
+     CfOut(cf_error,"","!! Could not set socket to non-blocking mode");
+     }
+
+   res = connect(conn->sd,cinp,cinpSz);
+
+   if (res < 0)
+      {
+      if (errno == EINPROGRESS)
+         {
+         fd_set myset;
+         int valopt;
+         socklen_t lon = sizeof(int);
+         
+         FD_ZERO(&myset);
+         FD_SET(conn->sd,&myset);
+
+         /* now wait for connect, but no more than tvp.sec */
+         res = select(conn->sd + 1, NULL, &myset, NULL, tvp);
+         if(getsockopt(conn->sd, SOL_SOCKET, SO_ERROR, (void*)(&valopt), &lon) != 0)
+	   {
+	     CfOut(cf_error,"getsockopt","!! Could not check connection status");
+	     return false;
+	   }
+
+         if (valopt || res <= 0)
+            {
+            CfOut(cf_inform,"connect"," !! Error connecting to server (timeout)");
+            return false;
+            }
+         }
+      else
+         {
+         CfOut(cf_inform,"connect"," !! Error connecting to server");
+         return false;
+         }
+      }
+
+
+   /* connection suceeded; return to blocking mode */
+
+   if(fcntl(conn->sd, F_SETFL, arg) == -1)
+     {
+     CfOut(cf_error,"","!! Could not set socket to blocking mode");
+     }
+
+
+   /*
+    * NB: recv() timeout is not portable.  struct timeval is very
+    *     unstable - interpreted differently on different
+    *     platforms. E.g. setting tv_sec to 50 (and tv_usec to 0)
+    *     results in a timeout of 0.5 seconds on Windows, but 50
+    *     seconds on Linux. Thus it must be tested thoroughly on
+    *     the affected platforms. */
+
+   
+#ifdef LINUX
+    
+   tvRecv.tv_sec = RECVTIMEOUT;
+   tvRecv.tv_usec = 0;
+
+   if (setsockopt(conn->sd, SOL_SOCKET, SO_RCVTIMEO, (char *)&tvRecv, sizeof(tvRecv)))
+      {
+      CfOut(cf_error,"setsockopt","!! Couldn't set socket timeout");
+      }
+
+#endif
+  
+  return true;
+}
+
+#endif  /* NOT MINGW */
 
 

@@ -49,6 +49,12 @@ switch(type)
    {
    case CF_SCALAR:
        Debug("   Appending Constraint: %s => %s\n",lval,rval);
+       
+       if (PARSING && strcmp(lval,"ifvarclass") == 0)
+          {
+          ValidateClassSyntax(rval);
+          }
+
        break;
    case CF_FNCALL:
        Debug("   Appending a function call to rhs\n");
@@ -186,7 +192,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type (%c) for boolean constraint %s did not match internals\n",cp->type,lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type (%c) for boolean constraint %s did not match internals\n",cp->type,lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -237,7 +243,7 @@ for (cp = list; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type (%c) for boolean constraint %s did not match internals\n",cp->type,lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type (%c) for boolean constraint %s did not match internals\n",cp->type,lval);
          FatalError("Aborted");
          }
 
@@ -288,7 +294,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (!(cp->type == CF_FNCALL || cp->type == CF_SCALAR))
          {
-         CfOut(cf_error,"","Software error - type (%c) for bundle constraint %s did not match internals\n",cp->type,lval);
+         CfOut(cf_error,"","Anomalous type mismatch - type (%c) for bundle constraint %s did not match internals\n",cp->type,lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -326,7 +332,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type for int constraint %s did not match internals\n",lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type for int constraint %s did not match internals\n",lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -363,7 +369,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type for int constraint %s did not match internals\n",lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type for int constraint %s did not match internals\n",lval);
          FatalError("Aborted");
          }
 
@@ -402,7 +408,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type for int constraint %s did not match internals\n",lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type for int constraint %s did not match internals\n",lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -446,7 +452,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type for owner constraint %s did not match internals\n",lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type for owner constraint %s did not match internals\n",lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -491,7 +497,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_SCALAR)
          {
-         CfOut(cf_error,"","Software error - expected type for group constraint %s did not match internals\n",lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type for group constraint %s did not match internals\n",lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -530,7 +536,7 @@ for (cp = pp->conlist; cp != NULL; cp=cp->next)
 
       if (cp->type != CF_LIST)
          {
-         CfOut(cf_error,"","Software error - expected type for list constraint %s did not match internals\n",lval);
+         CfOut(cf_error,"","Anomalous type mismatch - expected type for list constraint %s did not match internals\n",lval);
          PromiseRef(cf_error,pp);
          FatalError("Aborted");
          }
@@ -589,9 +595,44 @@ return retval;
 void ReCheckAllConstraints(struct Promise *pp)
 
 { struct Constraint *cp;
-  char *sp,*handle = GetConstraint("handle",pp,CF_SCALAR);
+ char *sp,*handle = GetConstraint("handle",pp,CF_SCALAR);
   struct PromiseIdent *prid;
   struct Item *ptr;
+  int in_class_any = false;
+
+if (strcmp(pp->agentsubtype,"reports") == 0 && strcmp(pp->classes,"any") == 0)
+   {
+   char *cl = GetConstraint("ifvarclass",pp,CF_SCALAR);
+   
+   if (cl == NULL || strcmp(cl,"any") == 0)
+      {
+      in_class_any = true;
+      }
+   
+   if (in_class_any)
+      {
+      CfOut(cf_error,"","reports promises may not be in class \'any\' - risk of a notification explosion");
+      PromiseRef(cf_error,pp);
+      }
+   }
+
+
+/* Special promise type checks */
+
+if (!IsDefinedClass(pp->classes))
+   {
+   return;
+   }
+
+if (VarClassExcluded(pp,&sp))
+   {
+   return;
+   }
+
+if (SHOWREPORTS)
+   {
+   NewPromiser(pp);
+   }
 
 if (handle)
    {
@@ -614,7 +655,6 @@ if (handle)
       NewPromiseId(handle,pp);
       }
    
-   
    prid = NULL; // we can't access this after unlocking
    ThreadUnlock(cft_policy);
    }
@@ -633,30 +673,18 @@ for (cp = pp->conlist; cp != NULL; cp = cp->next)
    PostCheckConstraint(pp->agentsubtype,pp->bundle,cp->lval,cp->rval,cp->type);
    }     
 
-/* Special promise type checks */
-
-if (!IsDefinedClass(pp->classes))
-   {
-   return;
-   }
-
-if (VarClassExcluded(pp,&sp))
-   {
-   return;
-   }
-
 if (strcmp(pp->agentsubtype,"insert_lines") == 0)
    {
-   /* Multiple additions with same criterion will not be convergent */
+   /* Multiple additions with same criterion will not be convergent -- but ignore for empty file baseline */
    
-   if (sp = GetConstraint("select_line_matching",pp,CF_SCALAR))
+   if ((sp = GetConstraint("select_line_matching",pp,CF_SCALAR)))
       {
       if (ptr = ReturnItemIn(EDIT_ANCHORS,sp))
          {
          if (strcmp(ptr->classes,pp->bundle) == 0)
             {
-            CfOut(cf_error,""," !! insert_lines promise uses the same select_line_matching anchor (\"%s\") as another promise. This will lead to non-convergent behaviour.",sp);
-            PromiseRef(cf_error,pp);
+            CfOut(cf_inform,""," !! insert_lines promise uses the same select_line_matching anchor (\"%s\") as another promise. This will lead to non-convergent behaviour unless \"empty_file_before_editing\" is set.",sp);
+            PromiseRef(cf_inform,pp);
             }
          }
       else

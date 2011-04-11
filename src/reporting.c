@@ -85,31 +85,32 @@ void ShowContext(void)
 
 { struct Item *ptr;
   char vbuff[CF_BUFSIZE];
-
+  int i;
+  
  /* Text output */
 
 CfOut(cf_verbose,"","");
 
-ptr = SortItemListNames(VHEAP);
-VHEAP = ptr;
+for (i = 0; i < CF_ALPHABETSIZE; i++)
+   {
+   ptr = SortItemListNames(VHEAP.list[i]);
+   VHEAP.list[i] = ptr;
+   }
 
 if (VERBOSE||DEBUG)
    {
    snprintf(vbuff,CF_BUFSIZE,"Host %s's basic classified context",VFQNAME);
    ReportBanner(vbuff);
    
-   printf("%s  -> Defined classes = { ",VPREFIX);
-   
-   for (ptr = VHEAP; ptr != NULL; ptr=ptr->next)
-      {
-      printf("%s ",ptr->name);
-      }
+   printf("%s>  -> Defined classes = { ",VPREFIX);
+
+   ListAlphaList(stdout,VHEAP,' ');
    
    printf("}\n");
 
    CfOut(cf_verbose,"","");
    
-   printf("%s  -> Negated Classes = { ",VPREFIX);
+   printf("%s>  -> Negated Classes = { ",VPREFIX);
    
    for (ptr = VNEGHEAP; ptr != NULL; ptr=ptr->next)
       {
@@ -131,18 +132,14 @@ void ShowControlBodies()
 printf("<h1>Control bodies for cfengine components</h1>\n");
 
 printf("<div id=\"bundles\">");
-printf("<ul>\n");
 
 for (i = 0; CF_ALL_BODIES[i].btype != NULL; i++)
    {
-   printf("<li>COMPONENT %s</li>\n", CF_ALL_BODIES[i].btype);
+   printf("<h4>COMPONENT %s</h4>\n", CF_ALL_BODIES[i].btype);
 
-   printf("<li><h4>PROMISE TYPE %s</h4>\n",CF_ALL_BODIES[i].subtype);
+   printf("<h4>PROMISE TYPE %s</h4>\n",CF_ALL_BODIES[i].subtype);
    ShowBodyParts(CF_ALL_BODIES[i].bs);
-   printf("</li>\n");
    }
-
-printf("</ul></div>\n\n");
 }
 
 /*******************************************************************/
@@ -157,6 +154,9 @@ void ShowPromises(struct Bundle *bundles,struct Body *bodies)
   char *v,rettype,vbuff[CF_BUFSIZE];
   void *retval;
 
+#if defined(HAVE_NOVA) && defined(HAVE_LIBMONGOC)
+Nova_StoreUnExpandedPromises(bundles,bodies);
+#else  
 if (GetVariable("control_common","version",&retval,&rettype) != cf_notype)
    {
    v = (char *)retval;
@@ -176,8 +176,6 @@ fprintf(FREPORT_HTML,"<p>");
   
 for (bp = bundles; bp != NULL; bp=bp->next)
    {
-   BundleNode(FREPORT_HTML,bp->name);
-
    fprintf(FREPORT_HTML,"%s Bundle %s%s%s %s%s%s\n",
            CFH[cfx_bundle][cfb],
            CFH[cfx_blocktype][cfb],bp->type,CFH[cfx_blocktype][cfe],
@@ -203,7 +201,6 @@ for (bp = bundles; bp != NULL; bp=bp->next)
    for (sp = bp->subtypes; sp != NULL; sp = sp->next)
       {
       fprintf(FREPORT_HTML,"%s",CFH[cfx_line][cfb]);
-      TypeNode(FREPORT_HTML,sp->name);
       fprintf(FREPORT_HTML,"%s",CFH[cfx_line][cfe]);
       fprintf(FREPORT_TXT,"   TYPE: %s\n\n",sp->name);
       
@@ -230,7 +227,6 @@ for (bdp = bodies; bdp != NULL; bdp=bdp->next)
    fprintf(FREPORT_HTML,"%s%s\n",CFH[cfx_line][cfb],CFH[cfx_block][cfb]);
    fprintf(FREPORT_HTML,"%s\n",CFH[cfx_promise][cfb]);
 
-   BodyNode(FREPORT_HTML,bdp->name,0);
    ShowBody(bdp,3);
 
    fprintf(FREPORT_TXT,"\n");
@@ -240,6 +236,7 @@ for (bdp = bodies; bdp != NULL; bdp=bdp->next)
    }
 
 CfHtmlFooter(FREPORT_HTML,FOOTER);
+#endif
 }
 
 /*******************************************************************/
@@ -264,10 +261,12 @@ else
    v = "not specified";
    }
 
+#if defined(HAVE_NOVA) && defined(HAVE_LIBMONGOC)
+Nova_StoreExpandedPromise(pp);
+MapPromiseToTopic(FKNOW,pp,v);
+#else
 fprintf(FREPORT_HTML,"%s\n",CFH[cfx_line][cfb]);
 fprintf(FREPORT_HTML,"%s\n",CFH[cfx_promise][cfb]);
-MapPromiseToTopic(FKNOW,pp,v);
-PromiseNode(FREPORT_HTML,pp,0);
 fprintf(FREPORT_HTML,"Promise type is %s%s%s, ",CFH[cfx_subtype][cfb],pp->agentsubtype,CFH[cfx_subtype][cfe]);
 fprintf(FREPORT_HTML,"<a href=\"#class_context\">context</a> is %s%s%s <br><hr>\n\n",CFH[cfx_class][cfb],pp->classes,CFH[cfx_class][cfe]);
 
@@ -346,42 +345,13 @@ for (cp = pp->conlist; cp != NULL; cp = cp->next)
       Indent(indent);
       fprintf(FREPORT_HTML," , if body <a href=\"#class_context\">context</a> <span class=\"context\">%s</span>\n",cp->classes);
       fprintf(FREPORT_TXT," if body context %s\n",cp->classes);
-      }
-     
+      }     
    }
 
 av = 0;
 var = 0;
 val = 0;
 last = 0;
-
-#ifdef HAVE_LIBCFNOVA
-lastseen = GetPromiseCompliance(pp,&val,&av,&var,&last);
-
-if (lastseen) /* This only gives something in Nova or higher */
-   {
-   strncpy(vbuff,cf_ctime(&lastseen),CF_MAXVARSIZE);
-   Chop(vbuff);
-   
-   fprintf(FREPORT_HTML,"<hr><p><div id=\"compliance\">Compliance last checked on %s. At that time the system was ",vbuff);
-   if (val = 1.0)
-      {
-      fprintf(FREPORT_HTML,"COMPLIANT.");
-      }
-   else if (val = 0.5)
-      {
-      fprintf(FREPORT_HTML,"REPAIRED.");
-      }
-   else if (val = 0.0)
-      {
-      fprintf(FREPORT_HTML,"NON-COMPLIANT.");
-      }
-
-   fprintf(FREPORT_HTML," Average compliance %.1lf pm %.1lf percent. </div>",av*100.0,sqrt(var)*100.0);
-   }
-#else
-fprintf(FREPORT_HTML,"<hr><p><div id=\"compliance\">Compliance level checking only in Cfengine Nova and above</div>",vbuff);
-#endif
 
 if (pp->audit)
    {
@@ -403,11 +373,15 @@ else
    Indent(indent);
    fprintf(FREPORT_TXT,"Promise (version %s) belongs to bundle \'%s\' (type %s) near line %d\n\n",v,pp->bundle,pp->bundletype,pp->lineno);
    }
+
+#endif
 }
 
 /*******************************************************************/
 
 void ShowScopedVariables()
+
+/* WARNING: Not thread safe (access to VSCOPE) */
 
 { struct Scope *ptr;
 
@@ -420,7 +394,7 @@ for (ptr = VSCOPE; ptr != NULL; ptr=ptr->next)
       continue;
       }
 
-   fprintf(FREPORT_HTML,"<p>\nScope %s:\n<br><p>",ptr->scope);
+   fprintf(FREPORT_HTML,"<h4>\nScope %s:<h4>",ptr->scope);
    fprintf(FREPORT_TXT,"\nScope %s:\n",ptr->scope);
    
    if (ptr->hashtable)
@@ -431,6 +405,90 @@ for (ptr = VSCOPE; ptr != NULL; ptr=ptr->next)
    }
 
 fprintf(FREPORT_HTML,"</div>");
+}
+
+/*******************************************************************/
+
+void NoteVarUsageDB(void)
+
+/* WARNING: Not thread safe (access to VSCOPE) */
+
+{ struct Scope *ptr;
+  char filename[CF_BUFSIZE];
+  CF_DB *dbp;
+  CF_DBC *dbcp;
+  char key[CF_MAXVARSIZE], *keyDb;  // scope.varname
+  void *val;
+  struct Variable var = {0}, *varDb;
+  int i, keyDbSize, valSize;
+  time_t varExpireAge = CF_MONTH;  // remove vars from DB after one month
+  time_t now = time(NULL);
+
+if (MINUSF) /* Only do this for the default policy */
+   {
+   return;
+   }
+ 
+snprintf(filename,sizeof(filename),"%s/state/%s",CFWORKDIR,CF_VARIABLES);
+MapName(filename);
+
+if (!OpenDB(filename,&dbp))
+   {
+   return;
+   }
+
+/* sync db with current vars */
+
+// NOTE: can extend to support avg and stddev in future
+var.e.t = now;  // all are last seen now
+
+for(ptr = VSCOPE; ptr != NULL; ptr=ptr->next)
+   {
+   if (strcmp(ptr->scope,"this") == 0)
+      {
+      continue;
+      }
+   
+   for (i = 0; i < CF_HASHTABLESIZE; i++)
+      {
+      if(ptr->hashtable[i] != NULL)
+	 {
+         snprintf(key, sizeof(key), "%s.%s", ptr->scope, ptr->hashtable[i]->lval);
+         var.dtype = ptr->hashtable[i]->dtype;
+         var.rtype = ptr->hashtable[i]->rtype;
+         var.rval[0] = '\0';
+         PrintRval(var.rval, sizeof(var.rval), ptr->hashtable[i]->rval, ptr->hashtable[i]->rtype);
+	 
+         WriteDB(dbp,key,&var,VARSTRUCTUSAGE(var));
+	 }
+      } 
+   }
+
+/* purge old entries from DB */
+if (!NewDBCursor(dbp,&dbcp))
+   {
+   CfOut(cf_inform,""," !! Unable to purge variable db");
+   CloseDB(dbp);
+   return;
+   }
+
+
+while(NextDB(dbp,dbcp,&keyDb,&keyDbSize,&val,&valSize))
+   {
+   if (val != NULL)
+      {
+      varDb = (struct Variable *)val;
+      
+      if (varDb->e.t < now - varExpireAge)
+         {
+         Debug("Variable record %s expired\n",keyDb);
+         DeleteDB(dbp,keyDb);
+         }
+      }
+   }
+
+DeleteDBCursor(dbp,dbcp);
+CloseDB(dbp);
 }
 
 /*******************************************************************/
@@ -469,7 +527,8 @@ CfOut(cf_verbose,"","\n");
 
 void BannerSubSubType(char *bundlename,char *type)
 
-{
+{ int i;
+ 
 if (strcmp(type,"processes") == 0)
    {
    struct Item *ip;
@@ -477,11 +536,14 @@ if (strcmp(type,"processes") == 0)
 
    CfOut(cf_verbose,"","     ??? Local class context: \n");
 
-   for (ip = VADDCLASSES; ip != NULL; ip=ip->next)
+   for (i = 0; i < CF_ALPHABETSIZE; i++)
       {
-      printf("       %sǹ",ip->name);
+      for (ip = VADDCLASSES.list[i]; ip != NULL; ip=ip->next)
+         {
+         printf("       %sǹ",ip->name);
+         }
       }
-
+   
    CfOut(cf_verbose,"","\n");
    }
 
@@ -524,8 +586,6 @@ void ShowBody(struct Body *body,int indent)
 fprintf(FREPORT_TXT,"%s body for type %s",body->name,body->type);
 fprintf(FREPORT_HTML," %s%s%s ",CFH[cfx_blocktype][cfb],body->type,CFH[cfx_blocktype][cfe]);
 
-BodyNode(FREPORT_HTML,body->name,1);
-
 fprintf(FREPORT_HTML,"%s%s%s",CFH[cfx_blockid][cfb],body->name,CFH[cfx_blockid][cfe]);
 
 if (body->args == NULL)
@@ -542,7 +602,7 @@ else
       {
       if (rp->type != CF_SCALAR)
          {
-         FatalError("ShowBody - non-scalar paramater container");
+         FatalError("ShowBody - non-scalar parameter container");
          }
 
       fprintf(FREPORT_HTML,"%s%s%s,\n",CFH[cfx_args][cfb],(char *)rp->item,CFH[cfx_args][cfe]);
@@ -553,8 +613,6 @@ else
    fprintf(FREPORT_HTML,")");
    fprintf(FREPORT_TXT,"\n");
    }
-
-BodyNode(FREPORT_HTML,body->name,2);
 
 Indent(indent);
 fprintf(FREPORT_TXT,"{\n");
@@ -592,17 +650,14 @@ fprintf(FREPORT_TXT,"}\n");
 void SyntaxTree(void)
 
 {
-printf("%s",CFH[0][0]);
-
-printf("<table class=frame><tr><td>\n");
 printf("<h1>CFENGINE %s SYNTAX</h1><p>",VERSION);
 
+printf("<table class=\"frame\"><tr><td>\n");
 ShowDataTypes();
 ShowControlBodies();
 ShowBundleTypes();
 ShowBuiltinFunctions();
 printf("</td></tr></table>\n");
-printf("%s",CFH[0][1]);
 }
 
 /*******************************************************************/
@@ -629,21 +684,34 @@ printf("</ol></td></tr></table>\n\n");
 void ShowBundleTypes()
 
 { int i;
+  struct SubTypeSyntax *st;
 
 printf("<h1>Bundle types (software components)</h1>\n");
 
 printf("<div id=\"bundles\">");
-printf("<ul>\n");
 
 for (i = 0; CF_ALL_BODIES[i].btype != NULL; i++)
    {
-   printf("<li>COMPONENT %s</li>\n", CF_ALL_BODIES[i].btype);
+   printf("<h4>COMPONENT %s</h4>\n", CF_ALL_BODIES[i].btype);
    ShowPromiseTypesFor(CF_ALL_BODIES[i].btype);
    }
 
-printf("</ul></div>\n\n");
-}
+printf("<h4>EMBEDDED BUNDLE edit_line<h4>\n");
 
+ShowPromiseTypesFor("*");
+
+st = CF_FILES_SUBTYPES;
+
+for (i = 0; st[i].btype != NULL; i++)
+   {
+   if (strcmp("edit_line",st[i].btype) == 0)
+      {
+      ShowBodyParts(st[i].bs);
+      }
+   }
+
+printf("</div>\n\n");
+}
 
 /*******************************************************************/
 
@@ -654,7 +722,6 @@ void ShowPromiseTypesFor(char *s)
 
 printf("<div id=\"promisetype\">");
 printf("<h4>Promise types for %s bundles</h4>\n",s);
-printf("<ul>\n");
 printf("<table class=border><tr><td>\n");
 
 for (i = 0; i < CF3_MODULES; i++)
@@ -665,15 +732,14 @@ for (i = 0; i < CF3_MODULES; i++)
       {
       if (strcmp(s,st[j].btype) == 0 || strcmp("*",st[j].btype) == 0)
          {
-         printf("<li><h4>PROMISE TYPE %s</h4>\n",st[j].subtype);
+         printf("<h4>PROMISE TYPE %s</h4>\n",st[j].subtype);
          ShowBodyParts(st[j].bs);
-         printf("</li>\n");
          }
       }
    }
 
 printf("</td></tr></table>\n");
-printf("</ul></div>\n\n");
+printf("</div>\n\n");
 }
 
 /*******************************************************************/
@@ -687,7 +753,7 @@ if (bs == NULL)
    return;
    }
  
-printf("<div id=bodies><table class=border>\n");
+printf("<div id=\"bodies\"><table class=\"border\">\n");
 
 for (i = 0; bs[i].lval != NULL; i++)
    {
@@ -790,6 +856,6 @@ if (PARSING)
 else
    {
    Chop(s);
-   fprintf(stderr,"Validation: %s\n",s);
+   FatalError("Validation: %s\n",s);
    }
 }

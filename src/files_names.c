@@ -89,7 +89,7 @@ for (ip = path; ip != NULL; ip=ip->next)
 
    if (!JoinPath(pbuffer,ip->name))
       {
-      CfOut(cf_error,"","Buffer overflow in LocateFilePromiserGroup\n");
+      CfOut(cf_error,"","Buffer has limited size in LocateFilePromiserGroup\n");
       return;
       }
 
@@ -108,7 +108,7 @@ if (expandregex) /* Expand one regex link and hand down */
    char nextbuffer[CF_BUFSIZE],nextbufferOrig[CF_BUFSIZE],regex[CF_BUFSIZE];
    struct dirent *dirp;
    DIR *dirh;
-   struct Attributes dummyattr;
+   struct Attributes dummyattr = {0};
 
    memset(&dummyattr,0,sizeof(dummyattr));
    memset(regex,0,CF_BUFSIZE);
@@ -179,7 +179,7 @@ if (expandregex) /* Expand one regex link and hand down */
 
             if (!FullTextMatch(pp->promiser,nextbuffer))
                {
-               CfOut(cf_error,"","Error recomputing references");
+               Debug("Error recomputing references for \"%s\" in: %s",pp->promiser,nextbuffer);
                }
 
             /* If there were back references there could still be match.x vars to expand */
@@ -210,6 +210,91 @@ if (count == 0)
    }
 
 DeleteItemList(path);
+}
+
+/*********************************************************************/
+
+int IsNewerFileTree(char *dir,time_t reftime)
+
+{ struct dirent *dirp;
+  char path[CF_BUFSIZE] = {0};
+  struct Attributes dummyattr = {0};
+  DIR *dirh;
+  struct stat sb;
+
+// Assumes that race conditions on the file path are unlikely and unimportant
+
+if (lstat(dir,&sb) == -1)
+   {
+   CfOut(cf_error,"stat"," !! Unable to stat directory %s in IsNewerFileTree",dir);
+   // return true to provoke update
+   return true;
+   }
+
+if (S_ISDIR(sb.st_mode))
+   {
+   //CfOut(cf_verbose,""," ?? Looking at %s (%ld)",dir,sb.st_mtime-reftime);      
+   
+   if (sb.st_mtime > reftime)
+      {
+      CfOut(cf_verbose,""," >> Detected change in %s",dir);      
+      return true;
+      }
+   }
+  
+if ((dirh=opendir(dir)) == NULL)
+   {
+   CfOut(cf_error,"opendir"," !! Unable to open directory '%s' in IsNewerFileTree",dir);
+   return false;
+   }
+else
+   {
+   for (dirp = readdir(dirh); dirp != NULL; dirp = readdir(dirh))
+      {
+      if (!ConsiderFile(dirp->d_name,dir,dummyattr,NULL))
+         {
+         continue;
+         }
+      
+      strncpy(path,dir,CF_BUFSIZE-1);
+
+      if (!JoinPath(path,dirp->d_name))
+         {
+         CfOut(cf_error,"","Internal limit: Buffer ran out of space adding %s to %s in IsNewerFileTree",dir,path);
+	 closedir(dirh);
+         return false;
+         }
+
+      if (lstat(path,&sb) == -1)
+         {
+         CfOut(cf_error,"stat"," !! Unable to stat directory %s in IsNewerFileTree",path);
+	 closedir(dirh);
+         // return true to provoke update
+         return true;
+         }
+
+      if (S_ISDIR(sb.st_mode))
+         {
+         if (sb.st_mtime > reftime)
+            {
+            CfOut(cf_verbose,""," >> Detected change in %s",path);      
+            closedir(dirh);
+            return true;
+            }
+         else
+            {
+            if (IsNewerFileTree(path,reftime))
+               {
+               closedir(dirh);
+               return true;
+               }
+            }
+         }
+      }   
+   }
+
+closedir(dirh);
+return false;
 }
 
 /*********************************************************************/
@@ -256,21 +341,6 @@ return true;
 
 /*********************************************************************/
 
-int ExpandOverflow(char *str1,char *str2)   /* Should be an inline ! */
-
-{ int len = strlen(str2);
-
-if ((strlen(str1)+len) > (CF_EXPANDSIZE - CF_BUFFERMARGIN))
-   {
-   CfOut(cf_error,"","Expansion overflow constructing string. Increase CF_EXPANDSIZE macro. Tried to add %s to %s\n",str2,str1);
-   return true;
-   }
-
-return false;
-}
-
-/*********************************************************************/
-
 char *JoinPath(char *path,char *leaf)
 
 { int len = strlen(leaf);
@@ -280,7 +350,7 @@ AddSlash(path);
 
 if ((strlen(path)+len) > (CF_BUFSIZE - CF_BUFFERMARGIN))
    {
-   CfOut(cf_error,"","Buffer overflow constructing string. Tried to add %s to %s\n",leaf,path);
+   CfOut(cf_error,"","Internal limit: Buffer ran out of space constructing string. Tried to add %s to %s\n",leaf,path);
    return NULL;
    }
 
@@ -299,12 +369,95 @@ DeleteSlash(path);
       
 if ((strlen(path)+len) > (CF_BUFSIZE - CF_BUFFERMARGIN))
    {
-   CfOut(cf_error,"","Buffer overflow constructing string. Tried to add %s to %s\n",leaf,path);
+   CfOut(cf_error,"","Internal limit: Buffer ran out of space constructing string. Tried to add %s to %s\n",leaf,path);
    return NULL;
    }
 
 strcat(path,leaf);
 return path;
+}
+
+/*********************************************************************/
+
+int StartJoin(char *path,char *leaf,int bufsize)
+
+{
+*path = '\0';
+return JoinMargin(path,leaf,NULL,bufsize,CF_BUFFERMARGIN);
+}
+
+/*********************************************************************/
+
+int StartJoinFast(char *path,char *leaf,char **nextFree,int bufsize)
+
+{
+*path = '\0';
+*nextFree = path;
+
+return JoinMargin(path,leaf,nextFree,bufsize,CF_BUFFERMARGIN);
+}
+
+/*********************************************************************/
+
+int Join(char *path,char *leaf,int bufsize)
+
+{
+  return JoinMargin(path,leaf,NULL,bufsize,CF_BUFFERMARGIN);
+}
+
+/*********************************************************************/
+
+int JoinFast(char *path,char *leaf,char **nextFree,int bufsize)
+/*
+ * Faster stringjoin by keeping track of where we last stopped
+ */
+{
+  return JoinMargin(path,leaf,nextFree,bufsize,CF_BUFFERMARGIN);
+}
+
+
+/*********************************************************************/
+
+int EndJoin(char *path,char *leaf,int bufsize)
+
+{
+  return JoinMargin(path,leaf,NULL,bufsize,0);
+}
+
+/*********************************************************************/
+
+int JoinMargin(char *path,char *leaf,char **nextFree,int bufsize,int margin)
+
+{ int len = strlen(leaf);
+
+if (margin < 0)
+   {
+   FatalError("Negative margin in JoinMargin()");
+   }
+
+if(nextFree)
+   {
+   if ((*nextFree - path) + len > (bufsize - margin) )
+      {
+      CfOut(cf_error,"","Internal limit: Buffer ran out of space constructing string (using nextFree), len = %d > %d.\n",(strlen(path)+len),(bufsize - CF_BUFFERMARGIN));
+      return false;
+      }
+   
+   strcpy(*nextFree, leaf);
+   *nextFree += len;
+   }
+else
+   {
+   if ((strlen(path)+len) > (bufsize - margin))
+      {
+      CfOut(cf_error,"","Internal limit: Buffer ran out of space constructing string (%d > %d).\n",(strlen(path)+len),(bufsize - CF_BUFFERMARGIN));
+      return false;
+      }
+   
+   strcat(path,leaf);
+   }
+
+return true;
 }
 
 /*********************************************************************/
@@ -454,23 +607,71 @@ return ret;
 
 /*********************************************************************/
 
-char *CanonifyName(char *str)
+void CanonifyNameInPlace(char *s)
+{
+for (; *s != '\0'; s++)
+   {
+   if (!isalnum(*s) || *s == '.')
+      {
+      *s = '_';
+      }
+   }
+}
+
+/*********************************************************************/
+
+char *CanonifyName(const char *str)
+
+{ static char buffer[CF_BUFSIZE];
+          
+strncpy(buffer,str,CF_BUFSIZE);
+CanonifyNameInPlace(buffer);
+return buffer;
+}
+
+/*********************************************************************/
+
+char *CanonifyChar(const char *str,char ch)
 
 { static char buffer[CF_BUFSIZE];
   char *sp;
-          
-memset(buffer,0,CF_BUFSIZE);
-strcpy(buffer,str);
+
+strncpy(buffer,str,CF_BUFSIZE-1);
 
 for (sp = buffer; *sp != '\0'; sp++)
-    {
-    if (!isalnum((int)*sp) || *sp == '.')
-       {
-       *sp = '_';
-       }
-    }
+   {
+   if (*sp == ch)
+      {
+      *sp = '_';
+      }
+   }
 
 return buffer;
+}
+
+/*********************************************************************/
+
+int CompareCSVName(char *s1,char *s2)
+
+{ char *sp1,*sp2;
+  char ch1,ch2;
+
+for (sp1 = s1,sp2 = s2; *sp1 != '\0' && *sp2 != '\0'; sp1++,sp2++)
+   {
+   ch1 = (*sp1 == ',') ? '_' : *sp1;
+   ch2 = (*sp2 == ',') ? '_' : *sp2;
+
+   if (ch1 > ch2)
+      {
+      return 1;
+      }
+   else if (ch1 < ch2)
+      {
+      return -1;
+      }
+   }
+
+return 0;
 }
 
 /*********************************************************************/
@@ -588,12 +789,27 @@ if (strlen(str) > CF_EXPANDSIZE)
    return;
    }
 
-for (i = strlen(str)-1; isspace((int)str[i]); i--)
+for (i = strlen(str)-1; i >= 0 && isspace((int)str[i]); i--)
    {
    str[i] = '\0';
    }
 }
 
+void StripTrailingNewline(char *str)
+{
+    char *c = str + strlen(str);
+
+    if (c - str > CF_EXPANDSIZE)
+    {
+        CfOut(cf_error, "", "StripTrailingNewline was called on an overlong string");
+        return;
+    }
+
+    for (; c > str && (*c == '\0' || *c == '\n'); --c)
+    {
+        *c = '\0';
+    }
+}
 
 /*********************************************************************/
 
@@ -679,38 +895,75 @@ return false;
 
 /*********************************************************************/
 
-int IsStrIn(char *str, char **strs)
-{
-  int i;
+int IsStrIn(char *str, char **strs, int ignoreCase)
 
-  for(i = 0; strs[i] != NULL; i++)
-    {
-      if(strcmp(str, strs[i]) == 0)
-	{
-	return true;
-	}
-    }
+{ int i;
 
-  return false;
+for (i = 0; strs[i] != NULL; i++)
+   {
+   if(ignoreCase)
+     {
+     if (strcasecmp(str,strs[i]) == 0)
+       {
+       return true;
+       }
+     }
+   else
+     {
+     if (strcmp(str,strs[i]) == 0)
+       {
+       return true;
+       }
+     }
+   }
+
+return false;
 }
 
 /*********************************************************************/
 
-int IsAbsoluteFileName(char *f)
+void FreeStringArray(char **strs)
 
-{
+{ int i;
+
+if (strs == NULL)
+   {
+   return;
+   }
+
+for(i = 0; strs[i] != NULL; i++)
+   {
+   free(strs[i]);
+   }
+
+free(strs);
+strs = NULL;
+}
+
+/*********************************************************************/
+
+int IsAbsoluteFileName(const char *f)
+
+{ int quoted,off = 0;
+
+// Check for quoted strings
+ 
+for (off = 0; f[off] == '\"'; off++)
+   {
+   }
+ 
 #ifdef NT
-if (IsFileSep(f[0]) && IsFileSep(f[1]))
+if (IsFileSep(f[off]) && IsFileSep(f[off+1]))
    {
    return true;
    }
 
-if (isalpha(f[0]) && f[1] == ':' && IsFileSep(f[2]))
+if (isalpha(f[off]) && f[off+1] == ':' && IsFileSep(f[off+2]))
    {
    return true;
    }
 #endif
-if (*f == '/')
+if (f[off] == '/')
    {
    return true;
    }
@@ -718,6 +971,10 @@ if (*f == '/')
 return false;
 }
 
+bool IsFileOutsideDefaultRepository(const char *f)
+{
+return (*f == '.') || IsAbsoluteFileName(f);
+}
 
 /*******************************************************************/
 
@@ -872,6 +1129,33 @@ return buffer;
 
 /*********************************************************************/
 
+char *Titleize (char *str)
+
+{ static char buffer[CF_BUFSIZE];
+  int i;
+
+if (str == NULL)
+   {
+   return NULL;
+   }
+  
+strcpy(buffer,str);
+
+if (strlen(buffer) > 1)
+   {
+   for (i = 1; buffer[i] != '\0'; i++)
+      {  
+      buffer[i] = ToLower(str[i]);
+      }
+   }
+
+*buffer = ToUpper(*buffer);
+
+return buffer;
+}
+
+/*********************************************************************/
+
 int SubStrnCopyChr(char *to,char *from,int len,char sep)
 
 { char *sp,*sto = to;
@@ -945,6 +1229,101 @@ for (sp = string; *sp != '\0'; sp++)
    }
 
 return count;
+}
+
+/*********************************************************************/
+
+void ReplaceChar(char *in, char *out, int outSz, char from, char to)
+
+/* Replaces all occurences of 'from' to 'to' in preallocated
+ * string 'out'. */
+{
+  int len;
+  int i;
+
+memset(out,0,outSz);
+len = strlen(in);
+  
+for(i = 0; (i < len) && (i < outSz - 1); i++)
+   {
+   if (in[i] == from)
+      {
+      out[i] = to;
+      }
+   else
+      {
+      out[i] = in[i];
+      }
+   }
+}
+
+/*********************************************************************/
+
+void ReplaceTrailingChar(char *str, char from, char to)
+
+/* Replaces any unwanted last char in str. */
+{
+ int strLen;
+
+ strLen = strlen(str);
+
+ if(strLen == 0)
+    {
+    return;
+    }
+ 
+ if(str[strLen - 1] == from)
+    {
+    str[strLen - 1] = to;
+    }
+}
+
+/*********************************************************************/
+
+int ReplaceStr(char *in, char *out, int outSz, char* from, char *to)
+
+/* Replaces all occurences of strings 'from' to 'to' in preallocated
+ * string 'out'. Returns true on success, false otherwise. */
+{
+  int inSz;
+  int outCount;
+  int inCount;
+  int fromSz, toSz;
+
+memset(out,0,outSz);
+
+inSz = strlen(in);
+fromSz = strlen(from);
+toSz = strlen(to);
+
+inCount = 0;
+outCount = 0;
+
+while((inCount < inSz) && (outCount < outSz))
+   {
+    if (strncmp(in + inCount, from, fromSz) == 0)
+      {
+      if(outCount + toSz >= outSz)
+	{
+	CfOut(cf_error, "", "!! Out of buffer in ReplaceStr");
+	return false;
+	}
+
+      strcat(out,to);
+
+      inCount += fromSz;
+      outCount += toSz;
+      }
+   else
+      {
+      out[outCount] = in[inCount];
+
+      inCount++;
+      outCount++;
+      }
+   }
+
+ return true;
 }
 
 /*********************************************************************/

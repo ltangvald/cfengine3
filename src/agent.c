@@ -42,15 +42,15 @@ enum typesequence
    kp_classes,
    kp_outputs,
    kp_interfaces,
-   kp_processes,
-   kp_storage,
-   kp_packages,
-   kp_commands,
-   kp_methods,
    kp_files,
-   kp_databases,
-   kp_services,
+   kp_packages,
    kp_environments,
+   kp_methods,
+   kp_processes,
+   kp_services,
+   kp_commands,
+   kp_storage,
+   kp_databases,
    kp_reports,
    kp_none
    };
@@ -61,15 +61,15 @@ char *TYPESEQUENCE[] =
    "classes",    /* Maelstrom order 2 */
    "outputs",
    "interfaces",
-   "processes",
-   "storage",
-   "packages",
-   "commands",
-   "methods",
    "files",
-   "databases",
-   "services",
+   "packages",
    "environments",
+   "methods",
+   "processes",
+   "services",
+   "commands",
+   "storage",
+   "databases",
    "reports",
    NULL
    };
@@ -87,6 +87,8 @@ extern struct BodySyntax CFA_CONTROLBODY[];
 extern struct Rlist *SERVERLIST;
 
 #ifdef HAVE_LIBVIRT
+# include <libvirt/libvirt.h>
+# include <libvirt/virterror.h>
 extern virConnectPtr CFVC[];
 #endif
 
@@ -104,7 +106,7 @@ extern virConnectPtr CFVC[];
       { "bundlesequence",required_argument,0,'b' },
       { "debug",optional_argument,0,'d' },
       { "define",required_argument,0,'D' },
-      { "diagnostic",no_argument,0,'x'},
+      { "diagnostic",optional_argument,0,'x'},
       { "dry-run",no_argument,0,'n'},
       { "file",required_argument,0,'f'},
       { "help",no_argument,0,'h' },
@@ -119,11 +121,11 @@ extern virConnectPtr CFVC[];
 
  char *HINTS[15] =
       {
-      "Bootstrap/repair a cfengine configuration from failsafe file in the current directory",
+      "Bootstrap/repair a cfengine configuration from failsafe file in the WORKDIR else in current directory",
       "Set or override bundlesequence from command line",
       "Set debugging level 0,1,2",
       "Define a list of comma separated classes to be defined at the start of execution",
-      "Activate internal diagnostics (developers only)",
+      "Do internal diagnostic (developers only) level in optional argument",
       "All talk and no action mode - make no changes, only inform of promises not kept",
       "Specify an alternative input file than the default",      
       "Print the help message",
@@ -148,7 +150,9 @@ PromiseManagement("agent");
 ThisAgentInit();
 KeepPromises();
 NoteClassUsage(VHEAP);
-NoteVarUsage();
+NoteVarUsageDB();
+UpdateLastSeen();
+PurgeLocks();
 GenericDeInitialize();
 return 0;
 }
@@ -170,7 +174,7 @@ void CheckOpts(int argc,char **argv)
 
 POLICY_SERVER[0] = '\0';
   
-while ((c=getopt_long(argc,argv,"rd:vnKIf:D:N:Vs:xMBb:",OPTIONS,&optindex)) != EOF)
+while ((c=getopt_long(argc,argv,"rd:vnKIf:D:N:Vs:x:MBb:",OPTIONS,&optindex)) != EOF)
   {
   switch ((char) c)
       {
@@ -291,9 +295,9 @@ while ((c=getopt_long(argc,argv,"rd:vnKIf:D:N:Vs:xMBb:",OPTIONS,&optindex)) != E
           exit(0);
 
       case 'x':
-          AgentDiagnostic();
+	 AgentDiagnostic(optarg);
           exit(0);
-
+          
       case 'r':
           SHOWREPORTS = true;
           break;
@@ -306,6 +310,7 @@ while ((c=getopt_long(argc,argv,"rd:vnKIf:D:N:Vs:xMBb:",OPTIONS,&optindex)) != E
 if (argv[optind] != NULL)
    {
    CfOut(cf_error,"","Unexpected argument with no preceding option: %s\n",argv[optind]);
+   FatalError("Aborted");
    }
 
 Debug("Set debugging\n");
@@ -341,6 +346,7 @@ EDITFILESIZE = 100000;
 
 snprintf(filename,CF_BUFSIZE,"%s/cfagent.%s.log",CFWORKDIR,VSYSNAME.nodename);
 MapName(filename);
+
 if ((fp = fopen(filename,"a")) != NULL)
    {
    fclose(fp);
@@ -374,6 +380,7 @@ void KeepControlPromises()
 { struct Constraint *cp;
   char rettype;
   void *retval;
+  struct Rlist *rp;
 
 for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
    {
@@ -421,7 +428,27 @@ for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
       CheckAgentAccess(ACCESSLIST);
       continue;
       }
-   
+
+   if (strcmp(cp->lval,CFA_CONTROLBODY[cfa_refresh_processes].lval) == 0)
+      {
+      struct Rlist *rp;
+
+      if (VERBOSE)
+         {
+         printf("%s> SET refresh_processes when starting: ",VPREFIX);
+
+         for (rp  = (struct Rlist *) retval; rp != NULL; rp = rp->next)
+            {
+            printf(" %s",rp->item);
+            PrependItem(&PROCESSREFRESH,rp->item,NULL);
+            }
+
+         printf("\n");
+         }
+      
+      continue;
+      }
+
    if (strcmp(cp->lval,CFA_CONTROLBODY[cfa_abortclasses].lval) == 0)
       {
       struct Rlist *rp;
@@ -429,9 +456,13 @@ for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
       
       for (rp  = (struct Rlist *) retval; rp != NULL; rp = rp->next)
          {
-         if (!IsItemIn(ABORTHEAP,rp->item))
+         char name[CF_MAXVARSIZE] = "";
+         strncpy(name, rp->item, CF_MAXVARSIZE - 1);
+         CanonifyNameInPlace(name);
+
+         if (!IsItemIn(ABORTHEAP,name))
             {
-            AppendItem(&ABORTHEAP,rp->item,cp->classes);
+            AppendItem(&ABORTHEAP,name,cp->classes);
             }
          }
       
@@ -445,9 +476,13 @@ for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
       
       for (rp  = (struct Rlist *) retval; rp != NULL; rp = rp->next)
          {
-         if (!IsItemIn(ABORTBUNDLEHEAP,rp->item))
+         char name[CF_MAXVARSIZE] = "";
+         strncpy(name, rp->item, CF_MAXVARSIZE - 1);
+         CanonifyNameInPlace(name);
+
+         if (!IsItemIn(ABORTBUNDLEHEAP,name))
             {
-            AppendItem(&ABORTBUNDLEHEAP,rp->item,cp->classes);
+            AppendItem(&ABORTBUNDLEHEAP,name,cp->classes);
             }
          }
       
@@ -472,6 +507,13 @@ for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
       {
       AUDIT = GetBoolean(retval);
       CfOut(cf_verbose,"","SET auditing = %d\n",AUDIT);
+      continue;
+      }
+
+   if (strcmp(cp->lval,CFA_CONTROLBODY[cfa_alwaysvalidate].lval) == 0)
+      {
+      ALWAYS_VALIDATE = GetBoolean(retval);
+      CfOut(cf_verbose,"","SET alwaysvalidate = %d\n",ALWAYS_VALIDATE);
       continue;
       }
    
@@ -577,6 +619,18 @@ for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
       continue;
       }
 
+   if (strcmp(cp->lval,CFA_CONTROLBODY[cfa_suspiciousnames].lval) == 0)
+      {
+
+      for (rp  = (struct Rlist *) retval; rp != NULL; rp = rp->next)
+	{
+	PrependItem(&SUSPICIOUSLIST,rp->item,NULL);
+	CfOut(cf_verbose,"", "-> Concidering %s as suspicious file", rp->item);
+	}
+
+      continue;
+      }
+
    if (strcmp(cp->lval,CFA_CONTROLBODY[cfa_repchar].lval) == 0)
       {
       REPOSCHAR = *(char *)retval;
@@ -614,8 +668,8 @@ for (cp = ControlBodyConstraints(cf_agent); cp != NULL; cp=cp->next)
 
    if (strcmp(cp->lval,CFA_CONTROLBODY[cfa_timeout].lval) == 0)
       {
-      CF_TIMEOUT = Str2Int(retval);
-      CfOut(cf_verbose,"","SET timeout = %d\n",CF_TIMEOUT);
+      CONNTIMEOUT = Str2Int(retval);
+      CfOut(cf_verbose,"","SET timeout = %d\n",CONNTIMEOUT);
       continue;
       }
    
@@ -657,6 +711,12 @@ if (GetVariable("control_common",CFG_CONTROLBODY[cfg_lastseenexpireafter].lval,&
    LASTSEENEXPIREAFTER = Str2Int(retval);
    }
 
+if (GetVariable("control_common",CFG_CONTROLBODY[cfg_fips_mode].lval,&retval,&rettype) != cf_notype)
+   {
+   FIPS_MODE = GetBoolean(retval);
+   CfOut(cf_verbose,"","SET FIPS_MODE = %d\n",FIPS_MODE);
+   }
+
 if (GetVariable("control_common",CFG_CONTROLBODY[cfg_syslog_port].lval,&retval,&rettype) != cf_notype)
    {
    SYSLOGPORT = (unsigned short)Str2Int(retval);
@@ -668,6 +728,10 @@ if (GetVariable("control_common",CFG_CONTROLBODY[cfg_syslog_host].lval,&retval,&
    strncpy(SYSLOGHOST,Hostname2IPString(retval),CF_MAXVARSIZE-1);
    CfOut(cf_verbose,"","SET syslog_host to %s",SYSLOGHOST);
    }
+
+#ifdef HAVE_NOVA
+Nova_Initialize();
+#endif
 }
 
 /*********************************************************************/
@@ -707,6 +771,12 @@ for (rp = (struct Rlist *)retval; rp != NULL; rp=rp->next)
       case CF_SCALAR:
           name = (char *)rp->item;
           params = NULL;
+
+          if (strcmp(name,CF_NULL_VALUE) == 0)
+             {
+             continue;
+             }
+          
           break;
       case CF_FNCALL:
           fp = (struct FnCall *)rp->item;
@@ -741,7 +811,7 @@ if (!ok)
 
 if (VERBOSE || DEBUG)
    {
-   printf("%s -> Bundlesequence => ",VPREFIX);
+   printf("%s> -> Bundlesequence => ",VPREFIX);
    ShowRval(stdout,retval,rettype);
    printf("\n");
    }
@@ -786,6 +856,12 @@ int ScheduleAgentOperations(struct Bundle *bp)
   struct Promise *pp;
   enum typesequence type;
   int pass;
+
+if (PROCESSREFRESH == NULL || (PROCESSREFRESH && IsRegexItemIn(PROCESSREFRESH,bp->name)))
+   {
+   DeleteItemList(PROCESSTABLE);
+   PROCESSTABLE = NULL;
+   }
 
 for (pass = 1; pass < CF_DONEPASSES; pass++)
    {
@@ -979,7 +1055,7 @@ if (strcmp("files",pp->agentsubtype) == 0)
       {
       FindAndVerifyFilesPromises(pp);
       }
-   
+
    EndMeasurePromise(start,pp);
    return;
    }
@@ -1045,7 +1121,6 @@ int NewTypeContext(enum typesequence type)
 
 { int maxconnections,i;
   struct Item *procdata = NULL;
-  char *psopts = GetProcessOptions();
 
 // get maxconnections
 
@@ -1068,7 +1143,7 @@ switch(type)
 
    case kp_processes:
      
-       if (!LoadProcessTable(&PROCESSTABLE,psopts))
+       if (!LoadProcessTable(&PROCESSTABLE))
           {
           CfOut(cf_error,"","Unable to read the process table - cannot keep process promises\n","");
           return false;
@@ -1077,14 +1152,13 @@ switch(type)
 
    case kp_storage:
 
-       #ifndef MINGW  // TODO: Run if implemented on Windows
+#ifndef MINGW  // TODO: Run if implemented on Windows
        if (MOUNTEDFSLIST != NULL)
           {
           DeleteMountInfo(MOUNTEDFSLIST);
           MOUNTEDFSLIST = NULL;
           }
-	   #endif  /* NOT MINGW */
-
+#endif  /* NOT MINGW */
        break;
 
    case kp_packages:
@@ -1101,11 +1175,15 @@ void DeleteTypeContext(enum typesequence type)
 
 { struct Rlist *rp;
   struct ServerItem *svp;
-  struct Attributes a;
+  struct Attributes a = {0};
   int i;
  
 switch(type)
    {
+   case kp_classes:
+       HashVariables(THIS_BUNDLE);
+       break;
+
    case kp_environments:
 
 #ifdef HAVE_LIBVIRT
@@ -1144,14 +1222,11 @@ switch(type)
           }
 
        DeleteRlist(SERVERLIST);
+       SERVERLIST = NULL;
+
        break;
 
    case kp_processes:
-
-       /* should cleanup proc memory list */
-
-       DeleteItemList(PROCESSTABLE);
-       PROCESSTABLE = NULL;
        break;
 
    case kp_storage:
@@ -1200,6 +1275,7 @@ switch(type)
 void ClassBanner(enum typesequence type)
 
 { struct Item *ip;
+  int i;
  
 if (type != kp_interfaces)   /* Just parsed all local classes */
    {
@@ -1209,9 +1285,12 @@ if (type != kp_interfaces)   /* Just parsed all local classes */
 CfOut(cf_verbose,"","\n");
 CfOut(cf_verbose,"","     +  Private classes augmented:\n");
 
-for (ip = VADDCLASSES; ip != NULL; ip=ip->next)
+for (i = 0; i < CF_ALPHABETSIZE; i++)
    {
-   CfOut(cf_verbose,"","     +       %s\n",ip->name);
+   for (ip = VADDCLASSES.list[i]; ip != NULL; ip=ip->next)
+      {
+      CfOut(cf_verbose,"","     +       %s\n",ip->name);
+      }
    }
 
 NoteClassUsage(VADDCLASSES);
@@ -1229,13 +1308,15 @@ CfOut(cf_verbose,"","\n");
 
 Debug("     ?  Public class context:\n");
 
-for (ip = VHEAP; ip != NULL; ip=ip->next)
+for (i = 0; i < CF_ALPHABETSIZE; i++)
    {
-   Debug("     ?       %s\n",ip->name);
+   for (ip = VHEAP.list[i]; ip != NULL; ip=ip->next)
+      {
+      Debug("     ?       %s\n",ip->name);
+      }
    }
 
 CfOut(cf_verbose,"","\n");
-
 }
 
 /**************************************************************/
@@ -1249,10 +1330,10 @@ void ParallelFindAndVerifyFilesPromises(struct Promise *pp)
 
 #ifdef MINGW
 
-if(background)
-  {
+if (background)
+   {
    CfOut(cf_verbose, "", "Background processing of files promises is not supported on Windows");
-  }
+   }
   
 FindAndVerifyFilesPromises(pp);
 
@@ -1278,9 +1359,8 @@ else if (CFA_BACKGROUND >= CFA_BACKGROUND_LIMIT)
    {
    CfOut(cf_verbose,""," !> Promised parallel execution promised but exceeded the max number of promised background tasks, so serializing");
    }
-
-   
-if (child || !background)
+ 
+if (child == 0 || !background)
    {
    FindAndVerifyFilesPromises(pp);
    }

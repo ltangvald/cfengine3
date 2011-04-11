@@ -57,10 +57,8 @@ LocateFilePromiserGroup(pp->promiser,pp,VerifyStoragePromise);
 
 void VerifyStoragePromise(char *path,struct Promise *pp)
 
-{ struct stat osb,oslb,dsb,dslb;
-  struct Attributes a;
+{ struct Attributes a = {0};
   struct CfLock thislock;
-  int success,rlevel = 0,isthere;
 
 a = GetStorageAttributes(pp);
 
@@ -91,8 +89,7 @@ else if (a.havemount)
       }
    }
 
-
-thislock = AcquireLock(path,VUQNAME,CFSTARTTIME,a,pp);
+thislock = AcquireLock(path,VUQNAME,CFSTARTTIME,a,pp,false);
 
 if (thislock.lock == NULL)
    {
@@ -102,15 +99,15 @@ if (thislock.lock == NULL)
 /* Do mounts first */
 
 #ifndef MINGW
+if (!MOUNTEDFSLIST && !LoadMountInfo(&MOUNTEDFSLIST))
+   {
+   CfOut(cf_error,"","Couldn't obtain a list of mounted filesystems - aborting\n");
+   YieldCurrentLock(thislock);
+   return;
+   }
+
 if (a.havemount)
    {
-   if (!MOUNTEDFSLIST && !LoadMountInfo(&MOUNTEDFSLIST))
-      {
-      CfOut(cf_error,"","Couldn't obtain a list of mounted filesystems - aborting\n");
-	  YieldCurrentLock(thislock);
-      return;
-      }
-
    VerifyMountPromise(path,a,pp);
    }
 #endif  /* NOT MINGW */
@@ -119,8 +116,12 @@ if (a.havemount)
 
 if (a.havevolume)
    {
-   VerifyFileSystem(path,a,pp);   
-   VerifyFreeSpace(path,a,pp);
+   VerifyFileSystem(path,a,pp);
+   
+   if (a.volume.freespace != CF_NOINT)
+      {
+      VerifyFreeSpace(path,a,pp);
+      }
    
    if (a.volume.scan_arrivals)
       {
@@ -141,7 +142,8 @@ int VerifyFileSystem(char *name,struct Attributes a,struct Promise *pp)
 { struct stat statbuf, localstat;
   DIR *dirh;
   struct dirent *dirp;
-  long sizeinbytes = 0, filecount = 0;
+  off_t sizeinbytes = 0;
+  long filecount = 0;
   char buff[CF_BUFSIZE];
 
 CfOut(cf_verbose,""," -> Checking required filesystem %s\n",name);
@@ -206,13 +208,13 @@ if (S_ISDIR(statbuf.st_mode))
       return true;
       }
 
-   if (sizeinbytes < SENSIBLEFSSIZE)
+   if (sizeinbytes < a.volume.sensible_size)
       {
       cfPS(cf_error,CF_INTERPT,"",pp,a," !! File system %s is suspiciously small! (%d bytes)\n",name,sizeinbytes);
       return(false);
       }
 
-   if (filecount < SENSIBLEFILECOUNT)
+   if (filecount < a.volume.sensible_count)
       {
       cfPS(cf_error,CF_INTERPT,"",pp,a," !! Filesystem %s has only %d files/directories.\n",name,filecount);
       return(false);
@@ -228,11 +230,11 @@ return(true);
 int VerifyFreeSpace(char *file,struct Attributes a,struct Promise *pp)
 
 { struct stat statbuf;
-  int free;
+  off_t free;
   long kilobytes;
   
 #ifdef MINGW
-if(!a.volume.check_foreign)
+if (!a.volume.check_foreign)
 {
 CfOut(cf_verbose, "", "storage.volume.check_foreign is not supported on Windows (checking every mount)");
 }
@@ -264,7 +266,7 @@ if (kilobytes < 0)
 
    if (free < (int)kilobytes)
       {
-      cfPS(cf_error,CF_FAIL,"",pp,a," !! Free disk space is under %d%% for volume containing %s (%d%% free)\n",kilobytes,file,free);
+      cfPS(cf_error,CF_FAIL,"",pp,a," !! Free disk space is under %d% for volume containing %s (%d% free)\n",kilobytes,file,free);
       return false;
       }
    }
@@ -316,9 +318,9 @@ for (rp = list; rp != NULL; rp=rp->next)
 
       found = true;
       
-      if (strcmp(mp->source,a.mount.mount_source) != 0)
+      if (a.mount.mount_source && (strcmp(mp->source,a.mount.mount_source) != 0))
          {
-         CfOut(cf_inform,"","A different files system (%s:%s) is mounted on %s than what is promised\n",mp->host,mp->source,name);
+         CfOut(cf_inform,"","A different file system (%s:%s) is mounted on %s than what is promised\n",mp->host,mp->source,name);
          return false;
          }
       else
@@ -331,10 +333,9 @@ for (rp = list; rp != NULL; rp=rp->next)
 
 if (!found)
    {
-   CfOut(cf_verbose,""," !! File system %s seems not to be mounted correctly\n",name);
-
    if (! a.mount.unmount)
       {
+      CfOut(cf_verbose,""," !! File system %s seems not to be mounted correctly\n",name);
       CF_MOUNTALL = true;
       }
    }
@@ -351,7 +352,7 @@ int IsForeignFileSystem (struct stat *childstat,char *dir)
  /* Is FS NFS mounted ? */
 
 { struct stat parentstat;
-  char host[CF_MAXVARSIZE], vbuff[CF_BUFSIZE];
+  char vbuff[CF_BUFSIZE];
  
 strncpy(vbuff,dir,CF_BUFSIZE-1);
 
@@ -367,21 +368,34 @@ else
 
 if (cfstat(vbuff,&parentstat) == -1)
    {
-   Debug2("File %s couldn't stat its parent directory! Assuming permission\n",dir);
-   Debug2("is denied because the file system is mounted from another host.\n");
-   return(true);
+   CfOut(cf_verbose,"stat"," !! Unable to stat %s",vbuff);
+   return(false);
    }
 
 if (childstat->st_dev != parentstat.st_dev)
    {
-   Debug2("[%s is on a different file system, not descending]\n",dir);
-   return (true);
+   struct Rlist *rp;
+   struct CfMount *entry;
+
+   Debug("[%s is on a different file system, not descending]\n",dir);
+
+   for (rp = MOUNTEDFSLIST; rp != NULL; rp=rp->next)
+      {
+      entry = (struct CfMount *)rp->item;
+
+      if (!strcmp(entry->mounton, dir))
+         {
+         if (entry->options && strstr(entry->options,"nfs"))
+            {
+            return (true);
+            }
+         }
+      }
    }
 
 Debug("NotMountedFileSystem\n");
 return(false);
 }
-
 
 /*********************************************************************/
 /*  Unix-specific implementations                                    */
@@ -391,8 +405,7 @@ return(false);
 
 int VerifyMountPromise(char *name,struct Attributes a,struct Promise *pp)
 
-{ struct CfMount mount;
-  char *options;
+{ char *options;
   char dir[CF_BUFSIZE];
   int changes = 0;
  

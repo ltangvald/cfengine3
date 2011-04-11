@@ -51,7 +51,7 @@ if (pp->conn != NULL && !pp->conn->authenticated)
   
 if (cf_stat(attr.copy.source,&ssb,attr,pp) == -1)
    {
-   cfPS(cf_verbose,CF_FAIL,"",pp,attr,"Can't stat %s in files.copyfrom promise\n",source);
+   cfPS(cf_inform,CF_FAIL,"",pp,attr,"Can't stat %s in files.copyfrom promise\n",source);
    return NULL;
    }
   
@@ -86,7 +86,7 @@ if (S_ISDIR(ssb.st_mode)) /* could be depth_search */
       {
       if (attr.copy.check_root)
          {
-         VerifyCopiedFileAttributes(source,&dsb,&ssb,attr,pp);
+         VerifyCopiedFileAttributes(destination,&dsb,&ssb,attr,pp);
          }
       }
    }
