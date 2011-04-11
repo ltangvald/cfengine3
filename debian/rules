@@ -26,6 +26,7 @@ configure: config-stamp
 
 config-stamp:
 	dh_testdir
+	dh_autoreconf
 	# Add here commands to configure the package.
 ifneq "$(wildcard /usr/share/misc/config.sub)" ""
 	cp -f /usr/share/misc/config.sub config.sub
@@ -33,7 +34,16 @@ endif
 ifneq "$(wildcard /usr/share/misc/config.guess)" ""
 	cp -f /usr/share/misc/config.guess config.guess
 endif
-	./configure $(CROSS) --enable-shared=no --prefix=/usr --with-sql=no --with-workdir=/var/lib/cfengine3 --mandir=\$${prefix}/share/man --infodir=\$${prefix}/share/info CFLAGS="$(CFLAGS)" LDFLAGS="-Wl,-z,defs"
+	./configure $(CROSS) 	--enable-shared=no \
+							--without-nova \
+							--without-constellation \
+							--prefix=/usr \
+							--with-sql=no \
+							--with-workdir=/var/lib/cfengine3 \
+							--mandir=\$${prefix}/share/man \
+							--infodir=\$${prefix}/share/info \
+							--htmldir=\$${prefix}/share/doc/cfengine3/html \
+							CFLAGS="$(CFLAGS)" LDFLAGS="-Wl,-z,defs"
 
 
 build: build-stamp
@@ -50,6 +60,7 @@ build-stamp:  config.status
 clean: 
 	dh_testdir
 	dh_testroot
+	dh_autoreconf_clean
 	rm -f build-stamp 
 
 	# Add here commands to clean up after the build process.
@@ -79,6 +90,10 @@ install: build
                 $(CURDIR)/debian/cfengine3/usr/share/doc/cfengine3/examples
 	# clean the not-needed static libraries
 	/bin/rm -rf $(CURDIR)/debian/cfengine3/usr/lib
+    # install html files
+	/bin/mkdir $(CURDIR)/debian/cfengine3/usr/share/doc/cfengine3/html
+	/bin/cp $(CURDIR)/docs/*.html $(CURDIR)/docs/*.png \
+				$(CURDIR)/debian/cfengine3/usr/share/doc/cfengine3/html
 
 # Build architecture-independent files here.
 binary-indep: install
