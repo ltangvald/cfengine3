@@ -1,9 +1,34 @@
-cfengine3 (3.1.5-1build1) precise; urgency=low
+cfengine3 (3.2.4-2) unstable; urgency=low
 
-  * No-change rebuild against current pkgbinarymangler to fix broken
-    md5sums. (see LP #875466)
+  * debian/{README.Debian,links}:
+    + restoring /var/lib/cfengine3/inputs as a link to /etc/cfengine3
+      (Closes: 664636).
 
- -- Martin Pitt <martin.pitt@ubuntu.com>  Wed, 29 Feb 2012 08:25:46 +0100
+ -- Antonio Radici <antonio@debian.org>  Mon, 19 Mar 2012 19:56:35 +0000
+
+cfengine3 (3.2.4-1) unstable; urgency=low
+
+  * New upstream release
+  * debian/watch:
+    + refreshed to use the new upstream URLs
+  * debian/control:
+    + Standards-Version updated to 3.9.3, no change required
+  * debian/patches:
+    + refreshed all patches, removed fix-error-typos
+    + added 626647-kfreebsd-support.patch to add kfreebsd support
+      (Closes: 626647)
+  * debian/cfengine3.install:
+    + installing the distributed share/doc directory, exmaples included.
+  * debian/README.Debian:
+    + updated to reflect that inputs/ are now in examples_config/
+  * debian/links:
+    + dropped the /var/lib/cfengine3/inputs link because it does not exist
+      anymore upstream
+  * debian/cfengine3.doc-base: dropping cf3.html which was removed by upstream
+    and replacing it with agents.html (this is debatable but from the next
+    version we will get a better HTML doc).
+
+ -- Antonio Radici <antonio@debian.org>  Sat, 17 Mar 2012 18:12:34 +0000
 
 cfengine3 (3.1.5-1) unstable; urgency=low
 
