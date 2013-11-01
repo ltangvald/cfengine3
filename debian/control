@@ -1,7 +1,8 @@
 Source: cfengine3
 Section: admin
 Priority: optional
-Maintainer: Antonio Radici <antonio@debian.org>
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+XSBC-Original-Maintainer: Antonio Radici <antonio@debian.org>
 Build-Depends: debhelper (>= 7.0.50), autotools-dev, libdb-dev, libssl-dev,
  flex, bison, libpcre3-dev, dh-autoreconf
 Standards-Version: 3.9.3
