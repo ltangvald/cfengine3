@@ -1,7 +1,37 @@
+cfengine3 (3.6.2-1) unstable; urgency=low
+
+  * New upstream release (Closes: 609366, 699809)
+    + big thanks to Brian Bennett, Bas van der Vlies and
+      debian-team@cfengine.com!
+    + no longer using /etc/cfengine3 as repository for the state files;
+      documented that in NEWS.Debian
+  * Multi-tar package, it also includes the masterfiles (Closes: 641319)
+  * debian/postinst:
+    + added code to migrate the files contained in /etc/cfengine3 to
+     /var/lib/cfengine3 if and only if the latter is a symlink to the directory
+     in /etc (Closes: 611659)
+    + added the code to move the masterfiles into
+      /var/lib/cfengine3/masterfiles if the directory is empty
+  * debian/control:
+    + added libpromises3 as output of the build process
+    + Standards-Version updated to 3.9.6
+  * debian/rules:
+    + got rid of the info and html docs, they are not shipped anymore
+  * debian/patches:
+    + major cleanup done, some patches adapted to the new code
+  * debian/NEWS:
+    + added this file to announce the demise of the inputs symlink
+  * debian/cfengine3.default:
+    + Brian fixed the variable names sourced by the init scirpt (Closes: 602404)
+  * debian/watch:
+    + updated to pick up the source from the right URL
+
+ -- Antonio Radici <antonio@debian.org>  Tue, 21 Oct 2014 14:49:40 +0000
+
 cfengine3 (3.2.4-2+nmu1) unstable; urgency=medium
 
   * Non-maintainer upload.
-  * Include full text of the Frontier Artistic License (closes: #701864). 
+  * Include full text of the Frontier Artistic License (closes: #701864).
 
  -- Michael Gilbert <mgilbert@debian.org>  Sun, 03 Mar 2013 08:53:27 +0000
 
@@ -56,7 +86,7 @@ cfengine3 (3.1.5~b1-1) unstable; urgency=low
     + fhs-compliance: patch from Andreas Larsson to include a missing line to
       be fully compliant with FHS (Closes: 619580)
     + remove-man-errors: s/sucessfully/successfully/g
-  * debian/watch: removed the repack for copyright issues, the pdf is not 
+  * debian/watch: removed the repack for copyright issues, the pdf is not
     shipped anymore by upstream
   * debian/copyright:
     + removing any reference to repack.sh and its licenses
@@ -139,19 +169,19 @@ cfengine3 (3.0.4+dfsg-1) unstable; urgency=low
 
 cfengine3 (3.0.2+dfsg-2) unstable; urgency=low
 
-  * debian/control: 
+  * debian/control:
     + adding missing full stops (Closes: 550108)
     + updating my mail to antonio@debian.org
     + adding a B-D to libpcre3-dev (Closes: 552520)
     + cfengine2 no longer in Conflicts (Closes: 555479)
   * debian/rules: do not compress .cf files
   * debian/patches:
-    + fix-example-paths added, to adapt examples to our FHS 
+    + fix-example-paths added, to adapt examples to our FHS
       compliant paths (Closes: 552144)
     + remove-man-errors: fix for some minor typos (Closes: 552473)
     + rename-doesnt-fail: prevent failures if rename fails (Closes: 555932)
     + fix-error-typos: to fix a small typo in cf-agent, so lintian is happy
-  * debian/README.Debian: 
+  * debian/README.Debian:
     + warn people to modify site.cf before starting the daemons
 
  -- Antonio Radici <antonio@debian.org>  Tue, 08 Dec 2009 16:19:24 +0000
