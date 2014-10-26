@@ -1,3 +1,10 @@
+cfengine3 (3.6.2-3) unstable; urgency=medium
+
+  * debian/patches:
+    + fix_kfreebsd_build to allow the build on Debian/kFreeBSD
+
+ -- Antonio Radici <antonio@debian.org>  Sun, 26 Oct 2014 07:30:01 +0000
+
 cfengine3 (3.6.2-2) unstable; urgency=medium
 
   * debian/patches:
