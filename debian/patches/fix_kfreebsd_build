@@ -6,8 +6,8 @@ Index: cfengine3/cf-agent/verify_users_pam.c
      return "January 02 1970";
  #elif defined(__linux__)
      return "1970-01-02";
-+// FreeBSD with glibc-based userspace (e.g. Debian/kFreeBSD)
-+#elif (__FreeBSD_kernel__) && defined(__GLIBC__)
++// special case for Debian/kFreeBSD
++#elif defined(__GLIBC__)
 +    return "1970-01-02";
  #else
  # error Your operating system lacks the proper string for the "usermod -e" utility.

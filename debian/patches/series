@@ -5,3 +5,4 @@ remove_rpath
 do_not_build_rpmver
 skip_tests_failing_in_chroot
 fix_kfreebsd_build
+disable_failing_test_on_sparc
