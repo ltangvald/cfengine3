@@ -1,0 +1,76 @@
+Description: Fix segmentation fault in rlist_test
+ Functions in rlist try to pass a global lock variable to the mutex code,
+ but it ends up being passed to the pthread code as null, causing
+ segmentation faults. This patch creates a locking variable for rlist in
+ a similar manner to what is done other places in the code, e.g. dbm_api.c.
+Author: Lars Tangvald <lars.tangvald@oracle.com>
+Bug: https://tracker.mender.io/browse/CFE-2345
+Bug-Ubuntu: https://bugs.launchpad.net/ubuntu/+source/cfengine3/+bug/1569295
+Forwarded: no
+Last-Update: 2016-04-12
+
+<Skuggen> rbasak: Upstream says the cfengine patch looks good (though
+they're a bit confused on why it's segfaulting)...
+
+--- cfengine3-3.6.2.orig/libpromises/rlist.c
++++ cfengine3-3.6.2/libpromises/rlist.c
+@@ -38,6 +38,7 @@
+ #include <eval_context.h>
+ #include <json.h>
+ 
++static pthread_mutex_t cft_lockvalue = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP;
+ 
+ static Rlist *RlistPrependRval(Rlist **start, Rval rval);
+ 
+@@ -316,11 +317,11 @@ Rlist *RlistAppendRval(Rlist **start, Rv
+ 
+     rp->val = rval;
+ 
+-    ThreadLock(cft_lock);
++    ThreadLock(&cft_lockvalue);
+ 
+     rp->next = NULL;
+ 
+-    ThreadUnlock(cft_lock);
++    ThreadUnlock(&cft_lockvalue);
+ 
+     return rp;
+ }
+@@ -457,11 +458,11 @@ Rlist *RlistAppend(Rlist **start, const
+ 
+     rp->val = RvalCopy((Rval) {(void *) item, type});
+ 
+-    ThreadLock(cft_lock);
++    ThreadLock(&cft_lockvalue);
+ 
+     rp->next = NULL;
+ 
+-    ThreadUnlock(cft_lock);
++    ThreadUnlock(&cft_lockvalue);
+ 
+     return rp;
+ }
+@@ -474,9 +475,9 @@ static Rlist *RlistPrependRval(Rlist **s
+ 
+     rp->next = *start;
+     rp->val = rval;
+-    ThreadLock(cft_lock);
++    ThreadLock(&cft_lockvalue);
+     *start = rp;
+-    ThreadUnlock(cft_lock);
++    ThreadUnlock(&cft_lockvalue);
+     return rp;
+ }
+ 
+@@ -785,9 +786,9 @@ void RvalDestroy(Rval rval)
+     switch (rval.type)
+     {
+     case RVAL_TYPE_SCALAR:
+-        ThreadLock(cft_lock);
++        ThreadLock(&cft_lockvalue);
+         free(RvalScalarValue(rval));
+-        ThreadUnlock(cft_lock);
++        ThreadUnlock(&cft_lockvalue);
+         return;
+ 
+     case RVAL_TYPE_LIST:
