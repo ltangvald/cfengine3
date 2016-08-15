@@ -48,6 +48,7 @@
 #include <files_lib.h>
 #include <printsize.h>
 #include <cf-windows-functions.h>
+#include <ornaments.h>
 
 #ifdef HAVE_ZONE_H
 # include <zone.h>
@@ -84,7 +85,6 @@
 
 // HP-UX: pstat_getproc(2) on init (pid 1)
 #if defined(__hpux)
-# define _PSTAT64
 # include <sys/param.h>
 # include <sys/pstat.h>
 # define BOOT_TIME_WITH_PSTAT_GETPROC
@@ -131,13 +131,16 @@
 
 #endif
 
-
 /* Fallback uptime calculation: Parse the "uptime" command in case the
  * platform-specific way fails or returns absurd number. */
 static time_t GetBootTimeFromUptimeCommand(time_t now);
 
-
 #endif  /* ifndef __MINGW32__ */
+
+#define LSB_RELEASE_FILENAME "/etc/lsb-release"
+#define DEBIAN_VERSION_FILENAME "/etc/debian_version"
+#define DEBIAN_ISSUE_FILENAME "/etc/issue"
+
 
 /*****************************************************/
 
@@ -151,6 +154,7 @@ static void Linux_Oracle_Version(EvalContext *ctx);
 static int Linux_Suse_Version(EvalContext *ctx);
 static int Linux_Slackware_Version(EvalContext *ctx, char *filename);
 static int Linux_Debian_Version(EvalContext *ctx);
+static int Linux_Misc_Version(EvalContext *ctx);
 static int Linux_Mandrake_Version(EvalContext *ctx);
 static int Linux_Mandriva_Version(EvalContext *ctx);
 static int Linux_Mandriva_Version_Real(EvalContext *ctx, char *filename, char *relstring, char *vendor);
@@ -159,6 +163,7 @@ static int Xen_Domain(EvalContext *ctx);
 static int EOS_Version(EvalContext *ctx);
 static int MiscOS(EvalContext *ctx);
 static void OpenVZ_Detect(EvalContext *ctx);
+
 
 #ifdef XEN_CPUID_SUPPORT
 static void Xen_Cpuid(uint32_t idx, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx);
@@ -178,6 +183,7 @@ static const char *const CLASSATTRIBUTES[][3] =
     [PLATFORM_CONTEXT_HP] = {"hp-ux", ".*", ".*"},      /* hpux */
     [PLATFORM_CONTEXT_AIX] = {"aix", ".*", ".*"},       /* aix */
     [PLATFORM_CONTEXT_LINUX] = {"linux", ".*", ".*"},   /* linux */
+    [PLATFORM_CONTEXT_BUSYBOX] = {"busybox", ".*", ".*"}, /* linux w/ busybox - warning uname returns linux */
     [PLATFORM_CONTEXT_SOLARIS] = {"sunos", ".*",
                                   "5\\.1[1-9].*"},      /* new solaris, SunOS >= 5.11 */
     [PLATFORM_CONTEXT_SUN_SOLARIS] = {"sunos", ".*",
@@ -204,6 +210,7 @@ static const char *const VRESOLVCONF[] =
     [PLATFORM_CONTEXT_HP] = "/etc/resolv.conf",          /* hpux */
     [PLATFORM_CONTEXT_AIX] = "/etc/resolv.conf",         /* aix */
     [PLATFORM_CONTEXT_LINUX] = "/etc/resolv.conf",       /* linux */
+    [PLATFORM_CONTEXT_BUSYBOX] = "/etc/resolv.conf",     /* linux */
     [PLATFORM_CONTEXT_SOLARIS] = "/etc/resolv.conf",     /* new solaris */
     [PLATFORM_CONTEXT_SUN_SOLARIS] = "/etc/resolv.conf", /* old solaris */
     [PLATFORM_CONTEXT_FREEBSD] = "/etc/resolv.conf",     /* freebsd */
@@ -228,6 +235,7 @@ static const char *const VMAILDIR[] =
     [PLATFORM_CONTEXT_HP] = "/var/mail",           /* hpux */
     [PLATFORM_CONTEXT_AIX] = "/var/spool/mail",    /* aix */
     [PLATFORM_CONTEXT_LINUX] = "/var/spool/mail",  /* linux */
+    [PLATFORM_CONTEXT_BUSYBOX] = "",               /* linux */
     [PLATFORM_CONTEXT_SOLARIS] = "/var/mail",      /* new solaris */
     [PLATFORM_CONTEXT_SUN_SOLARIS] = "/var/mail",  /* old solaris */
     [PLATFORM_CONTEXT_FREEBSD] = "/var/mail",      /* freebsd */
@@ -252,6 +260,7 @@ static const char *const VEXPORTS[] =
     [PLATFORM_CONTEXT_HP] = "/etc/exports",             /* hpux */
     [PLATFORM_CONTEXT_AIX] = "/etc/exports",            /* aix */
     [PLATFORM_CONTEXT_LINUX] = "/etc/exports",          /* linux */
+    [PLATFORM_CONTEXT_BUSYBOX] = "",                    /* linux */
     [PLATFORM_CONTEXT_SOLARIS] = "/etc/dfs/dfstab",     /* new solaris */
     [PLATFORM_CONTEXT_SUN_SOLARIS] = "/etc/dfs/dfstab", /* old solaris */
     [PLATFORM_CONTEXT_FREEBSD] = "/etc/exports",        /* freebsd */
@@ -348,9 +357,10 @@ void DetectDomainName(EvalContext *ctx, const char *orig_nodename)
 
         ptr = strchr(ptr, '.');
         if (ptr != NULL)
+        {
             ptr++;
-    }
-    while (ptr != NULL);
+        }
+    } while (ptr != NULL);
 
     EvalContextClassPutHard(ctx, VUQNAME, "source=agent,derived-from=sys.uqhost");
     EvalContextClassPutHard(ctx, VDOMAIN, "source=agent,derived-from=sys.domain");
@@ -368,6 +378,8 @@ void DiscoverVersion(EvalContext *ctx)
     int major = 0;
     int minor = 0;
     int patch = 0;
+    const char* const workdir = GetWorkDir();
+
     if (3 == sscanf(Version(), "%d.%d.%d", &major, &minor, &patch))
     {
         char workbuf[CF_BUFSIZE];
@@ -379,7 +391,10 @@ void DiscoverVersion(EvalContext *ctx)
         snprintf(workbuf, CF_MAXVARSIZE, "%d", patch);
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "cf_version_patch", workbuf, CF_DATA_TYPE_STRING, "source=agent");
 
-        snprintf(workbuf, CF_BUFSIZE, "%s%cinputs%clib%c%d.%d", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, FILE_SEPARATOR, major, minor);
+        snprintf(workbuf, CF_BUFSIZE, "%s%cinputs%clib%c%d.%d",
+                 workdir, FILE_SEPARATOR, FILE_SEPARATOR,
+                 FILE_SEPARATOR, major, minor);
+
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "libdir", workbuf, CF_DATA_TYPE_STRING, "source=agent");
 
         snprintf(workbuf, CF_BUFSIZE, "lib%c%d.%d", FILE_SEPARATOR, major, minor);
@@ -390,7 +405,7 @@ void DiscoverVersion(EvalContext *ctx)
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "cf_version_major", "BAD VERSION " VERSION, CF_DATA_TYPE_STRING, "source=agent");
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "cf_version_minor", "BAD VERSION " VERSION, CF_DATA_TYPE_STRING, "source=agent");
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "cf_version_patch", "BAD VERSION " VERSION, CF_DATA_TYPE_STRING, "source=agent");
-        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "libdir", CFWORKDIR, CF_DATA_TYPE_STRING, "source=agent");
+        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "libdir", workdir, CF_DATA_TYPE_STRING, "source=agent");
     }
 }
 
@@ -402,6 +417,7 @@ static void GetNameInfo3(EvalContext *ctx)
     struct hostent *hp;
     struct sockaddr_in cin;
     unsigned char digest[EVP_MAX_MD_SIZE + 1];
+    const char* const workdir = GetWorkDir();
 
 #ifdef _AIX
     char real_version[_SYS_NMLN];
@@ -436,6 +452,12 @@ static void GetNameInfo3(EvalContext *ctx)
      * uname cannot differentiate android from linux
      */
     strcpy(VSYSNAME.sysname, "android");
+#endif
+#ifdef __BUSYBOX__
+    /*
+     * uname cannot differentiate a busybox toolset from a normal GNU linux toolset
+     */
+     strcpy(VSYSNAME.sysname, "busybox");
 #endif
 
     ToLowerStrInplace(VSYSNAME.sysname);
@@ -508,6 +530,7 @@ static void GetNameInfo3(EvalContext *ctx)
                     found = true;
 
                     VSYSTEMHARDCLASS = (PlatformContext) i;
+                    VPSHARDCLASS = (PlatformContext) i; /* this one can be overriden at vz detection */
                     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "class", CLASSTEXT[i], CF_DATA_TYPE_STRING, "inventory,source=agent,attribute_name=OS type");
                     break;
                 }
@@ -525,30 +548,21 @@ static void GetNameInfo3(EvalContext *ctx)
         i = 0;
     }
 
+    Log(LOG_LEVEL_VERBOSE, "%s - ready", NameVersion());
+    Banner("Environment discovery");
+
     snprintf(workbuf, CF_BUFSIZE, "%s", CLASSTEXT[i]);
 
-    Log(LOG_LEVEL_VERBOSE, "%s", NameVersion());
 
-    if (LEGACY_OUTPUT)
-    {
-        Log(LOG_LEVEL_VERBOSE, "------------------------------------------------------------------------");
-    }
     Log(LOG_LEVEL_VERBOSE, "Host name is: %s", VSYSNAME.nodename);
     Log(LOG_LEVEL_VERBOSE, "Operating System Type is %s", VSYSNAME.sysname);
     Log(LOG_LEVEL_VERBOSE, "Operating System Release is %s", VSYSNAME.release);
     Log(LOG_LEVEL_VERBOSE, "Architecture = %s", VSYSNAME.machine);
-    Log(LOG_LEVEL_VERBOSE, "Using internal soft-class %s for host %s", workbuf, VSYSNAME.nodename);
+    Log(LOG_LEVEL_VERBOSE, "CFEngine detected operating system description is %s", workbuf);
     Log(LOG_LEVEL_VERBOSE, "The time is now %s", ctime(&tloc));
-    if (LEGACY_OUTPUT)
-    {
-        Log(LOG_LEVEL_VERBOSE, "------------------------------------------------------------------------");
-    }
 
     snprintf(workbuf, CF_MAXVARSIZE, "%s", ctime(&tloc));
-    if (Chop(workbuf, CF_EXPANDSIZE) == -1)
-    {
-        Log(LOG_LEVEL_ERR, "Chop was called on a string that seemed to have no terminator");
-    }
+    Chop(workbuf, CF_EXPANDSIZE);
 
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "date", workbuf, CF_DATA_TYPE_STRING, "time_based,source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "cdate", CanonifyName(workbuf), CF_DATA_TYPE_STRING, "time_based,source=agent");
@@ -556,17 +570,18 @@ static void GetNameInfo3(EvalContext *ctx)
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "release", VSYSNAME.release, CF_DATA_TYPE_STRING, "inventory,source=agent,attribute_name=OS kernel");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "version", VSYSNAME.version, CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "arch", VSYSNAME.machine, CF_DATA_TYPE_STRING, "inventory,source=agent,attribute_name=Architecture");
-    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "workdir", CFWORKDIR, CF_DATA_TYPE_STRING, "source=agent");
+    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "workdir", workdir, CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "fstab", VFSTAB[VSYSTEMHARDCLASS], CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "resolv", VRESOLVCONF[VSYSTEMHARDCLASS], CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "maildir", VMAILDIR[VSYSTEMHARDCLASS], CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "exports", VEXPORTS[VSYSTEMHARDCLASS], CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "logdir", GetLogDir(), CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "piddir", GetPidDir(), CF_DATA_TYPE_STRING, "source=agent");
+    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "statedir", GetStateDir(), CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "masterdir", GetMasterDir(), CF_DATA_TYPE_STRING, "source=agent");
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "inputdir", GetInputDir(), CF_DATA_TYPE_STRING, "source=agent");
 
-    snprintf(workbuf, CF_BUFSIZE, "%s%cbin", CFWORKDIR, FILE_SEPARATOR);
+    snprintf(workbuf, CF_BUFSIZE, "%s%cbin", workdir, FILE_SEPARATOR);
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "bindir", workbuf, CF_DATA_TYPE_STRING, "source=agent");
 
     snprintf(workbuf, CF_BUFSIZE, "%s%cfailsafe.cf", GetInputDir(), FILE_SEPARATOR);
@@ -603,16 +618,16 @@ static void GetNameInfo3(EvalContext *ctx)
         // twin has own dir, and is named agent
         if (i == 0)
         {
-            snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin-twin%ccf-agent.exe", CFWORKDIR, FILE_SEPARATOR,
+            snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin-twin%ccf-agent.exe", workdir, FILE_SEPARATOR,
                      FILE_SEPARATOR);
         }
         else
         {
-            snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s.exe", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR,
+            snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s.exe", workdir, FILE_SEPARATOR, FILE_SEPARATOR,
                      components[i]);
         }
 #else
-        snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, components[i]);
+        snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s", workdir, FILE_SEPARATOR, FILE_SEPARATOR, components[i]);
 #endif
 
         have_component[i] = false;
@@ -632,10 +647,10 @@ static void GetNameInfo3(EvalContext *ctx)
         snprintf(shortname, CF_MAXVARSIZE - 1, "%s", CanonifyName(components[0]));
 
 #if defined(_WIN32)
-        snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s.exe", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR,
+        snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s.exe", workdir, FILE_SEPARATOR, FILE_SEPARATOR,
                  components[1]);
 #else
-        snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, components[1]);
+        snprintf(name, CF_MAXVARSIZE - 1, "%s%cbin%c%s", workdir, FILE_SEPARATOR, FILE_SEPARATOR, components[1]);
 #endif
 
         if (stat(name, &sb) != -1)
@@ -812,13 +827,12 @@ static void GetNameInfo3(EvalContext *ctx)
 static void Get3Environment(EvalContext *ctx)
 {
     char env[CF_BUFSIZE], context[CF_BUFSIZE], name[CF_MAXVARSIZE], value[CF_BUFSIZE];
-    FILE *fp;
     struct stat statbuf;
     time_t now = time(NULL);
 
     Log(LOG_LEVEL_VERBOSE, "Looking for environment from cf-monitord...");
 
-    snprintf(env, CF_BUFSIZE, "%s/state/%s", CFWORKDIR, CF_ENV_FILE);
+    snprintf(env, CF_BUFSIZE, "%s/%s", GetStateDir(), CF_ENV_FILE);
     MapName(env);
 
     if (stat(env, &statbuf) == -1)
@@ -844,7 +858,8 @@ static void Get3Environment(EvalContext *ctx)
 
     Log(LOG_LEVEL_VERBOSE, "Loading environment...");
 
-    if ((fp = fopen(env, "r")) == NULL)
+    FILE *fp = fopen(env, "r");
+    if (fp == NULL)
     {
         Log(LOG_LEVEL_VERBOSE, "\nUnable to detect environment from cf-monitord");
         return;
@@ -932,6 +947,15 @@ static void BuiltinClasses(EvalContext *ctx)
     snprintf(vbuff, CF_BUFSIZE, "cfengine_%s", CanonifyName(Version()));
     CreateHardClassesFromCanonification(ctx, vbuff, "inventory,attribute_name=none,source=agent");
 
+#ifdef HAVE_LIBXML2
+    CreateHardClassesFromCanonification(ctx, "feature_xml", "source=agent");
+#endif
+
+#ifdef HAVE_LIBYAML
+    CreateHardClassesFromCanonification(ctx, "feature_yaml", "source=agent");
+#endif
+
+    CreateHardClassesFromCanonification(ctx, "feature_def_json_preparse", "source=agent");
 }
 
 /*******************************************************************/
@@ -963,10 +987,46 @@ static void SetFlavour(EvalContext *ctx, const char *flavour)
 static void OSClasses(EvalContext *ctx)
 {
 #ifdef __linux__
-    struct stat statbuf;
+
+/* First we check if init process is systemd, and set "systemd" hard class. */
+
+    {
+        char init_path[CF_BUFSIZE];
+        if (ReadLine("/proc/1/cmdline", init_path, sizeof(init_path)))
+        {
+            /* Follow possible symlinks. */
+
+            char resolved_path[PATH_MAX];      /* realpath() needs PATH_MAX */
+            if (realpath(init_path, resolved_path) != NULL &&
+                strlen(resolved_path) < sizeof(init_path))
+            {
+                strcpy(init_path, resolved_path);
+            }
+
+            /* Check if string ends with "/systemd". */
+            char *p;
+            char *next_p = NULL;
+            const char *term = "/systemd";
+            do
+            {
+                p = next_p;
+                next_p = strstr(next_p ? next_p+strlen(term) : init_path, term);
+            }
+            while (next_p);
+
+            if (p != NULL &&
+                p[strlen("/systemd")] == '\0')
+            {
+                EvalContextClassPutHard(ctx, "systemd",
+                                        "inventory,attribute_name=none,source=agent");
+            }
+        }
+    }
 
 /* Mandrake/Mandriva, Fedora and Oracle VM Server supply /etc/redhat-release, so
    we test for those distributions first */
+
+    struct stat statbuf;
 
     if (stat("/etc/mandriva-release", &statbuf) != -1)
     {
@@ -1019,9 +1079,14 @@ static void OSClasses(EvalContext *ctx)
         Linux_Slackware_Version(ctx, SLACKWARE_ANCIENT_VERSION_FILENAME);
     }
 
-    if (stat("/etc/debian_version", &statbuf) != -1)
+    if (stat(DEBIAN_VERSION_FILENAME, &statbuf) != -1)
     {
         Linux_Debian_Version(ctx);
+    }
+
+    if (stat(LSB_RELEASE_FILENAME, &statbuf) != -1)
+    {
+        Linux_Misc_Version(ctx);
     }
 
     if (stat("/usr/bin/aptitude", &statbuf) != -1)
@@ -1110,6 +1175,26 @@ static void OSClasses(EvalContext *ctx)
     char context[CF_BUFSIZE];
     snprintf(context, CF_BUFSIZE, "%s_%s", VSYSNAME.sysname, vbuff);
     SetFlavour(ctx, context);
+
+#ifdef __FreeBSD__
+    /*
+     * Define a hard class with just the version major number on FreeBSD
+     *
+     * For example, when being run on either FreeBSD 10.0 or 10.1 a class
+     * called freebsd_10 will be defined
+     */
+    for (char *sp = vbuff; *sp != '\0'; sp++)
+    {
+        if (*sp == '.')
+        {
+            *sp = '\0';
+            break;
+        }
+    }
+
+    snprintf(context, CF_BUFSIZE, "%s_%s", VSYSNAME.sysname, vbuff);
+    EvalContextClassPutHard(ctx, context, "source=agent,derived-from=sys.flavour");
+#endif
 
 #endif
 
@@ -1442,6 +1527,7 @@ static int Linux_Redhat_Version(EvalContext *ctx)
 #define REDHAT_C_ID "Red Hat Enterprise Linux Client"
 #define REDHAT_S_ID "Red Hat Enterprise Linux Server"
 #define REDHAT_W_ID "Red Hat Enterprise Linux Workstation"
+#define REDHAT_CN_ID "Red Hat Enterprise Linux ComputeNode"
 #define MANDRAKE_ID "Linux Mandrake"
 #define MANDRAKE_10_1_ID "Mandrakelinux"
 #define WHITEBOX_ID "White Box Enterprise Linux"
@@ -1516,6 +1602,11 @@ static int Linux_Redhat_Version(EvalContext *ctx)
         vendor = "redhat";
         edition = "c";
     }
+    else if (!strncmp(relstring, REDHAT_CN_ID, strlen(REDHAT_CN_ID)))
+    {
+        vendor = "redhat";
+        edition = "cn";
+    }
     else if (!strncmp(relstring, REDHAT_ID, strlen(REDHAT_ID)))
     {
         vendor = "redhat";
@@ -1564,7 +1655,7 @@ static int Linux_Redhat_Version(EvalContext *ctx)
 
 /* Now, grok the release.  For AS, we neglect the AS at the end of the
  * numerical release because we already figured out that it *is* AS
- * from the infomation above.  We assume that all the strings will
+ * from the information above.  We assume that all the strings will
  * have the word 'release' before the numerical release.
  */
 
@@ -1915,60 +2006,100 @@ static int Linux_Slackware_Version(EvalContext *ctx, char *filename)
 }
 
 /*
- * @brief : /etc/issue on debian can include special characters
- *          escaped with '/' or '@'. This function will get rid
- *          them.
+ * @brief Purge /etc/issue escapes on debian
+ *
+ * On debian, /etc/issue can include special characters escaped with
+ * '\\' or '@'. This function removes such escape sequences.
  *
  * @param[in,out] buffer: string to be sanitized
- *
- * @return : 0 if everything went fine, <>0 otherwise
  */
-static int LinuxDebianSanitizeIssue(char *buffer)
+static void LinuxDebianSanitizeIssue(char *buffer)
 {
     bool escaped = false;
-    char *s2, *s;
-    s2 = buffer;
-    for (s = buffer; *s != '\0'; s++)
+    char *dst = buffer, *src = buffer, *tail = dst;
+    while (*src != '\0')
     {
-        if (*s=='\\' || *s=='@')
+        char here = *src;
+        src++;
+        if (here == '\\' || here == '@' || escaped)
         {
-             if (escaped == false)
-             {
-                 escaped = true;
-             }
-             else
-             {
-                 escaped = false;
-             }
+            /* Skip over escapes and the character each acts on. */
+            escaped = !escaped;
         }
         else
         {
-             if (escaped == false)
-             {
-                 *s2 = *s;
-                 s2++;
-             }
-             else
-             {
-                 escaped = false;
-             }
+            /* Copy everything else verbatim: */
+            *dst = here;
+            dst++;
+            /* Keep track of (just after) last non-space: */
+            if (!isspace(here))
+            {
+                tail = dst;
+            }
         }
     }
-    *s2 = '\0';
-    s2--;
-    while (*s2 == ' ')
+
+    assert(tail == dst || isspace(*tail));
+    *tail = '\0';
+}
+
+/******************************************************************/
+
+static int Linux_Misc_Version(EvalContext *ctx)
+{
+    char flavour[CF_MAXVARSIZE];
+    char version[CF_MAXVARSIZE];
+    char os[CF_MAXVARSIZE];
+    char buffer[CF_BUFSIZE];
+
+    *os = '\0';
+    *version = '\0';
+
+    FILE *fp = fopen(LSB_RELEASE_FILENAME, "r");
+    if (fp != NULL)
     {
-        *s2 = '\0';
-        s2--;
+        while (!feof(fp))
+        {
+            if (fgets(buffer, CF_BUFSIZE, fp) == NULL)
+            {
+                if (ferror(fp))
+                {
+                    break;
+                }
+                continue;
+            }
+
+            if (strstr(buffer, "Cumulus"))
+            {
+                EvalContextClassPutHard(ctx, "cumulus", "inventory,attribute_name=none,source=agent");
+                strcpy(os, "cumulus");
+            }
+
+            char *sp = strstr(buffer, "DISTRIB_RELEASE=");
+            if (sp)
+            {
+                version[0] = '\0';
+                sscanf(sp + strlen("DISTRIB_RELEASE="), "%[^\n]", version);
+                CanonifyNameInPlace(version);
+            }
+        }
+    fclose(fp);
     }
+
+    if (*os && *version)
+    {
+        snprintf(flavour, CF_MAXVARSIZE, "%s_%s", os, version);
+        SetFlavour(ctx, flavour);
+        return 1;
+    }
+
     return 0;
 }
 
 /******************************************************************/
+
 static int Linux_Debian_Version(EvalContext *ctx)
 {
-#define DEBIAN_VERSION_FILENAME "/etc/debian_version"
-#define DEBIAN_ISSUE_FILENAME "/etc/issue"
     int major = -1;
     int release = -1;
     int result;
@@ -1997,7 +2128,7 @@ static int Linux_Debian_Version(EvalContext *ctx)
         snprintf(classname, CF_MAXVARSIZE, "debian_%u", major);
         SetFlavour(ctx, classname);
         break;
-        /* Fall-through */
+
     case 1:
         Log(LOG_LEVEL_VERBOSE, "This appears to be a Debian %u system.", major);
         snprintf(classname, CF_MAXVARSIZE, "debian_%u", major);
@@ -2185,7 +2316,8 @@ static int Linux_Mandriva_Version_Real(EvalContext *ctx, char *filename, char *r
 
 static int EOS_Version(EvalContext *ctx)
 
-{ char buffer[CF_BUFSIZE];
+{
+    char buffer[CF_BUFSIZE];
 
  // e.g. Arista Networks EOS 4.10.2
 
@@ -2291,7 +2423,6 @@ static int VM_Version(EvalContext *ctx)
 
 static int Xen_Domain(EvalContext *ctx)
 {
-    FILE *fp;
     int sufficient = 0;
 
     Log(LOG_LEVEL_VERBOSE, "This appears to be a xen pv system.");
@@ -2299,7 +2430,8 @@ static int Xen_Domain(EvalContext *ctx)
 
 /* xen host will have "control_d" in /proc/xen/capabilities, xen guest will not */
 
-    if ((fp = fopen("/proc/xen/capabilities", "r")) != NULL)
+    FILE *fp = fopen("/proc/xen/capabilities", "r");
+    if (fp != NULL)
     {
         size_t buffer_size = CF_BUFSIZE;
         char *buffer = xmalloc(buffer_size);
@@ -2365,6 +2497,15 @@ static void OpenVZ_Detect(EvalContext *ctx)
         if (stat(OPENVZ_VZPS_FILE, &statbuf) != -1)
         {
             EvalContextClassPutHard(ctx, "virt_host_vz_vzps", "inventory,attribute_name=Virtual host,source=agent");
+            /* here we must redefine the value of VPSHARDCLASS */
+            for (int i = 0; i < PLATFORM_CONTEXT_MAX; i++)
+            {
+                if (!strcmp(CLASSATTRIBUTES[i][0], "virt_host_vz_vzps"))
+                {
+                   VPSHARDCLASS = (PlatformContext) i;
+                   break;
+                }
+            }
         }
         else
         {
@@ -2740,6 +2881,8 @@ static time_t GetBootTimeFromUptimeCommand(time_t now)
     Log(LOG_LEVEL_VERBOSE, "Reading boot time from uptime command successful.");
     return(uptime ? (now - uptime) : -1);
 }
+
+/*****************************************************************************/
 
 void DetectEnvironment(EvalContext *ctx)
 {

@@ -1,3 +1,26 @@
+/*
+   Copyright (C) CFEngine AS
+
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
+   This program is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by the
+   Free Software Foundation; version 3.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+
+  To the extent this program is licensed as part of the Enterprise
+  versions of CFEngine, the applicable Commercial Open Source License
+  (COSL) may apply to this file if you as a licensee so wish it. See
+  included file COSL.txt.
+*/
 #include <variable.h>
 
 #include <alloc.h>
@@ -58,14 +81,22 @@ bool VariableTableRemove(VariableTable *table, const VarRef *ref)
     return RBTreeRemove(table->vars, (void *)ref->hash);
 }
 
-static Variable *VariableNew(VarRef *ref, Rval rval, DataType type, StringSet *tags, const Promise *promise)
+static Variable *VariableNew(VarRef *ref, Rval rval, DataType type,
+                             StringSet *tags, const Promise *promise)
 {
     Variable *var = xmalloc(sizeof(Variable));
 
     var->ref = ref;
     var->rval = rval;
     var->type = type;
-    var->tags = tags;
+    if (tags == NULL)
+    {
+        var->tags = StringSetFromString("", ',');
+    }
+    else
+    {
+        var->tags = tags;
+    }
     var->promise = promise;
 
     return var;
@@ -76,22 +107,11 @@ bool VariableTablePut(VariableTable *table, const VarRef *ref,
                       const char *tags, const Promise *promise)
 {
     assert(VarRefIsQualified(ref));
-    bool result;
 
-    Variable *var = VariableTableGet(table, ref);
-    if (var == NULL)
-    {
-        var = VariableNew(VarRefCopy(ref), RvalCopy(*rval), type, StringSetFromString(tags, ','), promise);
-        result = RBTreePut(table->vars, (void *)var->ref->hash, var);
-    }
-    else // if (!RvalsEqual(var->rval *rval) // TODO: implement-me !
-    {
-        RvalDestroy(var->rval);
-        var->rval = RvalCopy(*rval);
-        var->type = type;
-        var->promise = promise;
-        result = true;
-    }
+    Variable *var = VariableNew(VarRefCopy(ref), RvalCopy(*rval), type,
+                                StringSetFromString(tags, ','), promise);
+    bool result = RBTreePut(table->vars, (void *) var->ref->hash, var);
+
     return result;
 }
 
@@ -251,6 +271,8 @@ VariableTable *VariableTableCopyLocalized(const VariableTable *table, const char
     Variable *foreign_var = NULL;
     while ((foreign_var = VariableTableIteratorNext(iter)))
     {
+        /* TODO why is tags NULL here? Shouldn't it be an exact copy of
+         * foreign_var->tags? */
         Variable *localized_var = VariableNew(VarRefCopyLocalized(foreign_var->ref),
                                               RvalCopy(foreign_var->rval), foreign_var->type,
                                               NULL, foreign_var->promise);

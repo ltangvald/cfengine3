@@ -68,7 +68,8 @@ static void ThisAgentInit(void);
 static GenericAgentConfig *CheckOpts(int argc, char **argv);
 
 static void KeepControlPromises(EvalContext *ctx, const Policy *policy);
-static int HailServer(EvalContext *ctx, char *host);
+static int HailServer(const EvalContext *ctx, const GenericAgentConfig *config,
+                      char *host);
 static void SendClassData(AgentConnection *conn);
 static void HailExec(AgentConnection *conn, char *peer, char *recvbuffer, char *sendbuffer);
 static FILE *NewStream(char *name);
@@ -107,8 +108,8 @@ static const struct option OPTIONS[] =
     {"hail", required_argument, 0, 'H'},
     {"interactive", no_argument, 0, 'i'},
     {"timeout", required_argument, 0, 't'},
-    {"legacy-output", no_argument, 0, 'l'},
     {"color", optional_argument, 0, 'C'},
+    {"timestamp", no_argument, 0, 'l'},
     {NULL, 0, 0, '\0'}
 };
 
@@ -124,13 +125,13 @@ static const char *const HINTS[] =
     "Define a list of comma separated classes to be sent to a remote agent",
     "Define a list of comma separated classes to be used to select remote agents by constraint",
     "Print basic information about changes made to the system, i.e. promises repaired",
-    "Pass options to a remote server process",
+    "(deprecated)",
     "Activate internal diagnostics (developers only)",
     "Hail the following comma-separated lists of hosts, overriding default list",
     "Enable interactive mode for key trust",
     "Connection timeout, seconds",
-    "Use legacy output format",
     "Enable colorized output. Possible values: 'always', 'auto', 'never'. If option is used, the default value is 'auto'",
+    "Log timestamps on each line of log output",
     NULL
 };
 
@@ -141,7 +142,6 @@ int OUTPUT_TO_FILE = false; /* GLOBAL_P */
 char OUTPUT_DIRECTORY[CF_BUFSIZE] = ""; /* GLOBAL_P */
 int BACKGROUND = false; /* GLOBAL_P GLOBAL_A */
 int MAXCHILD = 50; /* GLOBAL_P GLOBAL_A */
-char REMOTE_AGENT_OPTIONS[CF_MAXVARSIZE] = ""; /* GLOBAL_A */
 
 const Rlist *HOSTLIST = NULL; /* GLOBAL_P GLOBAL_A */
 char SENDCLASSES[CF_MAXVARSIZE] = ""; /* GLOBAL_A */
@@ -164,7 +164,9 @@ int main(int argc, char *argv[])
     GenericAgentDiscoverContext(ctx, config);
     Policy *policy = LoadPolicy(ctx, config);
 
+    GenericAgentPostLoadInit(ctx);
     ThisAgentInit();
+
     KeepControlPromises(ctx, policy);      // Set RUNATTR using copy
 
     if (BACKGROUND && INTERACTIVE)
@@ -185,7 +187,7 @@ int main(int argc, char *argv[])
             if (BACKGROUND)
             {
                 Log(LOG_LEVEL_VERBOSE,
-                      "Windows does not support starting processes in the background - starting in foreground");
+                    "Windows does not support starting processes in the background - starting in foreground");
                 BACKGROUND = false;
             }
 #else
@@ -195,7 +197,7 @@ int main(int argc, char *argv[])
                 {
                     if (fork() == 0)    /* child process */
                     {
-                        HailServer(ctx, RlistScalarValue(rp));
+                        HailServer(ctx, config, RlistScalarValue(rp));
                         exit(EXIT_SUCCESS);
                     }
                     else        /* parent process */
@@ -214,7 +216,7 @@ int main(int argc, char *argv[])
             else                /* serial */
 #endif /* __MINGW32__ */
             {
-                HailServer(ctx, RlistScalarValue(rp));
+                HailServer(ctx, config, RlistScalarValue(rp));
                 rp = rp->next;
             }
         }                       /* end while */
@@ -244,21 +246,17 @@ int main(int argc, char *argv[])
 static GenericAgentConfig *CheckOpts(int argc, char **argv)
 {
     extern char *optarg;
-    int optindex = 0;
     int c;
-    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_RUNAGENT);
+    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_RUNAGENT, GetTTYInteractive());
 
     DEFINECLASSES[0] = '\0';
     SENDCLASSES[0] = '\0';
 
-    while ((c = getopt_long(argc, argv, "t:q:db:vnKhIif:D:VSxo:s:MH:lC::", OPTIONS, &optindex)) != EOF)
+    while ((c = getopt_long(argc, argv, "t:q:db:vnKhIif:D:VSxo:s:MH:C::l",
+                            OPTIONS, NULL)) != -1)
     {
-        switch ((char) c)
+        switch (c)
         {
-        case 'l':
-            LEGACY_OUTPUT = true;
-            break;
-
         case 'f':
             GenericAgentConfigSetInputFile(config, GetInputDir(), optarg);
             MINUSF = true;
@@ -281,9 +279,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 's':
-            strlcpy(SENDCLASSES, optarg, CF_MAXVARSIZE);
-
-            if (strlen(optarg) > CF_MAXVARSIZE)
+            if (strlcat(SENDCLASSES, optarg, sizeof(SENDCLASSES)) >= sizeof(SENDCLASSES))
             {
                 Log(LOG_LEVEL_ERR, "Argument too long (-s)");
                 exit(EXIT_FAILURE);
@@ -291,9 +287,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'D':
-            strlcpy(DEFINECLASSES, optarg, CF_MAXVARSIZE);
-
-            if (strlen(optarg) > CF_MAXVARSIZE)
+            if (strlcat(DEFINECLASSES, optarg, sizeof(DEFINECLASSES)) >= sizeof(DEFINECLASSES))
             {
                 Log(LOG_LEVEL_ERR, "Argument too long (-D)");
                 exit(EXIT_FAILURE);
@@ -305,7 +299,9 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'o':
-            strlcpy(REMOTE_AGENT_OPTIONS, optarg, CF_MAXVARSIZE);
+            Log(LOG_LEVEL_ERR, "Option \"-o\" has been deprecated,"
+                " you can not pass arbitrary arguments to remote cf-agent");
+            exit(EXIT_FAILURE);
             break;
 
         case 'I':
@@ -330,32 +326,32 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'V':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteVersion(w);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteVersion(w);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'h':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-runagent", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-runagent", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'M':
-            {
-                Writer *out = FileWriter(stdout);
-                ManPageWrite(out, "cf-runagent", time(NULL),
-                             CF_RUNAGENT_SHORT_DESCRIPTION,
-                             CF_RUNAGENT_MANPAGE_LONG_DESCRIPTION,
-                             OPTIONS, HINTS,
-                             true);
-                FileWriterDetach(out);
-                exit(EXIT_SUCCESS);
-            }
+        {
+            Writer *out = FileWriter(stdout);
+            ManPageWrite(out, "cf-runagent", time(NULL),
+                         CF_RUNAGENT_SHORT_DESCRIPTION,
+                         CF_RUNAGENT_MANPAGE_LONG_DESCRIPTION,
+                         OPTIONS, HINTS,
+                         true);
+            FileWriterDetach(out);
+            exit(EXIT_SUCCESS);
+        }
 
         case 'x':
             Log(LOG_LEVEL_ERR, "Self-diagnostic functionality is retired.");
@@ -368,13 +364,17 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             }
             break;
 
+        case 'l':
+            LoggingEnableTimestamps(true);
+            break;
+
         default:
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-runagent", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_FAILURE);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-runagent", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_FAILURE);
 
         }
     }
@@ -393,18 +393,12 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
 static void ThisAgentInit(void)
 {
     umask(077);
-
-    if (strstr(REMOTE_AGENT_OPTIONS, "--file") || strstr(REMOTE_AGENT_OPTIONS, "-f"))
-    {
-        Log(LOG_LEVEL_ERR,
-              "The specified remote options include a useless --file option. The remote server has promised to ignore this, thus it is disallowed.");
-        exit(EXIT_FAILURE);
-    }
 }
 
 /********************************************************************/
 
-static int HailServer(EvalContext *ctx, char *host)
+static int HailServer(const EvalContext *ctx, const GenericAgentConfig *config,
+                      char *host)
 {
     assert(host != NULL);
 
@@ -446,6 +440,9 @@ static int HailServer(EvalContext *ctx, char *host)
         gotkey = HavePublicKey(user, ipaddr, hostkey) != NULL;
         if (!gotkey)
         {
+            /* TODO print the hash of the connecting host. But to do that we
+             * should open the connection first, and somehow pass that hash
+             * here! redmine#7212 */
             printf("WARNING - You do not have a public key from host %s = %s\n",
                    hostname, ipaddr);
             printf("          Do you want to accept one on trust? (yes/no)\n\n--> ");
@@ -486,31 +483,22 @@ static int HailServer(EvalContext *ctx, char *host)
 #ifndef __MINGW32__
     if (BACKGROUND)
     {
-        Log(LOG_LEVEL_INFO, "Hailing '%s' : %s, with options '%s' (parallel)", hostname, port,
-              REMOTE_AGENT_OPTIONS);
+        Log(LOG_LEVEL_INFO, "Hailing %s : %s (in the background)",
+            hostname, port);
     }
     else
 #endif
     {
-        if (LEGACY_OUTPUT)
-        {
-            Log(LOG_LEVEL_INFO, "...........................................................................");
-            Log(LOG_LEVEL_INFO, " * Hailing %s : %s, with options \"%s\" (serial)", hostname, port,
-                  REMOTE_AGENT_OPTIONS);
-            Log(LOG_LEVEL_INFO, "...........................................................................");
-        }
-        else
-        {
-            Log(LOG_LEVEL_INFO, "Hailing '%s' : %s, with options '%s' (serial)", hostname, port,
-                  REMOTE_AGENT_OPTIONS);
-        }
+        Log(LOG_LEVEL_INFO,
+            "........................................................................");
+        Log(LOG_LEVEL_INFO, "Hailing %s : %s",
+            hostname, port);
+        Log(LOG_LEVEL_INFO,
+            "........................................................................");
     }
 
-    const char *s =
-        EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_PROTOCOL_VERSION);
-
     ConnectionFlags connflags = {
-        .protocol_version = ProtocolVersionParse(s),
+        .protocol_version = config->protocol_version,
         .trust_server = trustkey
     };
     int err = 0;
@@ -518,7 +506,7 @@ static int HailServer(EvalContext *ctx, char *host)
 
     if (conn == NULL)
     {
-        Log(LOG_LEVEL_VERBOSE, "No suitable server responded to hail");
+        Log(LOG_LEVEL_ERR, "Failed to connect to host: %s", hostname);
         return false;
     }
 
@@ -585,7 +573,7 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy)
                 if (BACKGROUND || INTERACTIVE)
                 {
                     Log(LOG_LEVEL_WARNING,
-                          "'background_children' setting from 'body runagent control' is overridden by command-line option.");
+                        "'background_children' setting from 'body runagent control' is overridden by command-line option.");
                 }
                 else
                 {
@@ -670,17 +658,13 @@ static void SendClassData(AgentConnection *conn)
 
 static void HailExec(AgentConnection *conn, char *peer, char *recvbuffer, char *sendbuffer)
 {
-    FILE *fp = stdout;
-    char *sp;
-    int n_read;
-
-    if (strlen(DEFINECLASSES))
+    if (DEFINECLASSES[0] != '\0')
     {
-        snprintf(sendbuffer, CF_BUFSIZE, "EXEC %s -D%s", REMOTE_AGENT_OPTIONS, DEFINECLASSES);
+        snprintf(sendbuffer, CF_BUFSIZE, "EXEC -D%s", DEFINECLASSES);
     }
     else
     {
-        snprintf(sendbuffer, CF_BUFSIZE, "EXEC %s", REMOTE_AGENT_OPTIONS);
+        snprintf(sendbuffer, CF_BUFSIZE, "EXEC");
     }
 
     if (SendTransaction(conn->conn_info, sendbuffer, 0, CF_DONE) == -1)
@@ -690,46 +674,57 @@ static void HailExec(AgentConnection *conn, char *peer, char *recvbuffer, char *
         return;
     }
 
-    fp = NewStream(peer);
+    /* TODO we are sending class data right after EXEC, when the server might
+     * have already rejected us with BAD reply. So this class data with the
+     * CFD_TERMINATOR will be interpreted by the server as a new, bogus
+     * protocol command, and the server will complain. */
     SendClassData(conn);
 
+    FILE *fp = NewStream(peer);
     while (true)
     {
         memset(recvbuffer, 0, CF_BUFSIZE);
 
-        if ((n_read = ReceiveTransaction(conn->conn_info, recvbuffer, NULL)) == -1)
-        {
-            return;
-        }
+        int n_read = ReceiveTransaction(conn->conn_info, recvbuffer, NULL);
 
-        if (n_read == 0)
+        if (n_read == -1)
+        {
+            break;
+        }
+        if (n_read == 0)                               /* connection closed */
+        {
+            break;
+        }
+        if (strncmp(recvbuffer, CFD_TERMINATOR, strlen(CFD_TERMINATOR)) == 0)
         {
             break;
         }
 
-        if (strlen(recvbuffer) == 0)
+        const size_t recv_len = strlen(recvbuffer);
+        const char   *ipaddr  = conn->remoteip;
+
+        if (strncmp(recvbuffer, "BAD:", 4) == 0)
         {
-            continue;
+            fprintf(fp, "%s> !! %s\n", ipaddr, recvbuffer + 4);
+        }
+        /* cf-serverd >= 3.7 quotes command output with "> ". */
+        else if (strncmp(recvbuffer, "> ", 2) == 0)
+        {
+            fprintf(fp, "%s> -> %s", ipaddr, &recvbuffer[2]);
+        }
+        else
+        {
+            fprintf(fp, "%s> %s", ipaddr, recvbuffer);
         }
 
-        if ((sp = strstr(recvbuffer, CFD_TERMINATOR)) != NULL)
+        if (recv_len > 0 && recvbuffer[recv_len - 1] != '\n')
         {
-            break;
+            /* We'll be printing double newlines here with new cf-serverd
+             * versions, so check for already trailing newlines. */
+            /* TODO deprecate this path in a couple of versions. cf-serverd is
+             * supposed to munch the newlines so we must always append one. */
+            fputc('\n', fp);
         }
-
-        if ((sp = strstr(recvbuffer, "BAD:")) != NULL)
-        {
-            fprintf(fp, "%s> !! %s\n", VPREFIX, recvbuffer + 4);
-            continue;
-        }
-
-        if (strstr(recvbuffer, "too soon"))
-        {
-            fprintf(fp, "%s> !! %s\n", VPREFIX, recvbuffer);
-            continue;
-        }
-
-        fprintf(fp, "%s> -> %s", VPREFIX, recvbuffer);
     }
 
     if (fp != stdout)
@@ -754,16 +749,17 @@ static FILE *NewStream(char *name)
     }
     else
     {
-        snprintf(filename, CF_BUFSIZE, "%s/outputs/%s_runagent.out", CFWORKDIR, name);
+        snprintf(filename, CF_BUFSIZE, "%s%coutputs%c%s_runagent.out",
+                 GetWorkDir(), FILE_SEPARATOR, FILE_SEPARATOR, name);
     }
 
     if (OUTPUT_TO_FILE)
     {
-        printf("Opening file...%s\n", filename);
+        printf("Opening file... %s\n", filename);
 
         if ((fp = fopen(filename, "w")) == NULL)
         {
-            Log(LOG_LEVEL_ERR, "Unable to open file '%s'", filename);
+            Log(LOG_LEVEL_ERR, "Unable to open file '%s' (fopen: %s)", filename, GetErrorStr());
             fp = stdout;
         }
     }

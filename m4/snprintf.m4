@@ -90,7 +90,7 @@ AC_DEFUN([HW_FUNC_VSNPRINTF],
 [
   AC_REQUIRE([HW_HEADER_STDARG_H])dnl Our check evaluates HAVE_STDARG_H.
 
-  dnl The folowing checks are not *required* to HAVE_VSNPRINTF, but they
+  dnl The following checks are not *required* to HAVE_VSNPRINTF, but they
   dnl should be checked (and pass!) for the test in snprintf.c to pass.
   AC_CHECK_HEADERS([inttypes.h locale.h stddef.h stdint.h])
   AC_CHECK_MEMBERS([struct lconv.decimal_point, struct lconv.thousands_sep],
@@ -203,8 +203,13 @@ AC_DEFUN([HW_FUNC_SNPRINTF],
 AC_DEFUN([HW_FUNC_VASPRINTF],
 [
   AC_REQUIRE([HW_FUNC_VSNPRINTF])dnl Our vasprintf(3) calls vsnprintf(3).
-  AC_CHECK_FUNCS([vasprintf],
-    [hw_cv_func_vasprintf=yes],
+  # Don't even bother checking for vasprintf if snprintf was standards
+  # incompliant, this one is going to be too.
+  AS_IF([test "$hw_cv_func_snprintf_c99" = yes],
+    [AC_CHECK_FUNCS([vasprintf],
+      [hw_cv_func_vasprintf=yes],
+      [hw_cv_func_vasprintf=no])
+    ],
     [hw_cv_func_vasprintf=no])
   AS_IF([test "$hw_cv_func_vasprintf" = no],
     [AC_DEFINE([vasprintf], [rpl_vasprintf],
@@ -224,8 +229,13 @@ AC_DEFUN([HW_FUNC_VASPRINTF],
 AC_DEFUN([HW_FUNC_ASPRINTF],
 [
   AC_REQUIRE([HW_FUNC_VASPRINTF])dnl Our asprintf(3) calls vasprintf(3).
-  AC_CHECK_FUNCS([asprintf],
-    [hw_cv_func_asprintf=yes],
+  # Don't even bother checking for asprintf if snprintf was standards
+  # incompliant, this one is going to be too.
+  AS_IF([test "$hw_cv_func_snprintf_c99" = yes],
+    [AC_CHECK_FUNCS([asprintf],
+      [hw_cv_func_asprintf=yes],
+      [hw_cv_func_asprintf=no])
+    ],
     [hw_cv_func_asprintf=no])
   AS_IF([test "$hw_cv_func_asprintf" = no],
     [AC_DEFINE([asprintf], [rpl_asprintf],

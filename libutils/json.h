@@ -68,7 +68,6 @@ typedef enum
 
     JSON_PARSE_ERROR_STRING_NO_DOUBLEQUOTE_START,
     JSON_PARSE_ERROR_STRING_NO_DOUBLEQUOTE_END,
-    JSON_PARSE_ERROR_STRING_UNSUPPORTED_ESCAPE,
 
     JSON_PARSE_ERROR_NUMBER_EXPONENT_NEGATIVE,
     JSON_PARSE_ERROR_NUMBER_EXPONENT_POSITIVE,
@@ -82,6 +81,7 @@ typedef enum
 
     JSON_PARSE_ERROR_ARRAY_START,
     JSON_PARSE_ERROR_ARRAY_END,
+    JSON_PARSE_ERROR_ARRAY_COMMA,
 
     JSON_PARSE_ERROR_OBJECT_BAD_SYMBOL,
     JSON_PARSE_ERROR_OBJECT_START,
@@ -93,7 +93,10 @@ typedef enum
     JSON_PARSE_ERROR_OBJECT_OPEN_LVAL,
 
     JSON_PARSE_ERROR_INVALID_START,
+    JSON_PARSE_ERROR_NO_LIBYAML,
+    JSON_PARSE_ERROR_LIBYAML_FAILURE,
     JSON_PARSE_ERROR_NO_DATA,
+    JSON_PARSE_ERROR_TRUNCATED,
 
     JSON_PARSE_ERROR_MAX
 } JsonParseError;
@@ -153,18 +156,20 @@ void JsonDestroy(JsonElement *element);
 size_t JsonLength(const JsonElement *element);
 
 JsonElementType JsonGetElementType(const JsonElement *element);
+const char* JsonElementGetPropertyName(const JsonElement *element);
 
 JsonContainerType JsonGetContainerType(const JsonElement *container);
 
 JsonPrimitiveType JsonGetPrimitiveType(const JsonElement *primitive);
 const char *JsonPrimitiveGetAsString(const JsonElement *primitive);
+char* JsonPrimitiveToString(const JsonElement *primitive);
 bool JsonPrimitiveGetAsBool(const JsonElement *primitive);
 long JsonPrimitiveGetAsInteger(const JsonElement *primitive);
 double JsonPrimitiveGetAsReal(const JsonElement *primitive);
 const char *JsonGetPropertyAsString(const JsonElement *element);
 
 /**
-  @brief Pretty-print a JsonElement recursively into a Writer.
+  @brief Pretty-print a JsonElement recursively into a Writer.  If it's a JsonObject, its children will be sorted to produce canonical JSON output, but the object's contents are not modified so it's still a const.
   @see Writer
   @param writer [in] The Writer object to use as a buffer.
   @param element [in] The JSON element to print.
@@ -241,7 +246,7 @@ void JsonObjectAppendElement(JsonElement *object, const char *key, JsonElement *
   @brief Get the value of a field in an object, as a string.
   @param object [in] The JSON object parent.
   @param key [in] the key of the field.
-  @returns A pointer to the string value, or NULL if non-existant.
+  @returns A pointer to the string value, or NULL if non-existent.
   */
 const char *JsonObjectGetAsString(const JsonElement *object, const char *key);
 
@@ -249,7 +254,7 @@ const char *JsonObjectGetAsString(const JsonElement *object, const char *key);
   @brief Get the value of a field in an object, as an object.
   @param object [in] The JSON object parent.
   @param key [in] the key of the field.
-  @returns A pointer to the object value, or NULL if non-existant.
+  @returns A pointer to the object value, or NULL if non-existent.
   */
 JsonElement *JsonObjectGetAsObject(JsonElement *object, const char *key);
 
@@ -257,7 +262,7 @@ JsonElement *JsonObjectGetAsObject(JsonElement *object, const char *key);
   @brief Get the value of a field in an object, as an array.
   @param object [in] The JSON object parent.
   @param key [in] the key of the field.
-  @returns A pointer to the array value, or NULL if non-existant.
+  @returns A pointer to the array value, or NULL if non-existent.
   */
 JsonElement *JsonObjectGetAsArray(JsonElement *object, const char *key);
 
@@ -328,7 +333,7 @@ void JsonContainerReverse(JsonElement *array);
   @brief Get a string value from an array
   @param array [in] The JSON array parent
   @param index [in] Position of the value to get
-  @returns A pointer to the string value, or NULL if non-existant.
+  @returns A pointer to the string value, or NULL if non-existent.
   */
 const char *JsonArrayGetAsString(JsonElement *array, size_t index);
 
@@ -336,16 +341,22 @@ const char *JsonArrayGetAsString(JsonElement *array, size_t index);
   @brief Get an object value from an array
   @param array [in] The JSON array parent
   @param index [in] Position of the value to get
-  @returns A pointer to the object value, or NULL if non-existant.
+  @returns A pointer to the object value, or NULL if non-existent.
   */
 JsonElement *JsonArrayGetAsObject(JsonElement *array, size_t index);
 
-JsonElement *JsonArrayGet(JsonElement *array, size_t index);
+JsonElement *JsonArrayGet(const JsonElement *array, size_t index);
 
+/**
+  @brief Check if an array contains only primitives
+  @param array [in] The JSON array parent
+  @returns true if the array contains only primitives, false otherwise
+  */
+bool JsonArrayContainsOnlyPrimitives(JsonElement *array);
 
 /**
   @brief Parse a string to create a JsonElement
-  @param data [in, out] Pointer to the string to parse
+  @param data [in] Pointer to the string to parse
   @param json_out Resulting JSON object
   @returns See JsonParseError and JsonParseErrorToString
   */
@@ -396,7 +407,5 @@ JsonElementType JsonIteratorCurrentElementType(const JsonIterator *iter);
 JsonContainerType JsonIteratorCurrentContainerType(const JsonIterator *iter);
 JsonPrimitiveType JsonIteratorCurrentPrimitiveType(const JsonIterator *iter);
 bool JsonIteratorHasMore(const JsonIterator *iter);
-
-
 
 #endif

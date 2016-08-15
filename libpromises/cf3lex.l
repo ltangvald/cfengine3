@@ -49,7 +49,8 @@
 #define malloc xmalloc
 #define realloc xrealloc
 
-#define ParserDebug if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG) printf
+//#define ParserDebug if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG) printf
+#define ParserDebug(...) ((void) 0)
 
 static int DeEscapeQuotedString(const char *from, char *to);
 
@@ -69,6 +70,8 @@ P.offsets.current += yyleng;
 
 %}
 
+%x if_ignore_state
+
 space      [ \t]+
 
 newline    ([\n]|[\xd][\xa])
@@ -76,6 +79,10 @@ newline    ([\n]|[\xd][\xa])
 line       ^.*$
 
 comment    #[^\n]*
+
+macro_if    ^@if\ minimum_version\([0-9]{1,10}\.[0-9]{1,10}\)
+macro_endif ^@endif
+macro_line ^[^@\n\xd\xa].*$
 
 promises   bundle
 
@@ -90,14 +97,6 @@ symbol     [a-zA-Z0-9_\200-\377]+[:][a-zA-Z0-9_\200-\377]+
 assign     =>
 
 arrow      ->
-
-op         [(]
-
-cp         [)]
-
-ob         [{]
-
-cb         [}]
 
 /*
  * Three types of quoted strings:
@@ -124,6 +123,7 @@ cb         [}]
 qstring        \"((\\(.|\n))|[^"\\])*\"|\'((\\(.|\n))|[^'\\])*\'|`[^`]*`
 
 class          [.|&!()a-zA-Z0-9_\200-\377:]+::
+varclass       (\"[^"]*\"|\'[^']*\')::
 
 promise_type   [a-zA-Z_]+:
 
@@ -141,6 +141,89 @@ promise_type   [a-zA-Z_]+:
                           P.line_pos = 0;
                       }
 
+{macro_if}            {
+                        const char* version_text = yytext+20;
+                        ParserDebug("\tL:macro @if %d:version=%s\n", P.line_pos, version_text);
+                        {
+                          int request_major = 0;
+                          int request_minor = 0;
+                          int major = 0;
+                          int minor = 0;
+                          int patch = 0;
+
+                          if (P.if_depth > 0)
+                          {
+                            yyerror("fatal: nested @if macros are not allowed");
+                            return 0;
+                          }
+
+                          P.if_depth++;
+
+                          if (3 == sscanf(Version(), "%d.%d.%d", &major, &minor, &patch))
+                          {
+                            if (2 == sscanf(version_text, "%d.%d", &request_major, &request_minor))
+                            {
+                            if ((request_major > major) ||
+                                (request_major == major && request_minor > minor))
+                              {
+                                /* ignore to the next @endif */
+                                ParserDebug("\tL:macro @if %d:ignoring to next @endif or EOF\n", P.line_pos);
+                                BEGIN(if_ignore_state);
+                              }
+                              else /* we're OK with the version */
+                              {
+                                ParserDebug("\tL:macro @if %d:accepted to next @endif\n", P.line_pos);
+                              }
+                            }
+                            else
+                            {
+                              yyerror("fatal: macro @if requested an unparseable version");
+                              return 0;
+                            }
+                          }
+                          else
+                          {
+                            yyerror("fatal: Version() was unparseable");
+                            return 0;
+                          }
+                        }
+                      }
+
+{macro_endif}         {
+                        ParserDebug("\tL:macro @endif %d\n", P.line_pos);
+                        BEGIN(INITIAL);
+                        if (P.if_depth <= 0)
+                        {
+                          yyerror("fatal: @endif macros without a matching @if are not allowed");
+                          return 0;
+                        }
+                        P.if_depth--;
+                      }
+
+
+<if_ignore_state>{macro_line}  {
+                                  ParserDebug("\tL:inside macro @if, ignoring line text:\"%s\"\n", yytext);
+                               }
+
+<if_ignore_state>{macro_endif} {
+                                 ParserDebug("\tL:macro @endif %d\n", P.line_pos);
+                                 BEGIN(INITIAL);
+                                 if (P.if_depth <= 0)
+                                 {
+                                   yyerror("fatal: @endif macros without a matching @if are not allowed");
+                                   return 0;
+                                 }
+                                 P.if_depth--;
+                               }
+
+<if_ignore_state>{newline} {
+                           }
+
+<if_ignore_state>.    {
+                          /* eat up al unknown chars when line starts with @*/
+                          ParserDebug("\tL:inside macro @if, ignoring char text:\"%s\"\n", yytext);
+                      }
+
 {promises}            {
                           /* Note this has to come before "id" since it is a subset of id */
 
@@ -149,6 +232,13 @@ promise_type   [a-zA-Z_]+:
                               free(P.currentclasses);
                               P.currentclasses = NULL;
                           }
+
+                          if (P.currentvarclasses != NULL)
+                          {
+                              free(P.currentvarclasses);
+                              P.currentvarclasses = NULL;
+                          }
+
                           P.line_pos += yyleng;
                           ParserDebug("\tL:bundle %d\n", P.line_pos);
                           return BUNDLE;
@@ -162,6 +252,13 @@ promise_type   [a-zA-Z_]+:
                               free(P.currentclasses);
                               P.currentclasses = NULL;
                           }
+
+                          if (P.currentvarclasses != NULL)
+                          {
+                              free(P.currentvarclasses);
+                              P.currentvarclasses = NULL;
+                          }
+
                           P.line_pos += yyleng;
                           ParserDebug("\tL:body %d\n", P.line_pos);
                           return BODY;
@@ -205,6 +302,33 @@ promise_type   [a-zA-Z_]+:
                           return ARROW;
                       }
 
+{varclass}            {
+                          char *tmp = NULL;
+                        
+                          P.line_pos += yyleng;
+                          ParserDebug("\tL:varclass %s %d\n", yytext, P.line_pos);
+
+                          tmp = xstrdup(yytext+1); // remove leading quote
+                          tmp[yyleng-4] = '\0'; // remove tail quote plus ::
+
+                          if (P.currentclasses != NULL)
+                          {
+                              free(P.currentclasses);
+                              P.currentclasses = NULL;
+                          }
+
+                          if (P.currentvarclasses != NULL)
+                          {
+                              free(P.currentvarclasses);
+                              P.currentvarclasses = NULL;
+                          }
+
+                          P.currentvarclasses = xstrdup(tmp);
+
+                          free(tmp);
+                          return CLASS;
+                      }
+
 {class}               {
                           char *tmp = NULL;
                         
@@ -217,6 +341,13 @@ promise_type   [a-zA-Z_]+:
                           if (P.currentclasses != NULL)
                           {
                               free(P.currentclasses);
+                              P.currentclasses = NULL;
+                          }
+
+                          if (P.currentvarclasses != NULL)
+                          {
+                              free(P.currentvarclasses);
+                              P.currentvarclasses = NULL;
                           }
 
                           P.currentclasses = xstrdup(tmp);
@@ -240,6 +371,12 @@ promise_type   [a-zA-Z_]+:
                           {
                               free(P.currentclasses);
                               P.currentclasses = NULL;
+                          }
+
+                          if (P.currentvarclasses != NULL)
+                          {
+                              free(P.currentvarclasses);
+                              P.currentvarclasses = NULL;
                           }
 
                           free(tmp);
@@ -293,31 +430,6 @@ promise_type   [a-zA-Z_]+:
                           return NAKEDVAR;
                       }
 
-{op}                  {
-                          P.line_pos += yyleng;
-                          ParserDebug("\tL: %s %d\n", yytext, P.line_pos);
-                          return OP;
-                      }
-
-{cp}                  {
-                          P.line_pos += yyleng;
-                          ParserDebug("\tL: %s %d\n", yytext, P.line_pos);
-                          return CP;
-                      }
-
-{ob}                  {
-                          P.line_pos += yyleng;
-                          ParserDebug("\tL: %s %d\n", yytext, P.line_pos);
-                          return OB;
-                      }
-
-{cb}                  {
-                          P.line_pos += yyleng;
-                          ParserDebug("\tL: %s %d\n", yytext, P.line_pos);
-                          return CB;
-                      }
-
-
 {space}+              {
                           P.line_pos += yyleng;
                       }
@@ -331,6 +443,21 @@ promise_type   [a-zA-Z_]+:
                           return yytext[0];
                       }
 
+<if_ignore_state><<EOF>>     {
+                               if (P.if_depth > 0)
+                               {
+                                 yyerror("EOF seen while @if was waiting for @endif in ignore_state");
+                                 return 0;
+                               }
+                             }
+
+<<EOF>>     {
+              if (P.if_depth > 0)
+              {
+                yyerror("EOF seen while @if was waiting for @endif without ignore_state");
+              }
+              return 0; // loops forever without this
+            }
 
 %%
 

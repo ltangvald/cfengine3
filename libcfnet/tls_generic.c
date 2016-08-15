@@ -176,7 +176,7 @@ int TLSVerifyCallback(X509_STORE_CTX *store_ctx,
     }
 
     /* From that data get the key if the connection is already established. */
-    RSA *already_negotiated_key = KeyRSA(ConnectionInfoKey(conn_info));
+    RSA *already_negotiated_key = KeyRSA(conn_info->remote_key);
     /* Is there an already negotiated certificate? */
     X509 *previous_tls_cert = SSL_get_peer_certificate(ssl);
 
@@ -275,14 +275,14 @@ int TLSVerifyCallback(X509_STORE_CTX *store_ctx,
  * @retval 0 if stored key for the host is missing or differs from the one
  *         received.
  * @retval -1 in case of other error (error will be Log()ed).
- * @note When return value is != -1 (so no error occured) the #conn_info struct
+ * @note When return value is != -1 (so no error occurred) the #conn_info struct
  *       should have been populated, with key received and its hash.
  */
 int TLSVerifyPeer(ConnectionInfo *conn_info, const char *remoteip, const char *username)
 {
     int ret, retval;
 
-    X509 *received_cert = SSL_get_peer_certificate(ConnectionInfoSSL(conn_info));
+    X509 *received_cert = SSL_get_peer_certificate(conn_info->ssl);
     if (received_cert == NULL)
     {
         Log(LOG_LEVEL_ERR,
@@ -317,17 +317,19 @@ int TLSVerifyPeer(ConnectionInfo *conn_info, const char *remoteip, const char *u
     }
 
     Key *key = KeyNew(remote_key, CF_DEFAULT_DIGEST);
-    ConnectionInfoSetKey(conn_info, key);
+    conn_info->remote_key = key;
 
     /*
      * Compare the key received with the one stored.
      */
-    RSA *expected_rsa_key = HavePublicKey(username, remoteip,
-                                          KeyPrintableHash(key));
+    const char *key_hash = KeyPrintableHash(key);
+    RSA *expected_rsa_key = HavePublicKey(username, remoteip, key_hash);
+
     if (expected_rsa_key == NULL)
     {
+        /* TODO LOG_LEVEL_NOTICE once cf-serverd logs to a different file. */
         Log(LOG_LEVEL_VERBOSE,
-            "Public key for remote host not found in ppkeys");
+            "Received key '%s' not found in ppkeys", key_hash);
         retval = 0;
         goto ret4;
     }
@@ -358,8 +360,9 @@ int TLSVerifyPeer(ConnectionInfo *conn_info, const char *remoteip, const char *u
     }
     else if (ret == 0 || ret == -1)
     {
-        Log(LOG_LEVEL_VERBOSE,
-            "Public key for remote host compares different to the one in ppkeys");
+        Log(LOG_LEVEL_NOTICE,
+            "Received key '%s' compares different to the one in ppkeys",
+            key_hash);
         retval = 0;
         goto ret6;
     }
@@ -381,9 +384,9 @@ int TLSVerifyPeer(ConnectionInfo *conn_info, const char *remoteip, const char *u
   ret4:
     if (retval == -1)
     {
-        /* We won't be needing conn_info->key */
+        /* We won't be needing conn_info->remote_key */
         KeyDestroy(&key);
-        ConnectionInfoSetKey(conn_info, NULL);
+        conn_info->remote_key = NULL;
     }
   ret3:
     EVP_PKEY_free(received_pubkey);
@@ -480,7 +483,7 @@ X509 *TLSGenerateCertFromPrivKey(RSA *privkey)
 
     EVP_PKEY_free(pkey);
 
-    assert (x509 != NULL);
+    assert(x509 != NULL);
     return x509;
 
 
@@ -527,7 +530,7 @@ static const char *TLSPrimarySSLError(int code)
  * @warning Use only for SSL_connect(), SSL_accept(), SSL_do_handshake(),
  *          SSL_read(), SSL_peek(), SSL_write(), see SSL_get_error man page.
  */
-void TLSLogError(SSL *ssl, LogLevel level, const char *prepend, int retcode)
+int TLSLogError(SSL *ssl, LogLevel level, const char *prepend, int retcode)
 {
     assert(prepend != NULL);
 
@@ -581,6 +584,8 @@ void TLSLogError(SSL *ssl, LogLevel level, const char *prepend, int retcode)
             (errstr2 == NULL) ? "" : errstr2,          /* most likely empty */
             syserr);
     }
+
+    return errcode;
 }
 
 static void assert_SSLIsBlocking(const SSL *ssl)
@@ -595,6 +600,8 @@ static void assert_SSLIsBlocking(const SSL *ssl)
             ProgrammingError("OpenSSL socket is non-blocking!");
         }
     }
+#else // silence compiler warning
+    ssl = NULL;
 #endif
 }
 
@@ -603,11 +610,14 @@ static void assert_SSLIsBlocking(const SSL *ssl)
  * @param ssl SSL information.
  * @param buffer Data to send.
  * @param length Length of the data to send.
- * @return The length of the data sent (which could be smaller than the
- *         requested length) or -1 in case of error.
+ * @return The length of the data sent (always equals #length if SSL is set
+ *         up correctly, see note), or -1 in case of error, or 0 for connection
+ *         closed.
+ *
  * @note Use only for *blocking* sockets. Set
- *       SSL_CTX_set_mode(SSL_MODE_AUTO_RETRY) to make sure that either
- *       operation completed or an error occured.
+ *       SSL_CTX_set_mode(SSL_MODE_AUTO_RETRY) and make sure you haven't
+ *       turned on SSL_MODE_ENABLE_PARTIAL_WRITE so that either the
+ *       operation is completed (retval==length) or an error occurred.
  *
  * @TODO ERR_get_error is only meaningful for some error codes, so check and
  *       return empty string otherwise.
@@ -623,18 +633,22 @@ int TLSSend(SSL *ssl, const char *buffer, int length)
         return 0;
     }
 
+    EnforceBwLimit(length);
+
     int sent = SSL_write(ssl, buffer, length);
     if (sent == 0)
     {
         if ((SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN) != 0)
         {
-            Log(LOG_LEVEL_VERBOSE, "Remote peer terminated TLS session");
+            Log(LOG_LEVEL_VERBOSE,
+                "Remote peer terminated TLS session (SSL_write)");
             return 0;
         }
         else
         {
             TLSLogError(ssl, LOG_LEVEL_ERR,
-                        "Connection unexpectedly closed. SSL_write", sent);
+                        "Connection unexpectedly closed (SSL_write)",
+                        sent);
             return 0;
         }
     }
@@ -648,39 +662,69 @@ int TLSSend(SSL *ssl, const char *buffer, int length)
 }
 
 /**
- * @brief Receives data from the SSL session and stores it on the buffer.
+ * @brief Receives at most #length bytes of data from the SSL session
+ *        and stores it in the buffer.
  * @param ssl SSL information.
- * @param buffer Buffer, of size at least CF_BUFSIZE, to store received data.
- * @param length Length of the data to receive, must be < CF_BUFSIZE.
- * @return The length of the received data, which could be smaller or equal
- *         than the requested or -1 in case of error or 0 if connection was
- *         closed.
+ * @param buffer Buffer, of size at least #toget + 1 to store received data.
+ * @param toget Length of the data to receive, must be < CF_BUFSIZE.
+ *
+ * @return The length of the received data, which should be equal or less
+ *         than the requested amount.
+ *         -1 in case of timeout or error - SSL session is unusable
+ *         0  if connection was closed
+ *
  * @note Use only for *blocking* sockets. Set
  *       SSL_CTX_set_mode(SSL_MODE_AUTO_RETRY) to make sure that either
- *       operation completed or an error occured.
+ *       operation completed or an error occurred.
+ * @note Still, it may happen for #retval to be less than #toget, if the
+ *       opposite side completed a TLSSend() with number smaller than #toget.
  */
-int TLSRecv(SSL *ssl, char *buffer, int length)
+int TLSRecv(SSL *ssl, char *buffer, int toget)
 {
-    assert(length > 0);
-    assert(length < CF_BUFSIZE);
+    assert(toget > 0);
+    assert(toget < CF_BUFSIZE);
     assert_SSLIsBlocking(ssl);
 
-    int received = SSL_read(ssl, buffer, length);
+    int received = SSL_read(ssl, buffer, toget);
     if (received < 0)
     {
-        TLSLogError(ssl, LOG_LEVEL_ERR, "SSL_read", received);
+        int errcode = TLSLogError(ssl, LOG_LEVEL_ERR, "SSL_read", received);
+
+        /* SSL_read() might get an internal recv() timeout, since we've set
+         * SO_RCVTIMEO. In that case, the internal socket returns EAGAIN or
+         * EWOULDBLOCK and SSL_read() returns SSL_ERROR_WANT_READ. */
+        if (errcode == SSL_ERROR_WANT_READ)               /* recv() timeout */
+        {
+            /* Make sure that the peer will send us no more data. */
+            SSL_shutdown(ssl);
+            shutdown(SSL_get_fd(ssl), SHUT_RDWR);
+
+            /* Empty possible SSL_read() buffers. */
+
+            int ret = 1;
+            int bytes_still_buffered = SSL_pending(ssl);
+            while (bytes_still_buffered > 0 && ret > 0)
+            {
+                char tmpbuf[bytes_still_buffered];
+                ret = SSL_read(ssl, tmpbuf, bytes_still_buffered);
+                bytes_still_buffered -= ret;
+            }
+        }
+
         return -1;
     }
     else if (received == 0)
     {
         if ((SSL_get_shutdown(ssl) & SSL_RECEIVED_SHUTDOWN) != 0)
         {
-            Log(LOG_LEVEL_VERBOSE, "Remote peer terminated TLS session");
+            Log(LOG_LEVEL_VERBOSE,
+                "Remote peer terminated TLS session (SSL_read)");
         }
         else
         {
             TLSLogError(ssl, LOG_LEVEL_ERR,
-                        "Connection unexpectedly closed. SSL_read", received);
+                        "Connection unexpectedly closed (SSL_read)",
+                        received);
         }
     }
 
@@ -705,7 +749,7 @@ int TLSRecv(SSL *ssl, char *buffer, int length)
 int TLSRecvLines(SSL *ssl, char *buf, size_t buf_size)
 {
     int ret;
-    int got = 0;
+    size_t got = 0;
     buf_size -= 1;               /* Reserve one space for terminating '\0' */
 
     /* Repeat until we receive end of line. */
@@ -721,8 +765,7 @@ int TLSRecvLines(SSL *ssl, char *buf, size_t buf_size)
             return -1;
         }
         got += ret;
-    }
-    while ((buf[got-1] != '\n') && (got < buf_size));
+    } while ((buf[got-1] != '\n') && (got < buf_size));
     assert(got <= buf_size);
 
     /* Append '\0', there is room because buf_size has been decremented. */
@@ -731,19 +774,24 @@ int TLSRecvLines(SSL *ssl, char *buf, size_t buf_size)
     if ((got == buf_size) && (buf[got-1] != '\n'))
     {
         Log(LOG_LEVEL_ERR,
-            "Received line too long, hanging up! Length %d, line: %s",
+            "Received line too long, hanging up! Length %zu, line: %s",
             got, buf);
         return -1;
     }
 
     LogRaw(LOG_LEVEL_DEBUG, "TLSRecvLines(): ", buf, got);
-    return got;
+
+    return (got <= INT_MAX) ? (int) got : -1;
 }
 
 /**
  * Set safe OpenSSL defaults commonly used by both clients and servers.
+ *
+ * @param min_version the minimum acceptable TLS version for incoming or
+ *        outgoing connections (depending on ssl_ctx), for example
+ *        "1", "1.1", "1.2".
  */
-void TLSSetDefaultOptions(SSL_CTX *ssl_ctx)
+void TLSSetDefaultOptions(SSL_CTX *ssl_ctx, const char *min_version)
 {
 #if HAVE_DECL_SSL_CTX_CLEAR_OPTIONS
     /* Clear all flags, we do not want compatibility tradeoffs like
@@ -758,16 +806,73 @@ void TLSSetDefaultOptions(SSL_CTX *ssl_ctx)
      * to let the user know what happens. */
     if (SSL_CTX_get_options(ssl_ctx) != 0)
     {
-      Log(LOG_LEVEL_WARNING, "This version of CFEngine was compiled against OpenSSL < 0.9.8m, using it with a later OpenSSL version is insecure.");
-      Log(LOG_LEVEL_WARNING, "The current version uses compatibility workarounds that may allow CVE-2009-3555 exploitation.");
-      Log(LOG_LEVEL_WARNING, "Please update your CFEngine package or compile it against your current OpenSSL version.");
+      Log(LOG_LEVEL_WARNING,
+          "This version of CFEngine was compiled against OpenSSL < 0.9.8m, "
+          "using it with a later OpenSSL version is insecure. "
+          "The current version uses compatibility workarounds that may allow "
+          "CVE-2009-3555 exploitation.");
+      Log(LOG_LEVEL_WARNING, "Please update your CFEngine package or "
+          "compile it against your current OpenSSL version.");
     }
 #endif
 
+    const char *compiletime_min_version = "1.2";
 
-    /* Use only TLS v1 or later.
-       TODO policy option for SSL_OP_NO_TLSv{1,1_1} */
+#ifndef  SSL_OP_NO_TLSv1_1
+#   define SSL_OP_NO_TLSv1_1 0x0                                /* nop */
+    compiletime_min_version = "1.1";
+
+# ifndef  SSL_OP_NO_TLSv1
+#   define SSL_OP_NO_TLSv1 0x0                                  /* nop */
+    compiletime_min_version = "1.0";
+# endif
+
+#endif
+
+    /* In any case use only TLS v1 or later. */
     long options = SSL_OP_NO_SSLv2 | SSL_OP_NO_SSLv3;
+
+    if (min_version == NULL
+        || strcmp(min_version, "1")   == 0
+        || strcmp(min_version, "1.0") == 0)
+    {
+        /* Do nothing, that's our default setting */
+        Log(LOG_LEVEL_VERBOSE,
+            "Setting minimum acceptable TLS version: 1.0");
+    }
+    else if (strcmp(min_version, "1.1") == 0)
+    {
+        if (strcmp(compiletime_min_version, "1.0") == 0)
+        {
+            Log(LOG_LEVEL_WARNING, "Minimum requested TLS version is %s,"
+                " however because of old OpenSSL version it is set to: %s",
+                min_version, compiletime_min_version);
+        }
+        options |= SSL_OP_NO_TLSv1;
+        Log(LOG_LEVEL_VERBOSE,
+            "Setting minimum acceptable TLS version: 1.1");
+
+    }
+    else if (strcmp(min_version, "1.2") == 0)
+    {
+        if (strcmp(compiletime_min_version, "1.0") == 0 ||
+            strcmp(compiletime_min_version, "1.1") == 0)
+        {
+            Log(LOG_LEVEL_WARNING, "Minimum requested TLS version is %s,"
+                " however because of old OpenSSL version it is set to: %s",
+                min_version, compiletime_min_version);
+        }
+        options |= SSL_OP_NO_TLSv1 | SSL_OP_NO_TLSv1_1;
+        Log(LOG_LEVEL_VERBOSE,
+            "Setting minimum acceptable TLS version: 1.2");
+    }
+    else
+    {
+        Log(LOG_LEVEL_WARNING, "Unsupported TLS version '%s' requested,"
+            " minimum acceptable TLS version set to: 1.0",
+            min_version);
+    }
+
 
     /* No session resumption or renegotiation for now. */
     options |= SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION;

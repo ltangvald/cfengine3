@@ -25,9 +25,12 @@
 #ifndef CFENGINE_CF3_EXTERN_H
 #define CFENGINE_CF3_EXTERN_H
 
-/* See variables in cf3globals.c and syntax.c */
 
-extern bool LEGACY_OUTPUT;
+#include <cfnet.h>                          /* CF_MAX_IP_LEN */
+#include <cf3.defs.h>                       /* CF_MAXVARSIZE,CF_OBSERVABLES */
+
+
+/* See variables in cf3globals.c and syntax.c */
 
 extern pid_t ALARM_PID;
 extern RSA *PRIVKEY, *PUBKEY;
@@ -35,13 +38,11 @@ extern RSA *PRIVKEY, *PUBKEY;
 extern char BINDINTERFACE[CF_MAXVARSIZE];
 extern time_t CONNTIMEOUT;
 
-extern char CFWORKDIR[CF_BUFSIZE];
-
 extern time_t CFSTARTTIME;
 
 extern struct utsname VSYSNAME;
 extern char VIPADDRESS[CF_MAX_IP_LEN];
-extern char VPREFIX[];
+extern char VPREFIX[1024];
 
 extern char VDOMAIN[CF_MAXVARSIZE];
 extern char VFQNAME[];

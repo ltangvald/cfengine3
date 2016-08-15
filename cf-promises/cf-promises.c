@@ -49,23 +49,24 @@ static const char *const CF_PROMISES_SHORT_DESCRIPTION =
     "validate and analyze CFEngine policy code";
 
 static const char *const CF_PROMISES_MANPAGE_LONG_DESCRIPTION = "cf-promises is a tool for checking CFEngine policy code. "
-        "It operates by first parsing policy code checing for syntax errors. Second, it validates the integrity of "
-        "policy consisting of multiple files. Third, it checks for semantic errors, e.g. specific attribute set rules. "
-        "Finally, cf-promises attempts to expose errors by partially evaluating the policy, resolving as many variable and "
-        "classes promise statements as possible. At no point does cf-promises make any changes to the system.";
+    "It operates by first parsing policy code checing for syntax errors. Second, it validates the integrity of "
+    "policy consisting of multiple files. Third, it checks for semantic errors, e.g. specific attribute set rules. "
+    "Finally, cf-promises attempts to expose errors by partially evaluating the policy, resolving as many variable and "
+    "classes promise statements as possible. At no point does cf-promises make any changes to the system.";
 
-typedef enum
+/* Long-style only options, values must start above max ASCII value. */
+enum
 {
-    PROMISES_OPTION_EVAL_FUNCTIONS,
-    PROMISES_OPTION_SHOW_CLASSES,
-    PROMISES_OPTION_SHOW_VARIABLES
-} PromisesOptions;
+    OPT_EVAL_FUNCTIONS = 256,
+    OPT_SHOW_CLASSES,
+    OPT_SHOW_VARS
+};
 
 static const struct option OPTIONS[] =
 {
-    [PROMISES_OPTION_EVAL_FUNCTIONS] = {"eval-functions", optional_argument, 0, 0 },
-    [PROMISES_OPTION_SHOW_CLASSES] = {"show-classes", no_argument, 0, 0 },
-    [PROMISES_OPTION_SHOW_VARIABLES] = {"show-vars", no_argument, 0, 0 },
+    {"eval-functions", optional_argument, 0, OPT_EVAL_FUNCTIONS },
+    {"show-classes", no_argument, 0, OPT_SHOW_CLASSES },
+    {"show-vars", no_argument, 0, OPT_SHOW_VARS },
     {"help", no_argument, 0, 'h'},
     {"bundlesequence", required_argument, 0, 'b'},
     {"debug", no_argument, 0, 'd'},
@@ -81,18 +82,18 @@ static const struct option OPTIONS[] =
     {"policy-output-format", required_argument, 0, 'p'},
     {"syntax-description", required_argument, 0, 's'},
     {"full-check", no_argument, 0, 'c'},
-    {"warn", optional_argument, 0, 'W'},
-    {"legacy-output", no_argument, 0, 'l'},
+    {"warn", required_argument, 0, 'W'},
     {"color", optional_argument, 0, 'C'},
     {"tag-release", required_argument, 0, 'T'},
+    {"timestamp", no_argument, 0, 'l'},
     {NULL, 0, 0, '\0'}
 };
 
 static const char *const HINTS[] =
 {
-    [PROMISES_OPTION_EVAL_FUNCTIONS] = "Evaluate functions during syntax checking (may catch more run-time errors). Possible values: 'yes', 'no'. Default is 'yes'",
-    [PROMISES_OPTION_SHOW_CLASSES] = "Show discovered classes, including those defined in common bundles in policy",
-    [PROMISES_OPTION_SHOW_VARIABLES] = "Show discovered variables, including those defined without dependency to user-defined classes in policy",
+    "Evaluate functions during syntax checking (may catch more run-time errors). Possible values: 'yes', 'no'. Default is 'yes'",
+    "Show discovered classes, including those defined in common bundles in policy",
+    "Show discovered variables, including those defined without dependency to user-defined classes in policy",
     "Print the help message",
     "Use the specified bundlesequence for verification",
     "Enable debugging output",
@@ -109,9 +110,9 @@ static const char *const HINTS[] =
     "Output a document describing the available syntax elements of CFEngine. Possible values: 'none', 'json'. Default is 'none'.",
     "Ensure full policy integrity checks",
     "Pass comma-separated <warnings>|all to enable non-default warnings, or error=<warnings>|all",
-    "Use legacy output format",
     "Enable colorized output. Possible values: 'always', 'auto', 'never'. If option is used, the default value is 'auto'",
     "Tag a directory with promises.cf with cf_promises_validated and cf_promises_release_id",
+    "Log timestamps on each line of log output",
     NULL
 };
 
@@ -132,6 +133,8 @@ int main(int argc, char *argv[])
         Log(LOG_LEVEL_ERR, "Input files contain errors.");
         exit(EXIT_FAILURE);
     }
+
+    GenericAgentPostLoadInit(ctx);
 
     if (NULL != config->tag_release_dir)
     {
@@ -156,30 +159,30 @@ int main(int argc, char *argv[])
     switch (config->agent_specific.common.policy_output_format)
     {
     case GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_CF:
-        {
-            Policy *output_policy = ParserParseFile(AGENT_TYPE_COMMON, config->input_file,
-                                                    config->agent_specific.common.parser_warnings,
-                                                    config->agent_specific.common.parser_warnings_error);
-            Writer *writer = FileWriter(stdout);
-            PolicyToString(policy, writer);
-            WriterClose(writer);
-            PolicyDestroy(output_policy);
-        }
-        break;
+    {
+        Policy *output_policy = ParserParseFile(AGENT_TYPE_COMMON, config->input_file,
+                                                config->agent_specific.common.parser_warnings,
+                                                config->agent_specific.common.parser_warnings_error);
+        Writer *writer = FileWriter(stdout);
+        PolicyToString(policy, writer);
+        WriterClose(writer);
+        PolicyDestroy(output_policy);
+    }
+    break;
 
     case GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_JSON:
-        {
-            Policy *output_policy = ParserParseFile(AGENT_TYPE_COMMON, config->input_file,
-                                                    config->agent_specific.common.parser_warnings,
-                                                    config->agent_specific.common.parser_warnings_error);
-            JsonElement *json_policy = PolicyToJson(output_policy);
-            Writer *writer = FileWriter(stdout);
-            JsonWrite(writer, json_policy, 2);
-            WriterClose(writer);
-            JsonDestroy(json_policy);
-            PolicyDestroy(output_policy);
-        }
-        break;
+    {
+        Policy *output_policy = ParserParseFile(AGENT_TYPE_COMMON, config->input_file,
+                                                config->agent_specific.common.parser_warnings,
+                                                config->agent_specific.common.parser_warnings_error);
+        JsonElement *json_policy = PolicyToJson(output_policy);
+        Writer *writer = FileWriter(stdout);
+        JsonWrite(writer, json_policy, 2);
+        WriterClose(writer);
+        JsonDestroy(json_policy);
+        PolicyDestroy(output_policy);
+    }
+    break;
 
     case GENERIC_AGENT_CONFIG_COMMON_POLICY_OUTPUT_FORMAT_NONE:
         break;
@@ -206,48 +209,30 @@ int main(int argc, char *argv[])
 GenericAgentConfig *CheckOpts(int argc, char **argv)
 {
     extern char *optarg;
-    int optindex = 0;
     int c;
-    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_COMMON);
+    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_COMMON, GetTTYInteractive());
     config->tag_release_dir = NULL;
 
-    while ((c = getopt_long(argc, argv, "dvnIf:D:N:VSrxMb:i:p:s:cg:hW:lC::T:", OPTIONS, &optindex)) != EOF)
+    while ((c = getopt_long(argc, argv, "dvnIf:D:N:VSrxMb:i:p:s:cg:hW:C::T:l",
+                            OPTIONS, NULL))
+           != -1)
     {
-        switch ((char) c)
+        switch (c)
         {
-        case 0:
-            switch (optindex)
+        case OPT_EVAL_FUNCTIONS:
+            if (!optarg)
             {
-            case PROMISES_OPTION_EVAL_FUNCTIONS:
-                if (!optarg)
-                {
-                    optarg = "yes";
-                }
-                config->agent_specific.common.eval_functions = strcmp("yes", optarg) == 0;
-                break;
-
-            case PROMISES_OPTION_SHOW_CLASSES:
-                if (!optarg)
-                {
-                    optarg = "yes";
-                }
-                config->agent_specific.common.show_classes = strcmp("yes", optarg) == 0;
-                break;
-
-            case PROMISES_OPTION_SHOW_VARIABLES:
-                if (!optarg)
-                {
-                    optarg = "yes";
-                }
-                config->agent_specific.common.show_variables = strcmp("yes", optarg) == 0;
-                break;
-
-            default:
-                break;
+                optarg = "yes";
             }
+            config->agent_specific.common.eval_functions = strcmp("yes", optarg) == 0;
+            break;
 
-        case 'l':
-            LEGACY_OUTPUT = true;
+        case OPT_SHOW_CLASSES:
+            config->agent_specific.common.show_classes = true;
+            break;
+
+        case OPT_SHOW_VARS:
+            config->agent_specific.common.show_variables = true;
             break;
 
         case 'c':
@@ -318,11 +303,33 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'D':
-            config->heap_soft = StringSetFromString(optarg, ',');
+            {
+                StringSet *defined_classes = StringSetFromString(optarg, ',');
+                if (! config->heap_soft)
+                {
+                    config->heap_soft = defined_classes;
+                }
+                else
+                {
+                    StringSetJoin(config->heap_soft, defined_classes);
+                    free(defined_classes);
+                }
+            }
             break;
 
         case 'N':
-            config->heap_negated = StringSetFromString(optarg, ',');
+            {
+                StringSet *negated_classes = StringSetFromString(optarg, ',');
+                if (! config->heap_negated)
+                {
+                    config->heap_negated = negated_classes;
+                }
+                else
+                {
+                    StringSetJoin(config->heap_negated, negated_classes);
+                    free(negated_classes);
+                }
+            }
             break;
 
         case 'I':
@@ -339,32 +346,32 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'V':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteVersion(w);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteVersion(w);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'h':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-promises", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-promises", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'M':
-            {
-                Writer *out = FileWriter(stdout);
-                ManPageWrite(out, "cf-promises", time(NULL),
-                             CF_PROMISES_SHORT_DESCRIPTION,
-                             CF_PROMISES_MANPAGE_LONG_DESCRIPTION,
-                             OPTIONS, HINTS,
-                             true);
-                FileWriterDetach(out);
-                exit(EXIT_SUCCESS);
-            }
+        {
+            Writer *out = FileWriter(stdout);
+            ManPageWrite(out, "cf-promises", time(NULL),
+                         CF_PROMISES_SHORT_DESCRIPTION,
+                         CF_PROMISES_MANPAGE_LONG_DESCRIPTION,
+                         OPTIONS, HINTS,
+                         true);
+            FileWriterDetach(out);
+            exit(EXIT_SUCCESS);
+        }
 
         case 'r':
             SHOWREPORTS = true;
@@ -395,13 +402,17 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
             config->tag_release_dir = xstrdup(optarg);
             break;
 
+        case 'l':
+            LoggingEnableTimestamps(true);
+            break;
+
         default:
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-promises", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_FAILURE);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-promises", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_FAILURE);
 
         }
     }

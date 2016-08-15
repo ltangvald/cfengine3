@@ -276,7 +276,8 @@ const char *SyntaxTypeMatchToString(SyntaxTypeMatch result)
         [SYNTAX_TYPE_MATCH_ERROR_FNCALL_RETURN_TYPE] = "Function does not return the required type",
         [SYNTAX_TYPE_MATCH_ERROR_FNCALL_UNKNOWN] = "Unknown function",
 
-        [SYNTAX_TYPE_MATCH_ERROR_CONTEXT_OUT_OF_RANGE] = "Context string is invalid/out of range"
+        [SYNTAX_TYPE_MATCH_ERROR_CONTEXT_OUT_OF_RANGE] = "Context string is invalid/out of range",
+        [SYNTAX_TYPE_MATCH_ERROR_ABSOLUTE_PATH] = "Filename is not an absolute path",
     };
 
     return msgs[result];
@@ -517,6 +518,10 @@ static SyntaxTypeMatch CheckParseString(const char *lval, const char *s, const c
     else if ('\0' == s[0])
     {
         return SYNTAX_TYPE_MATCH_ERROR_EMPTY_SCALAR_OUT_OF_RANGE;
+    }
+    else if (!strcmp(range, CF_ABSPATHRANGE))
+    {
+        return SYNTAX_TYPE_MATCH_ERROR_ABSOLUTE_PATH;
     }
     else
     {
@@ -889,6 +894,11 @@ static SyntaxTypeMatch CheckFnCallType(const char *s, DataType dtype)
                 return SYNTAX_TYPE_MATCH_OK;
             }
 
+            if (dt == CF_DATA_TYPE_STRING && dtype == CF_DATA_TYPE_CONTEXT)
+            {
+                return SYNTAX_TYPE_MATCH_OK;
+            }
+
             if (dt == CF_DATA_TYPE_INT && dtype == CF_DATA_TYPE_INT_LIST)
             {
                 return SYNTAX_TYPE_MATCH_OK;
@@ -1207,6 +1217,7 @@ static JsonElement *FnCallTypeToJson(const FnCallType *fn_syntax)
             JsonElement *json_param = JsonObjectCreate(2);
             JsonObjectAppendString(json_param, "type", DataTypeToString(param->dtype));
             JsonObjectAppendString(json_param, "range", param->pattern);
+            JsonObjectAppendString(json_param, "description", param->description);
             JsonArrayAppendObject(params, json_param);
         }
         JsonObjectAppendArray(json_fn, "parameters", params);

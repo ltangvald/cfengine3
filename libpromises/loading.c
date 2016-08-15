@@ -1,3 +1,26 @@
+/*
+   Copyright (C) CFEngine AS
+
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
+   This program is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by the
+   Free Software Foundation; version 3.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+
+  To the extent this program is licensed as part of the Enterprise
+  versions of CFEngine, the applicable Commercial Open Source License
+  (COSL) may apply to this file if you as a licensee so wish it. See
+  included file COSL.txt.
+*/
 #include <loading.h>
 
 #include <eval_context.h>
@@ -11,6 +34,7 @@
 #include <class.h>
 #include <fncall.h>
 #include <known_dirs.h>
+#include <ornaments.h>
 
 // TODO: remove
 #include <vars.h>
@@ -60,7 +84,7 @@ static Policy *Cf3ParseFile(const GenericAgentConfig *config, const char *input_
     }
 #endif
 
-    Log(LOG_LEVEL_VERBOSE, "Parsing file '%s'", input_path);
+    Log(LOG_LEVEL_VERBOSE, "Begin Parsing file '%s'", input_path);
 
     if (!FileCanOpen(input_path, "r"))
     {
@@ -103,6 +127,7 @@ static Policy *Cf3ParseFile(const GenericAgentConfig *config, const char *input_
         }
     }
 
+    Log(LOG_LEVEL_VERBOSE, "End Parsing file '%s'", input_path);
     return policy;
 }
 
@@ -192,70 +217,33 @@ static void ShowContext(EvalContext *ctx)
     SeqSort(soft_contexts, (SeqItemComparator)strcmp, NULL);
     SeqSort(hard_contexts, (SeqItemComparator)strcmp, NULL);
 
+    Log(LOG_LEVEL_VERBOSE, "----------------------------------------------------------------");
 
     {
-        Writer *w = NULL;
-        if (LEGACY_OUTPUT)
-        {
-            w = FileWriter(stdout);
-            WriterWriteF(w, "%s>  -> Hard classes = {", VPREFIX);
-        }
-        else
-        {
-            w = StringWriter();
-            WriterWrite(w, "Discovered hard classes:");
-        }
+        Log(LOG_LEVEL_VERBOSE, "BEGIN Discovered hard classes:");
 
         for (size_t i = 0; i < SeqLength(hard_contexts); i++)
         {
             const char *context = SeqAt(hard_contexts, i);
-            WriterWriteF(w, " %s", context);
+            Log(LOG_LEVEL_VERBOSE, "C: discovered hard class %s", context);
         }
 
-        if (LEGACY_OUTPUT)
-        {
-            WriterWrite(w, "}\n");
-            FileWriterDetach(w);
-        }
-        else
-        {
-            Log(LOG_LEVEL_VERBOSE, "%s", StringWriterData(w));
-            WriterClose(w);
-        }
+        Log(LOG_LEVEL_VERBOSE, "END Discovered hard classes");
     }
 
+    Log(LOG_LEVEL_VERBOSE, "----------------------------------------------------------------");
+
+    if (SeqLength(soft_contexts))
     {
-        Writer *w = NULL;
-        if (LEGACY_OUTPUT)
-        {
-            w = FileWriter(stdout);
-            WriterWriteF(w, "%s>  -> Additional classes = {", VPREFIX);
-        }
-        else
-        {
-            w = StringWriter();
-            WriterWrite(w, "Additional classes:");
-        }
+        Log(LOG_LEVEL_VERBOSE, "BEGIN initial soft classes:");
 
         for (size_t i = 0; i < SeqLength(soft_contexts); i++)
         {
             const char *context = SeqAt(soft_contexts, i);
-            WriterWriteF(w, " %s", context);
+            Log(LOG_LEVEL_VERBOSE, "C: added soft class %s", context);
         }
 
-        if (LEGACY_OUTPUT)
-        {
-            WriterWrite(w, "}\n");
-            FileWriterDetach(w);
-        }
-        else
-        {
-            if (SeqLength(soft_contexts) > 0)
-            {
-                Log(LOG_LEVEL_VERBOSE, "%s", StringWriterData(w));
-            }
-            WriterClose(w);
-        }
+        Log(LOG_LEVEL_VERBOSE, "END initial soft classes");
     }
 
     SeqDestroy(hard_contexts);
@@ -363,11 +351,12 @@ static Policy *LoadPolicyFile(EvalContext *ctx, GenericAgentConfig *config, cons
 
 static bool VerifyBundleSequence(EvalContext *ctx, const Policy *policy, const GenericAgentConfig *config)
 {
+    Rlist *fallback = NULL;
     const Rlist *bundlesequence = EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_BUNDLESEQUENCE);
     if (!bundlesequence)
     {
-        Log(LOG_LEVEL_ERR, " No bundlesequence in the common control body");
-        return false;
+        RlistAppendScalar(&fallback, "main");
+        bundlesequence = fallback;
     }
 
     const char *name;
@@ -410,6 +399,7 @@ static bool VerifyBundleSequence(EvalContext *ctx, const Policy *policy, const G
         }
     }
 
+    RlistDestroy(fallback);
     return ok;
 }
 
@@ -432,7 +422,8 @@ static JsonElement *ReadReleaseIdFileFromInputs()
     JsonParseError err = JsonParseFile(filename, 4096, &validated_doc);
     if (err != JSON_PARSE_OK)
     {
-        Log(LOG_LEVEL_WARNING, "Could not read release ID: '%s' did not contain valid JSON data. "
+        Log(LOG_LEVEL_WARNING,
+            "Could not read release ID: '%s' did not contain valid JSON data. "
             "(JsonParseFile: '%s')", filename, JsonParseErrorToString(err));
     }
 
@@ -444,7 +435,10 @@ Policy *LoadPolicy(EvalContext *ctx, GenericAgentConfig *config)
     StringSet *parsed_files_and_checksums = StringSetNew();
     StringSet *failed_files = StringSetNew();
 
-    Policy *policy = LoadPolicyFile(ctx, config, config->input_file, parsed_files_and_checksums, failed_files);
+    Banner("Loading policy");
+
+    Policy *policy = LoadPolicyFile(ctx, config, config->input_file,
+                                    parsed_files_and_checksums, failed_files);
 
     if (StringSetSize(failed_files) > 0)
     {
@@ -460,10 +454,13 @@ Policy *LoadPolicy(EvalContext *ctx, GenericAgentConfig *config)
 
         if (PolicyCheckPartial(policy, errors))
         {
-            if (!config->bundlesequence && (PolicyIsRunnable(policy) || config->check_runnable))
+            if (!config->bundlesequence &&
+                (PolicyIsRunnable(policy) || config->check_runnable))
             {
-                Log(LOG_LEVEL_VERBOSE, "Running full policy integrity checks");
-                PolicyCheckRunnable(ctx, policy, errors, config->ignore_missing_bundles);
+                Log(LOG_LEVEL_VERBOSE,
+                    "Running full policy integrity checks");
+                PolicyCheckRunnable(ctx, policy, errors,
+                                    config->ignore_missing_bundles);
             }
         }
 
@@ -483,7 +480,13 @@ Policy *LoadPolicy(EvalContext *ctx, GenericAgentConfig *config)
 
     if (LogGetGlobalLevel() >= LOG_LEVEL_VERBOSE)
     {
+        Legend();
         ShowContext(ctx);
+    }
+
+    if (config->agent_type == AGENT_TYPE_AGENT)
+    {
+        Banner("Preliminary variable/class-context convergence");
     }
 
     if (policy)

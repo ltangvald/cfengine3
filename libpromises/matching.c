@@ -238,11 +238,12 @@ int IsPathRegex(const char *str)
 
 /* Checks whether item matches a list of wildcards */
 
-int IsRegexItemIn(EvalContext *ctx, const Item *list, const char *regex)
+int IsRegexItemIn(const EvalContext *ctx, const Item *list, const char *regex)
 {
     for (const Item *ptr = list; ptr != NULL; ptr = ptr->next)
     {
-        if ((ptr->classes) && (!IsDefinedClass(ctx, ptr->classes)))
+        if (ctx != NULL && ptr->classes != NULL &&
+            !IsDefinedClass(ctx, ptr->classes))
         {
             continue;
         }
@@ -308,6 +309,27 @@ void EscapeSpecialChars(const char *str, char *strEsc, int strEscSz, char *noEsc
     }
 }
 
+size_t EscapeRegexCharsLen(const char *str)
+{
+    size_t ret = 2;
+    for (const char *sp = str; *sp != '\0'; sp++)
+    {
+        switch (*sp)
+        {
+            case '.':
+            case '*':
+                ret++;
+                break;
+            default:
+                break;
+        }
+
+        ret++;
+    }
+
+    return ret;
+}
+
 void EscapeRegexChars(char *str, char *strEsc, int strEscSz)
 {
     char *sp;
@@ -324,7 +346,7 @@ void EscapeRegexChars(char *str, char *strEsc, int strEscSz)
             strEsc[strEscPos++] = '\\';
             break;
         default:
-            break;                
+            break;
         }
 
         strEsc[strEscPos++] = *sp;

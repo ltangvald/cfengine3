@@ -67,9 +67,9 @@ static const char *const CF_MONITORD_SHORT_DESCRIPTION =
     "monitoring daemon for CFEngine";
 
 static const char *const CF_MONITORD_MANPAGE_LONG_DESCRIPTION =
-        "cf-monitord is the monitoring daemon for CFEngine. It samples probes defined in policy code and attempts to learn the "
-        "normal system state based on current and past observations. Current estimates are made available as "
-        "special variables (e.g. $(mon.av_cpu)) to cf-agent, which may use them to inform policy decisions.";
+    "cf-monitord is the monitoring daemon for CFEngine. It samples probes defined in policy code and attempts to learn the "
+    "normal system state based on current and past observations. Current estimates are made available as "
+    "special variables (e.g. $(mon.av_cpu)) to cf-agent, which may use them to inform policy decisions.";
 
 static const struct option OPTIONS[] =
 {
@@ -85,8 +85,8 @@ static const struct option OPTIONS[] =
     {"no-fork", no_argument, 0, 'F'},
     {"histograms", no_argument, 0, 'H'},
     {"tcpdump", no_argument, 0, 'T'},
-    {"legacy-output", no_argument, 0, 'l'},
     {"color", optional_argument, 0, 'C'},
+    {"timestamp", no_argument, 0, 'l'},
     {NULL, 0, 0, '\0'}
 };
 
@@ -104,8 +104,8 @@ static const char *const HINTS[] =
     "Run process in foreground, not as a daemon",
     "Ignored for backward compatibility",
     "Interface with tcpdump if available to collect data about network",
-    "Use legacy output format",
     "Enable colorized output. Possible values: 'always', 'auto', 'never'. If option is used, the default value is 'auto'",
+    "Log timestamps on each line of log output",
     NULL
 };
 
@@ -120,7 +120,9 @@ int main(int argc, char *argv[])
     GenericAgentDiscoverContext(ctx, config);
     Policy *policy = LoadPolicy(ctx, config);
 
+    GenericAgentPostLoadInit(ctx);
     ThisAgentInit(ctx);
+
     KeepPromises(ctx, policy);
 
     MonitorStartServer(ctx, policy);
@@ -135,18 +137,14 @@ int main(int argc, char *argv[])
 static GenericAgentConfig *CheckOpts(int argc, char **argv)
 {
     extern char *optarg;
-    int optindex = 0;
     int c;
-    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_MONITOR);
+    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_MONITOR, GetTTYInteractive());
 
-    while ((c = getopt_long(argc, argv, "dvnIf:VSxHTKMFhlC::", OPTIONS, &optindex)) != EOF)
+    while ((c = getopt_long(argc, argv, "dvnIf:VSxHTKMFhC::l",
+                            OPTIONS, NULL)) != -1)
     {
-        switch ((char) c)
+        switch (c)
         {
-        case 'l':
-            LEGACY_OUTPUT = true;
-            break;
-
         case 'f':
             GenericAgentConfigSetInputFile(config, GetInputDir(), optarg);
             MINUSF = true;
@@ -182,32 +180,32 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'V':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteVersion(w);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteVersion(w);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'h':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-monitord", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-monitord", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'M':
-            {
-                Writer *out = FileWriter(stdout);
-                ManPageWrite(out, "cf-monitord", time(NULL),
-                             CF_MONITORD_SHORT_DESCRIPTION,
-                             CF_MONITORD_MANPAGE_LONG_DESCRIPTION,
-                             OPTIONS, HINTS,
-                             true);
-                FileWriterDetach(out);
-                exit(EXIT_SUCCESS);
-            }
+        {
+            Writer *out = FileWriter(stdout);
+            ManPageWrite(out, "cf-monitord", time(NULL),
+                         CF_MONITORD_SHORT_DESCRIPTION,
+                         CF_MONITORD_MANPAGE_LONG_DESCRIPTION,
+                         OPTIONS, HINTS,
+                         true);
+            FileWriterDetach(out);
+            exit(EXIT_SUCCESS);
+        }
 
         case 'x':
             Log(LOG_LEVEL_ERR, "Self-diagnostic functionality is retired.");
@@ -220,13 +218,17 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             }
             break;
 
+        case 'l':
+            LoggingEnableTimestamps(true);
+            break;
+
         default:
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-monitord", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_FAILURE);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-monitord", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_FAILURE);
         }
     }
 

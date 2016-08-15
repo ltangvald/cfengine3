@@ -1,3 +1,23 @@
+cfengine3 (3.7.4-1) unstable; urgency=medium
+
+  * Upgraded to the latest upstream LTS.
+    + the above upgrade solves the build problem (Closes: 831028)
+  * debian/rules:
+    + setting EXPLICIT_VERSION due to a new requirement in upstream's
+      configure.ac
+    + enabled all hardening options using the exported build flags 
+  * debian/patches:
+    + dropped 0001-redmine_6316.patch which was already included upstream
+    + added 0009_disable_spelling_errors.patch to fix spelling error
+    + patches refreshed
+  * debian/control:
+    + Standards-Version upgrade to 3.9.8, no change required
+    + VCS url moved to canonical and secure links
+    + Added python as recommended dependency due to some modules provided
+      with 3.7.4
+
+ -- Antonio Radici <antonio@debian.org>  Mon, 15 Aug 2016 09:56:05 +0100
+
 cfengine3 (3.6.2-4) unstable; urgency=medium
 
   * debian/patches:

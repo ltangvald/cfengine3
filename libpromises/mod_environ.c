@@ -28,6 +28,7 @@
 
 static const ConstraintSyntax environment_resources_constraints[] =
 {
+    CONSTRAINT_SYNTAX_GLOBAL,
     ConstraintSyntaxNewInt("env_cpus", CF_VALRANGE, "Number of virtual CPUs in the environment", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("env_memory", CF_VALRANGE, "Amount of primary storage (RAM) in the virtual environment (KB)", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("env_disk", CF_VALRANGE, "Amount of secondary storage (DISK) in the virtual environment (MB)", SYNTAX_STATUS_NORMAL),
@@ -40,6 +41,7 @@ static const BodySyntax environment_resources_body = BodySyntaxNew("environment_
 
 static const ConstraintSyntax environment_interface_constraints[] =
 {
+    CONSTRAINT_SYNTAX_GLOBAL,
     ConstraintSyntaxNewStringList("env_addresses", "", "The IP addresses of the environment's network interfaces", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("env_name", "", "The hostname of the virtual environment", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("env_network", "", "The hostname of the virtual network", SYNTAX_STATUS_NORMAL),

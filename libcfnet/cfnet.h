@@ -81,44 +81,24 @@ typedef struct
     bool            trust_server     : 1;
 } ConnectionFlags;
 
+static inline bool ConnectionFlagsEqual(const ConnectionFlags *f1,
+                                        const ConnectionFlags *f2)
+{
+    if (f1->protocol_version == f2->protocol_version &&
+        f1->cache_connection == f2->cache_connection &&
+        f1->force_ipv4 == f2->force_ipv4 &&
+        f1->trust_server == f2->trust_server)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+}
+
 
 #include "connection_info.h"                       /* needs ProtocolVersion */
-
-
-/* TODO Shouldn't this be in libutils? */
-typedef enum
-{
-    FILE_TYPE_REGULAR,
-    FILE_TYPE_LINK,
-    FILE_TYPE_DIR,
-    FILE_TYPE_FIFO,
-    FILE_TYPE_BLOCK,
-    FILE_TYPE_CHAR_, /* Conflict with winbase.h */
-    FILE_TYPE_SOCK
-} FileType;
-
-typedef struct Stat_ Stat;
-struct Stat_
-{
-    char *cf_filename;          /* What file are we statting? */
-    char *cf_server;            /* Which server did this come from? */
-    FileType cf_type;           /* enum filetype */
-    mode_t cf_lmode;            /* Mode of link, if link */
-    mode_t cf_mode;             /* Mode of remote file, not link */
-    uid_t cf_uid;               /* User ID of the file's owner */
-    gid_t cf_gid;               /* Group ID of the file's group */
-    off_t cf_size;              /* File size in bytes */
-    time_t cf_atime;            /* Time of last access */
-    time_t cf_mtime;            /* Time of last data modification */
-    time_t cf_ctime;            /* Time of last file status change */
-    char cf_makeholes;          /* what we need to know from blksize and blks */
-    char *cf_readlink;          /* link value or NULL */
-    int cf_failed;              /* stat returned -1 */
-    int cf_nlink;               /* Number of hard links */
-    int cf_ino;                 /* inode number on server */
-    dev_t cf_dev;               /* device number */
-    Stat *next;
-};
 
 
 /*
@@ -131,6 +111,8 @@ struct Stat_
     x.tv_usec = DEFAULT_TLS_TIMEOUT_USECONDS
 #define DEFAULT_TLS_TRIES 5
 
+struct Stat_;              /* defined in stat_cache.h, typedef'ed to "Stat" */
+
 typedef struct
 {
     ConnectionInfo *conn_info;
@@ -142,9 +124,13 @@ typedef struct
     unsigned char *session_key;
     char encryption_type;
     short error;
-    ConnectionFlags flags;        /* mostly copy_from connection attributes */
+    struct Stat_ *cache;                          /* cache for remote STATs */
+
+    /* The following consistutes the ID of a server host, mostly taken from
+     * the copy_from connection attributes. */
+    ConnectionFlags flags;
     char *this_server;
-    Stat *cache;                        /* cache for stat() (SYNCH command) */
+    char *this_port;
 } AgentConnection;
 
 
@@ -152,6 +138,12 @@ typedef struct
 /* misc.c */
 
 const char *sockaddr_ntop(const void *src, char *dst, socklen_t size);
+void EnforceBwLimit(int tosend);
+int cf_closesocket(int sd);
+
+
+/* client_protocol.c */
+void SetSkipIdentify(bool enabled);
 
 
 #endif

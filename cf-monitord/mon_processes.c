@@ -29,6 +29,7 @@
 #include <files_interfaces.h>
 #include <pipes.h>
 #include <systype.h>
+#include <known_dirs.h>
 
 #include <cf-windows-functions.h>
 
@@ -57,7 +58,7 @@ void MonProcessesGatherData(double *cf_this)
     cf_this[ob_rootprocs] += numRootProcs;
     cf_this[ob_otherprocs] += numOtherProcs;
 
-    snprintf(vbuff, CF_MAXVARSIZE, "%s/state/cf_users", CFWORKDIR);
+    snprintf(vbuff, CF_MAXVARSIZE, "%s/cf_users", GetStateDir());
     MapName(vbuff);
     RawSaveItemList(userList, vbuff, NewLineMode_Unix);
 
@@ -75,7 +76,7 @@ static bool GatherProcessUsers(Item **userList, int *userListSz, int *numRootPro
     char pscomm[CF_BUFSIZE];
     char user[CF_MAXVARSIZE];
 
-    snprintf(pscomm, CF_BUFSIZE, "%s %s", VPSCOMM[VSYSTEMHARDCLASS], VPSOPTS[VSYSTEMHARDCLASS]);
+    snprintf(pscomm, CF_BUFSIZE, "%s %s", VPSCOMM[VPSHARDCLASS], VPSOPTS[VPSHARDCLASS]);
 
     if ((pp = cf_popen(pscomm, "r", true)) == NULL)
     {

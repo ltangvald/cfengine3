@@ -38,6 +38,22 @@
 
 static void DereferenceComment(Promise *pp);
 
+void CopyBodyConstraintsToPromise(EvalContext *ctx, Promise *pp,
+                                  const Body *bp)
+{
+    for (size_t k = 0; k < SeqLength(bp->conlist); k++)
+    {
+        Constraint *scp = SeqAt(bp->conlist, k);
+
+        if (IsDefinedClass(ctx, scp->classes))
+        {
+            Rval returnval = ExpandPrivateRval(ctx, NULL, "body", 
+                                               scp->rval.item, scp->rval.type);
+            PromiseAppendConstraint(pp, scp->lval, returnval, false);
+        }
+    }
+}
+
 
 Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
 {
@@ -74,7 +90,6 @@ Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
     pcopy->parent_promise_type = pp->parent_promise_type;
     pcopy->offset.line = pp->offset.line;
     pcopy->comment = pp->comment ? xstrdup(pp->comment) : NULL;
-    pcopy->has_subbundles = pp->has_subbundles;
     pcopy->conlist = SeqNew(10, ConstraintDestroy);
     pcopy->org_pp = pp->org_pp;
     pcopy->offset = pp->offset;
@@ -127,12 +142,19 @@ Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
                     PromiseGetBundle(pp)->source_path, bp->type, cp->lval);
             }
 
-            /* Keep the referent body type as a boolean for convenience when checking later */
-
             if (IsDefinedClass(ctx, cp->classes))
             {
-                Constraint *cp_copy = PromiseAppendConstraint(pcopy, cp->lval, (Rval) {xstrdup("true"), RVAL_TYPE_SCALAR }, false);
-                cp_copy->offset = cp->offset;
+                /* For new package promises we need to have name of the
+                 * package_manager body. */
+                char body_name[strlen(cp->lval) + 6];
+                xsnprintf(body_name, sizeof(body_name), "%s_name", cp->lval);
+                PromiseAppendConstraint(pcopy, body_name,
+                       (Rval) {xstrdup(bp->name), RVAL_TYPE_SCALAR }, false);
+                            
+                /* Keep the referent body type as a boolean for convenience 
+                 * when checking later */
+                PromiseAppendConstraint(pcopy, cp->lval,
+                       (Rval) {xstrdup("true"), RVAL_TYPE_SCALAR }, false);
             }
 
             if (bp->args)
@@ -155,8 +177,7 @@ Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
                     if (IsDefinedClass(ctx, scp->classes))
                     {
                         Rval returnval = ExpandPrivateRval(ctx, NULL, "body", scp->rval.item, scp->rval.type);
-                        Constraint *scp_copy = PromiseAppendConstraint(pcopy, scp->lval, returnval, false);
-                        scp_copy->offset = scp->offset;
+                        PromiseAppendConstraint(pcopy, scp->lval, returnval, false);
                     }
                 }
             }
@@ -189,8 +210,7 @@ Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
                                 newrv.item = new_list;
                             }
 
-                            Constraint *scp_copy = PromiseAppendConstraint(pcopy, scp->lval, newrv, false);
-                            scp_copy->offset = scp->offset;
+                            PromiseAppendConstraint(pcopy, scp->lval, newrv, false);
                         }
                     }
                 }
@@ -216,7 +236,8 @@ Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
                     }
                 }
 
-                if (!callee)
+                if (!callee && (strcmp("ifvarclass", cp->lval) != 0 &&
+                                strcmp("if", cp->lval) != 0))
                 {
                     Log(LOG_LEVEL_ERR,
                         "Apparent bundle '%s' was undeclared, but "
@@ -237,8 +258,7 @@ Promise *DeRefCopyPromise(EvalContext *ctx, const Promise *pp)
                     newrv.item = new_list;
                 }
 
-                Constraint *cp_copy = PromiseAppendConstraint(pcopy, cp->lval, newrv, false);
-                cp_copy->offset = cp->offset;
+                PromiseAppendConstraint(pcopy, cp->lval, newrv, false);
             }
         }
     }
@@ -270,25 +290,80 @@ static bool EvaluateConstraintIteration(EvalContext *ctx, const Constraint *cp, 
     return true;
 }
 
+/**
+  @brief Helper function to determine whether the Rval of ifvarclass/if/unless is defined.
+  If the Rval is a function, call that function.
+*/
+static bool IsVarClassDefined(const EvalContext *ctx, const Constraint *cp, Promise *pcopy)
+{
+    assert(ctx);
+    assert(cp);
+    assert(pcopy);
+
+    /*
+      This might fail to expand if there are unexpanded variables in function arguments
+      (in which case the function won't be called at all), but the function still returns true.
+
+      If expansion fails for other reasons, assume that we don't know this class.
+    */
+    Rval final;
+    if (!EvaluateConstraintIteration((EvalContext*)ctx, cp, &final))
+    {
+        return false;
+    }
+
+    char *classes = NULL;
+    PromiseAppendConstraint(pcopy, cp->lval, final, false);
+    switch (final.type)
+    {
+    case RVAL_TYPE_SCALAR:
+        classes = RvalScalarValue(final);
+        break;
+
+    case RVAL_TYPE_FNCALL:
+        Log(LOG_LEVEL_DEBUG, "Function call in class expression did not succeed");
+        break;
+
+    default:
+        break;
+    }
+
+    if (!classes)
+    {
+        return false;
+    }
+    // sanity check for unexpanded variables
+    if (strchr(classes, '$') || strchr(classes, '@'))
+    {
+        Log(LOG_LEVEL_DEBUG, "Class expression did not evaluate");
+        return false;
+    }
+
+    return IsDefinedClass(ctx, classes);
+}
+
 Promise *ExpandDeRefPromise(EvalContext *ctx, const Promise *pp, bool *excluded)
 {
     assert(pp->promiser);
     assert(pp->classes);
+    assert(excluded);
 
-    if (excluded)
-    {
-        *excluded = false;
-    }
+    *excluded = false;
 
-    Promise *pcopy = xcalloc(1, sizeof(Promise));
     Rval returnval = ExpandPrivateRval(ctx, NULL, "this", pp->promiser, RVAL_TYPE_SCALAR);
+    if (!returnval.item || (strcmp(returnval.item, CF_NULL_VALUE) == 0)) 
+    {
+        *excluded = true;
+        return NULL;
+    }
+    Promise *pcopy = xcalloc(1, sizeof(Promise));
     pcopy->promiser = RvalScalarValue(returnval);
 
     if ((strcmp("files", pp->parent_promise_type->name) != 0) &&
         (strcmp("storage", pp->parent_promise_type->name) != 0))
     {
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_THIS, "promiser", pcopy->promiser,
-                                  CF_DATA_TYPE_STRING, "source=promise");
+                                      CF_DATA_TYPE_STRING, "source=promise");
     }
 
     if (pp->promisee.item)
@@ -308,67 +383,47 @@ Promise *ExpandDeRefPromise(EvalContext *ctx, const Promise *pp, bool *excluded)
     pcopy->conlist = SeqNew(10, ConstraintDestroy);
     pcopy->org_pp = pp->org_pp;
 
+    // if this is a class promise, check if it is already set, if so, skip
+    if (strcmp("classes", pp->parent_promise_type->name) == 0)
     {
-        // if this is a class promise, check if it is already set, if so, skip
-        if (strcmp("classes", pp->parent_promise_type->name) == 0)
+        if (IsDefinedClass(ctx, CanonifyName(pcopy->promiser)))
         {
-            if (IsDefinedClass(ctx, pcopy->promiser))
-            {
-                Log(LOG_LEVEL_VERBOSE, "Skipping evaluation of classes promise as class '%s' is already set",
-                    pcopy->promiser);
+            Log(LOG_LEVEL_VERBOSE, "Skipping evaluation of classes promise as class '%s' is already set",
+                CanonifyName(pcopy->promiser));
+            *excluded = true;
 
-                if (excluded)
-                {
-                    *excluded = true;
-                }
+            return pcopy;
+        }
+    }
 
-                return pcopy;
-            }
+    {
+        // look for 'if'/'ifvarclass' exclusion, to short-circuit evaluation of other constraints
+        const Constraint *ifvarclass = PromiseGetConstraint(pp, "ifvarclass");
+
+        if (!ifvarclass)
+        {
+            ifvarclass = PromiseGetConstraint(pp, "if");
         }
 
-        // look for ifvarclass exclusion, to short-circuit evaluation of other constraints
-        const Constraint *ifvarclass = PromiseGetConstraint(pp, "ifvarclass");
-        if (ifvarclass)
+        if (ifvarclass && !IsVarClassDefined(ctx, ifvarclass, pcopy))
         {
-            /*
-              This might fail to expand if there are unexpanded variables in function arguments
-              (in which case the function won't be called at all).
-              If final is not a scalar, then expansion has failed (the function would still return true).
-              In that case, assume that we don't know the class, and skip the promise.
+            Log(LOG_LEVEL_VERBOSE, "Skipping promise '%s', for if/ifvarclass is not in scope", pp->promiser);
+            *excluded = true;
 
-              Note: EvaluateConstraintIteration calls VarClassExcluded via EvalContextPromiseIsActive,
-              trying to avoid function calls in promise bodies that are disabled due to class conditionals
-              or ifvarclass predicates. Changing the logic of VarClassExcluded would possibly break
-              function evaluation.
-            */
-            Rval final;
-            if (EvaluateConstraintIteration(ctx, ifvarclass, &final))
-            {
-                Constraint *cp_copy = PromiseAppendConstraint(pcopy, ifvarclass->lval, final, false);
-                cp_copy->offset = ifvarclass->offset;
+            return pcopy;
+        }
+    }
 
-                char *excluding_class_expr = NULL;
-                if (final.type != RVAL_TYPE_SCALAR || VarClassExcluded(ctx, pcopy, &excluding_class_expr))
-                {
-                    if (LEGACY_OUTPUT)
-                    {
-                        Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
-                        Log(LOG_LEVEL_VERBOSE, "Skipping whole next promise (%s), as ifvarclass %s is not relevant", pp->promiser, excluding_class_expr ? excluding_class_expr : pp->classes);
-                        Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
-                    }
-                    else
-                    {
-                        Log(LOG_LEVEL_VERBOSE, "Skipping next promise '%s', as ifvarclass '%s' is not relevant", pp->promiser, excluding_class_expr ? excluding_class_expr : pp->classes);
-                    }
+    {
+        // look for 'unless' exclusion, to short-circuit evaluation of other constraints
+        const Constraint *unless = PromiseGetConstraint(pp, "unless");
 
-                    if (excluded)
-                    {
-                        *excluded = true;
-                    }
+        if (unless && IsVarClassDefined(ctx, unless, pcopy))
+        {
+            Log(LOG_LEVEL_VERBOSE, "Skipping promise '%s', for unless is in scope", pp->promiser);
+            *excluded = true;
 
-                    return pcopy;
-                }
-            }
+            return pcopy;
         }
     }
 
@@ -380,15 +435,11 @@ Promise *ExpandDeRefPromise(EvalContext *ctx, const Promise *pp, bool *excluded)
             Rval final;
             if (EvaluateConstraintIteration(ctx, depends_on, &final))
             {
-                Constraint *cp_copy = PromiseAppendConstraint(pcopy, depends_on->lval, final, false);
-                cp_copy->offset = depends_on->offset;
+                PromiseAppendConstraint(pcopy, depends_on->lval, final, false);
 
                 if (MissingDependencies(ctx, pcopy))
                 {
-                    if (excluded)
-                    {
-                        *excluded = true;
-                    }
+                    *excluded = true;
 
                     return pcopy;
                 }
@@ -401,7 +452,10 @@ Promise *ExpandDeRefPromise(EvalContext *ctx, const Promise *pp, bool *excluded)
         Constraint *cp = SeqAt(pp->conlist, i);
 
         // special constraints ifvarclass and depends_on are evaluated before the rest of the constraints
-        if (strcmp(cp->lval, "ifvarclass") == 0 || strcmp(cp->lval, "depends_on") == 0)
+        if (strcmp(cp->lval, "ifvarclass") == 0 ||
+            strcmp(cp->lval, "if") == 0 ||
+            strcmp(cp->lval, "unless") == 0 ||
+            strcmp(cp->lval, "depends_on") == 0)
         {
             continue;
         }
@@ -412,8 +466,7 @@ Promise *ExpandDeRefPromise(EvalContext *ctx, const Promise *pp, bool *excluded)
             continue;
         }
 
-        Constraint *cp_copy = PromiseAppendConstraint(pcopy, cp->lval, final, false);
-        cp_copy->offset = cp->offset;
+        PromiseAppendConstraint(pcopy, cp->lval, final, false);
 
         if (strcmp(cp->lval, "comment") == 0)
         {
@@ -450,12 +503,12 @@ void PromiseRef(LogLevel level, const Promise *pp)
     if (PromiseGetBundle(pp)->source_path)
     {
         Log(level, "Promise belongs to bundle '%s' in file '%s' near line %zu", PromiseGetBundle(pp)->name,
-             PromiseGetBundle(pp)->source_path, pp->offset.line);
+            PromiseGetBundle(pp)->source_path, pp->offset.line);
     }
     else
     {
         Log(level, "Promise belongs to bundle '%s' near line %zu", PromiseGetBundle(pp)->name,
-              pp->offset.line);
+            pp->offset.line);
     }
 
     if (pp->comment)

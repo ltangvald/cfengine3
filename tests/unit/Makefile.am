@@ -1,3 +1,26 @@
+#
+#  Copyright (C) CFEngine AS
+#
+#  This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+#
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; version 3.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+#
+# To the extent this program is licensed as part of the Enterprise
+# versions of CFEngine, the applicable Commercial Open Source License
+# (COSL) may apply to this file if you as a licensee so wish it. See
+# included file COSL.txt.
+#
 # Just recursively include in dist tarball all data we need for unit tests
 EXTRA_DIST = data
 
@@ -38,21 +61,27 @@ libtest_la_SOURCES = cmockery.c cmockery.h schema.h test.c test.h \
 libtest_la_LIBADD = ../../libcompat/libcompat.la
 
 check_LTLIBRARIES += libstr.la
-libstr_la_SOURCES = ../../libutils/string_lib.c ../../libutils/regex.c \
-	../../libutils/encode.c ../../libutils/writer.c \
-	../../libutils/sequence.c
+libstr_la_SOURCES = \
+	../../libutils/buffer.c \
+	../../libutils/encode.c \
+	../../libutils/logging.c \
+	../../libutils/misc_lib.c \
+	../../libutils/regex.c \
+	../../libutils/sequence.c \
+	../../libutils/string_lib.c \
+	../../libutils/writer.c
 libstr_la_LIBADD = libtest.la
 
 
 check_LTLIBRARIES += libdb.la
-libdb_la_SOURCES = ../../libpromises/dbm_api.c \
+libdb_la_SOURCES = db_stubs.c \
+	../../libpromises/dbm_api.c \
 	../../libpromises/mutex.c \
 	../../libpromises/dbm_quick.c \
 	../../libpromises/dbm_tokyocab.c \
 	../../libpromises/dbm_lmdb.c \
 	../../libpromises/dbm_migration.c \
 	../../libpromises/dbm_migration_lastseen.c \
-	../../libpromises/dbm_migration_bundles.c \
 	../../libutils/logging.c \
 	../../libutils/atexit.c
 if HPUX
@@ -89,7 +118,6 @@ check_PROGRAMS = \
 	changes_migration_test \
 	db_test \
 	db_concurrent_test \
-	dbm_migration_bundles_test \
 	misc_lib_test \
 	item_lib_test \
 	crypto_symmetric_test \
@@ -119,6 +147,7 @@ check_PROGRAMS = \
 	string_expressions_test \
 	var_expressions_test \
 	process_terminate_unix_test \
+	process_test \
 	exec-config-test \
 	generic_agent_test \
 	syntax_test \
@@ -142,7 +171,9 @@ check_PROGRAMS = \
 	ring_buffer_test \
 	strlist_test \
 	addr_lib_test \
-	libcompat_test
+	libcompat_test \
+	split_process_line_test \
+        new_packages_promise_test
 
 if HAVE_AVAHI_CLIENT
 if HAVE_AVAHI_COMMON
@@ -152,10 +183,25 @@ check_PROGRAMS += \
 endif
 endif
 
-check_SCRIPTS = dynamic_dependency_test.sh
-EXTRA_DIST   += dynamic_dependency_test.sh
+check_SCRIPTS = bootstrap_inc_uptodate_test.sh \
+	dynamic_dependency_test.sh
+
+if WITH_INIT_D_SCRIPT
+check_SCRIPTS += init_script_test.sh
+endif
+
+EXTRA_DIST   += $(check_SCRIPTS)
 
 TESTS = $(check_PROGRAMS) $(check_SCRIPTS)
+
+if AIX
+XFAIL_TESTS = evalfunction_test     # Redmine 6318
+XFAIL_TESTS += set_domainname_test  # Redmine 6317
+endif
+
+if HPUX
+XFAIL_TESTS = mon_load_test # Redmine #3569
+endif
 
 #
 # OS X uses real system calls instead of our stubs unless this option is used
@@ -196,6 +242,9 @@ list_test_SOURCES = list_test.c
 refcount_test_SOURCES = refcount_test.c ../../libutils/refcount.c
 
 buffer_test_SOURCES = buffer_test.c ../../libutils/buffer.c
+# Workaround for object file basename conflicts, search the web for
+# "automake created with both libtool and without"
+buffer_test_CPPFLAGS = $(AM_CPPFLAGS)
 
 csv_parser_test_SOURCES = csv_parser_test.c ../../libutils/csv_parser.c
 csv_parser_test_LDADD = libtest.la ../../libutils/libutils.la
@@ -240,7 +289,7 @@ endif
 file_writer_test_SOURCES = file_writer_test.c gcov-stub.c
 
 db_test_SOURCES = db_test.c
-db_test_LDADD = libdb.la
+db_test_LDADD = libtest.la ../../libpromises/libpromises.la
 
 db_concurrent_test_SOURCES = db_concurrent_test.c
 #db_concurrent_test_CPPFLAGS = $(libdb_la_CPPFLAGS)
@@ -256,13 +305,9 @@ lastseen_migration_test_SOURCES = lastseen_migration_test.c \
 #lastseen_migration_test_CPPFLAGS = $(libdb_la_CPPFLAGS)
 lastseen_migration_test_LDADD = libdb.la ../../libpromises/libpromises.la
 
-dbm_migration_bundles_test_SOURCES = dbm_migration_bundles_test.c
-dbm_migration_bundles_test_LDADD = libdb.la
-#dbm_migration_bundles_test_CPPFLAGS = $(libdb_la_CPPFLAGS)
-
 CLEANFILES = *.gcno *.gcda cfengine-enterprise.so
 
-package_versions_compare_test_SOURCES = package_versions_compare_test.c ../../cf-agent/verify_packages.c ../../cf-agent/vercmp.c ../../cf-agent/vercmp_internal.c ../../cf-agent/retcode.c ../../cf-agent/match_scope.c
+package_versions_compare_test_SOURCES = package_versions_compare_test.c ../../cf-agent/package_module.c ../../cf-agent/verify_packages.c ../../cf-agent/verify_new_packages.c ../../cf-agent/vercmp.c ../../cf-agent/vercmp_internal.c ../../cf-agent/retcode.c ../../cf-agent/match_scope.c
 
 #package_versions_compare_test_CPPFLAGS = $(AM_CPPFLAGS)
 package_versions_compare_test_LDADD = ../../libpromises/libpromises.la libtest.la
@@ -291,8 +336,13 @@ connection_management_test_SOURCES = connection_management_test.c ../../cf-serve
 connection_management_test_LDADD = ../../libpromises/libpromises.la libtest.la ../../cf-serverd/libcf-serverd.la
 
 rlist_test_SOURCES = rlist_test.c \
-       ../../libpromises/rlist.c ../../libutils/logging.c
-rlist_test_LDADD = libtest.la libstr.la ../../libpromises/libpromises.la
+	../../libpromises/rlist.c
+rlist_test_LDADD = libtest.la ../../libpromises/libpromises.la
+# Workaround for object file basename conflicts, search the web for
+# "automake created with both libtool and without"
+rlist_test_CPPFLAGS = $(AM_CPPFLAGS)
+
+process_test_LDADD = libtest.la ../../libpromises/libpromises.la
 
 if LINUX
 
@@ -383,3 +433,11 @@ $(CFUPGRADE)/process.c $(CFUPGRADE)/process.h $(CFUPGRADE)/update.c $(CFUPGRADE)
 cf_upgrade_test_CFLAGS = -I$(CFUPGRADE)
 
 queue_test_SOURCES = queue_test.c
+
+if !NT
+init_script_test_helper_SOURCES = init_script_test_helper.c
+init_script_test.sh: init_script_test_helper
+CLEANFILES += init_script_test_helper
+endif
+EXTRA_DIST += init_script_test_helper.c
+EXTRA_DIST += init_script_test.sh

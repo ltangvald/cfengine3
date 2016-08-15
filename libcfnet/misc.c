@@ -25,7 +25,33 @@
 #include <cfnet.h>
 
 #include <misc_lib.h>
+#include <logging.h>                                         /* GetErrorStr */
 
+
+int cf_closesocket(int sd)
+{
+    int res;
+
+#ifdef __MINGW32__
+    res = closesocket(sd);
+    if (res == SOCKET_ERROR)
+    {
+        Log(LOG_LEVEL_VERBOSE,
+            "Failed to close socket (closesocket: %s)",
+            GetErrorStrFromCode(WSAGetLastError()));
+    }
+#else
+    res = close(sd);
+    if (res == -1)
+    {
+        Log(LOG_LEVEL_VERBOSE,
+            "Failed to close socket (close: %s)",
+            GetErrorStr());
+    }
+#endif
+
+    return res;
+}
 
 /* Convert IP address in src (which can be struct sockaddr_storage (best
  * choice for any IP version), struct sockaddr, struct sockaddr_in or struct

@@ -281,6 +281,29 @@ bool ListsCompare(const Item *list1, const Item *list2)
     return true;
 }
 
+/**
+ * Checks whether list1 is a subset of list2, i.e. every entry in list1 must
+ * be found in list2.
+ */
+bool ListSubsetOfList(const Item *list1, const Item *list2)
+{
+    const Item *list1_ptr = list1;
+    CYCLE_DECLARE(list1_ptr, slow, toggle);
+
+    while (list1_ptr != NULL)
+    {
+        if (!IsItemIn(list2, list1_ptr->name))
+        {
+            return false;
+        }
+
+        list1_ptr = list1_ptr->next;
+        CYCLE_CHECK(list1_ptr, slow, toggle);
+    }
+
+    return true;               /* all elements of list1 were found in list2 */
+}
+
 /*********************************************************************/
 
 Item *EndOfList(Item *ip)
@@ -510,43 +533,78 @@ void InsertAfter(Item **filestart, Item *ptr, const char *string)
     ip->classes = NULL;
 }
 
+/**
+ *  Splits a string containing a separator like ':' into a linked list of
+ *  separate items,
+ *
+ *  @NOTE backslashes can be used to escape either the separator, or the
+ *        backslash itself, e.g. "\:" or "\\" (ofcourse proper C strings need
+ *        double backslash).
+ *
+ *  @NOTE separator can't be the backslash.
+ */
 Item *SplitString(const char *string, char sep)
- /* Splits a string containing a separator like :
-    into a linked list of separate items, */
 {
     Item *liststart = NULL;
-    const char *sp = string;
-    char before[CF_BUFSIZE];
-    int i = 0;
 
-    while (*sp != '\0')
+    size_t string_len = strlen(string);
+
+    /* Temporary buffer for each chunk we append. This has the maximum
+     * possible size we might possibly need. */
+    char *buf = xmalloc(string_len + 1);
+    size_t buf_len = 0;
+
+    /* We scan the string for separator or backslash. */
+    char sep2[3] = { sep, '\\', '\0' };
+    size_t z = 0;
+
+    while ((z = strcspn(string, sep2)) < string_len)
     {
-        if (*sp != sep)
+        memcpy(&buf[buf_len], string, z);
+        buf_len += z;
+
+        if (string[z] == '\\')
         {
-            before[i] = *sp;
-            i++;
+            /* Check next character after backslash, if it's backslash or
+             * separator then skip backslash, append character to buffer. */
+            if (string[z+1] == '\\' || string[z+1] == sep)
+            {
+                z++;
+            }
+
+            /* Append the single character to our buffer. */
+            buf[buf_len] = string[z];
+            buf_len++;
+
+            /* SKIP, find next backslash or separator. */
+            string     += z + 1;
+            string_len -= z + 1;
+            continue;
         }
-        else if (sp > string && sp[-1] == '\\')
+        else                   /* separator was found, and it's not escaped */
         {
-            /* Escaped use of list separator; over-write the backslash
-             * we copied last time round the loop (and don't increment
-             * i, so next time round we'll continue in the right
-             * place). */
-            before[i - 1] = sep;
-        }
-        else
-        {
-            before[i] = '\0';
-            PrependItem(&liststart, before, NULL);
-            i = 0;
+            assert(string[z] == sep);
+            assert((z == 0) ||
+                   (z > 0 && string[z-1] != '\\'));
         }
 
-        sp++;
+        /* Terminate buffer and add to Item list. */
+        buf[buf_len] = '\0';
+        PrependItem(&liststart, buf, NULL);
+
+        /* Empty the buffer. */
+        buf_len = 0;
+        /* Start new search from after separator. */
+        string     += z + 1;
+        string_len -= z + 1;
     }
 
-    before[i] = '\0';
-    PrependItem(&liststart, before, "");
+    memcpy(&buf[buf_len], string, z);
+    buf_len += z;
+    buf[buf_len] = '\0';
+    PrependItem(&liststart, buf, NULL);
 
+    free(buf);
     return ReverseItemList(liststart);
 }
 

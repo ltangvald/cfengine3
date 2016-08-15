@@ -25,9 +25,16 @@
 #ifndef CFENGINE_PROCESS_H
 #define CFENGINE_PROCESS_H
 
-#define PROCESS_START_TIME_UNKNOWN ((time_t)0)
+#include <platform.h>
 
-/*
+
+/* TODO move to libutils, once windows implementation is merged. */
+
+
+#define PROCESS_START_TIME_UNKNOWN ((time_t) 0)
+
+
+/**
  * Obtain start time of specified process.
  *
  * @return start time (Unix timestamp) of specified process
@@ -35,7 +42,7 @@
  */
 time_t GetProcessStartTime(pid_t pid);
 
-/*
+/**
  * Gracefully kill the process with pid #pid and start time #process_start_time.
  *
  * Under Unix this will send SIGINT, then SIGTERM and then SIGKILL if process
@@ -45,7 +52,10 @@ time_t GetProcessStartTime(pid_t pid);
  * safety check for killing right process.
  *
  * @return true if process was killed successfully, false otherwise.
+ * @return false if killing failed for any reason, or if the PID wasn't
+ *               present in the first place.
  */
-int GracefulTerminate(pid_t pid, time_t process_start_time);
+bool GracefulTerminate(pid_t pid, time_t process_start_time);
+
 
 #endif

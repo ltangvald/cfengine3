@@ -1,3 +1,26 @@
+#
+#  Copyright (C) CFEngine AS
+#
+#  This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+#
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; version 3.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+#
+# To the extent this program is licensed as part of the Enterprise
+# versions of CFEngine, the applicable Commercial Open Source License
+# (COSL) may apply to this file if you as a licensee so wish it. See
+# included file COSL.txt.
+#
 if !BUILTIN_EXTENSIONS
  projlib_LTLIBRARIES = libpromises.la
  AM_LDFLAGS = -version-info 3:6:0 -no-undefined
@@ -7,24 +30,22 @@ else
 endif
 
 AM_LDFLAGS += $(LMDB_LDFLAGS) $(TOKYOCABINET_LDFLAGS) $(QDBM_LDFLAGS) \
-	$(PCRE_LDFLAGS) $(OPENSSL_LDFLAGS) $(SQLITE3_LDFLAGS) $(LIBACL_LDFLAGS)
-
-EXTRA_DIST = extensions_template.c extensions_template.h enterprise_extension.sed math.pc
+	$(PCRE_LDFLAGS) $(OPENSSL_LDFLAGS) $(SQLITE3_LDFLAGS) $(LIBACL_LDFLAGS) $(LIBYAML_LDFLAGS)
 
 AM_CPPFLAGS = \
 	-I$(srcdir)/../libutils -I$(srcdir)/../libcfnet \
 	-I$(srcdir)/../libenv $(ENTERPRISE_CPPFLAGS) \
 	$(LMDB_CPPFLAGS) $(TOKYOCABINET_CPPFLAGS) $(QDBM_CPPFLAGS) \
-	$(PCRE_CPPFLAGS) $(OPENSSL_CPPFLAGS) $(SQLITE3_CPPFLAGS) $(LIBACL_CPPFLAGS)
+	$(PCRE_CPPFLAGS) $(OPENSSL_CPPFLAGS) $(SQLITE3_CPPFLAGS) $(LIBACL_CPPFLAGS) $(LIBYAML_CPPFLAGS)
 
 AM_CFLAGS = $(ENTERPRISE_CFLAGS) \
 	$(LMDB_CFLAGS) $(TOKYOCABINET_CFLAGS) $(QDBM_CFLAGS) \
-	$(PCRE_CFLAGS) $(OPENSSL_CFLAGS) $(SQLITE3_CFLAGS) $(LIBACL_CFLAGS)
+	$(PCRE_CFLAGS) $(OPENSSL_CFLAGS) $(SQLITE3_CFLAGS) $(LIBACL_CFLAGS) $(LIBYAML_CFLAGS)
 
 AM_YFLAGS = -d
 
 LIBS = $(LMDB_LIBS) $(TOKYOCABINET_LIBS) $(QDBM_LIBS) \
-	$(PCRE_LIBS) $(OPENSSL_LIBS) $(SQLITE3_LIBS) $(LIBACL_LIBS)
+	$(PCRE_LIBS) $(OPENSSL_LIBS) $(SQLITE3_LIBS) $(LIBACL_LIBS) $(LIBYAML_LIBS)
 
 libpromises_la_LIBADD = ../libutils/libutils.la ../libcfnet/libcfnet.la \
 	../libenv/libenv.la $(ENTERPRISE_LDADD)
@@ -38,7 +59,7 @@ libpromises_la_SOURCES = \
         assoc.c assoc.h \
         audit.c audit.h \
         attributes.c attributes.h \
-        bootstrap.c bootstrap.h \
+        bootstrap.c bootstrap.h bootstrap.inc failsafe.cf \
         cf3.defs.h \
         cf3.extern.h \
         cf3globals.c \
@@ -50,12 +71,11 @@ libpromises_la_SOURCES = \
         dbm_api.c dbm_api.h dbm_priv.h \
         dbm_migration.c dbm_migration.h \
         dbm_migration_lastseen.c \
-        dbm_migration_bundles.c \
         dbm_lmdb.c \
         dbm_quick.c \
         dbm_tokyocab.c \
-        enterprise_extension.c enterprise_extension.h \
-        enterprise_stubs.c \
+        extensions_template.c.pre extensions_template.h.pre \
+        enterprise_stubs.c enterprise_extension.c enterprise_extension.h \
         eval_context.c eval_context.h \
         evalfunction.c evalfunction.h \
         exec_tools.c exec_tools.h \
@@ -79,7 +99,7 @@ libpromises_la_SOURCES = \
         locks.c locks.h \
         logic_expressions.c logic_expressions.h \
         matching.c matching.h \
-        math_eval.c math_eval.h \
+        math_eval.c math_eval.h math.pc \
         mod_access.c mod_access.h \
         mod_common.c mod_common.h \
         mod_databases.c mod_databases.h \
@@ -126,8 +146,7 @@ libpromises_la_SOURCES = \
         verify_classes.c verify_classes.h \
         verify_reports.c \
         verify_vars.c verify_vars.h \
-        cf-windows-functions.h \
-        bootstrap.inc
+        cf-windows-functions.h
 
 if !NT
 
@@ -145,41 +164,71 @@ libpromises_la_SOURCES += \
 	process_aix.c
 endif
 
+if HPUX
+libpromises_la_SOURCES += \
+	process_hpux.c
+endif
+
 if SOLARIS
 libpromises_la_SOURCES += \
-	process_solaris.c \
-	solaris_ifaddrs.c solaris_ifaddrs.h
+	process_solaris.c
+endif
+
+if FREEBSD
+libpromises_la_SOURCES += \
+        process_freebsd.c
 endif
 
 if !LINUX
 if !AIX
+if !HPUX
 if !SOLARIS
+if !FREEBSD
 libpromises_la_SOURCES += \
         process_unix_stub.c
+endif
+endif
 endif
 endif
 endif
 
 endif # !NT
 
+
+########## Sources pre-generated and distributed in the tarball ##########
+# Make sure you include the generated file as a dependency to a target
+# (e.g. libpromises_la) so that it's generated during "make dist"
+
 BUILT_SOURCES = cf3lex.c cf3parse.h cf3parse.c \
-	enterprise_extension.c \
-	enterprise_extension.h
+	enterprise_extension.c enterprise_extension.h \
+	bootstrap.inc
+EXTRA_SCRIPTS = text2cstring.pl enterprise_extension.sed
+EXTRA_DIST = $(EXTRA_SCRIPTS)
 
-ENTERPRISE_EXTENSION_GENERATE = $(SED) -f $(srcdir)/enterprise_extension.sed $< > $@
-ENTERPRISE_EXTENSION_MAKE = @if test -z "$(V)"; then echo "  SED   " $@; else echo "$(ENTERPRISE_EXTENSION_GENERATE)"; fi; $(ENTERPRISE_EXTENSION_GENERATE)
+enterprise_extension.c: extensions_template.c.pre enterprise_extension.sed
+	$(V_SED) $(SED) -f $(srcdir)/enterprise_extension.sed $< > $@
+enterprise_extension.h: extensions_template.h.pre enterprise_extension.sed
+	$(V_SED) $(SED) -f $(srcdir)/enterprise_extension.sed $< > $@
 
-enterprise_extension.c: extensions_template.c enterprise_extension.sed
-	$(ENTERPRISE_EXTENSION_MAKE)
-enterprise_extension.h: extensions_template.h enterprise_extension.sed
-	$(ENTERPRISE_EXTENSION_MAKE)
+bootstrap.inc: failsafe.cf text2cstring.pl
+	$(V_PERL) $(PERL) $(srcdir)/text2cstring.pl $< > $@
 
-CLEANFILES = *.gcno *.gcda $(BUILT_SOURCES)
+
+#
+# Proper compilation progress printing
+#
+V_PERL = $(cf__v_PERL_$(V))
+cf__v_PERL_ = $(cf__v_PERL_$(AM_DEFAULT_VERBOSITY))
+cf__v_PERL_0 = @echo "  PERL    " "$@";
+cf__v_PERL_1 =
+V_SED = $(cf__v_SED_$(V))
+cf__v_SED_ = $(cf__v_SED_$(AM_DEFAULT_VERBOSITY))
+cf__v_SED_0 = @echo "  SED     " "$@";
+cf__v_SED_1 =
+
 
 #
 # Some basic clean ups
 #
+CLEANFILES = *.gcno *.gcda $(BUILT_SOURCES)
 MOSTLYCLEANFILES = *~ *.orig *.rej
-
-bootstrap.inc:
-	perl ./text2cstring.pl failsafe.cf > bootstrap.inc

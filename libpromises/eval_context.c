@@ -47,6 +47,32 @@
 #include <logging_priv.h>
 #include <known_dirs.h>
 #include <printsize.h>
+#include <map.h>
+#include <regex.h>
+
+
+/**
+   Define FuncCacheMap.
+   Key:   an Rlist (which is linked list of Rvals)
+          listing all the argument of the function
+   Value: an Rval, the result of the function
+ */
+
+static void RvalDestroy2(void *p)
+{
+    Rval *rv = p;
+    RvalDestroy(*rv);
+    free(rv);
+}
+
+TYPED_MAP_DECLARE(FuncCache, Rlist *, Rval *)
+
+TYPED_MAP_DEFINE(FuncCache, Rlist *, Rval *,
+                 RlistHash_untyped,
+                 RlistEqual_untyped,
+                 RlistDestroy_untyped,
+                 RvalDestroy2)
+
 
 static bool BundleAborted(const EvalContext *ctx);
 static void SetBundleAborted(EvalContext *ctx);
@@ -58,14 +84,22 @@ static bool EvalContextClassPut(EvalContext *ctx, const char *ns, const char *na
 static const char *EvalContextCurrentNamespace(const EvalContext *ctx);
 static ClassRef IDRefQualify(const EvalContext *ctx, const char *id);
 
-
+/**
+ * Every agent has only one EvalContext from process start to finish.
+ */
 struct EvalContext_
 {
+    /* TODO: a pointer to read-only version of config is often needed. */
+    /* const GenericAgentConfig *config; */
+
     int eval_options;
     bool bundle_aborted;
     bool checksum_updates_default;
     Item *ip_addresses;
     bool ignore_locks;
+
+    int pass;
+    Rlist *args;
 
     Item *heap_abort;
     Item *heap_abort_current_bundle;
@@ -79,7 +113,7 @@ struct EvalContext_
 
     StringSet *promise_lock_cache;
     StringSet *dependency_handles;
-    RBTree *function_cache;
+    FuncCacheMap *function_cache;
 
     uid_t uid;
     uid_t gid;
@@ -88,7 +122,89 @@ struct EvalContext_
 
     // Full path to directory that the binary was launched from.
     char *launch_directory;
+    
+    /* new package promise evaluation context */
+    PackagePromiseContext *package_promise_context;
 };
+
+
+void AddDefaultPackageModuleToContext(const EvalContext *ctx, char *name)
+{
+    assert(ctx);
+    assert(ctx->package_promise_context);
+    
+    free(ctx->package_promise_context->control_package_module);
+    ctx->package_promise_context->control_package_module =
+            SafeStringDuplicate(name);
+}
+
+void AddDefaultInventoryToContext(const EvalContext *ctx, Rlist *inventory)
+{
+    assert(ctx);
+    assert(ctx->package_promise_context);
+
+    RlistDestroy(ctx->package_promise_context->control_package_inventory);
+    ctx->package_promise_context->control_package_inventory =
+            RlistCopy(inventory);
+}
+
+static
+int PackageManagerSeqCompare(const void *a, const void *b, ARG_UNUSED void *data)
+{
+    return StringSafeCompare((char*)a, ((PackageModuleBody*)b)->name);
+}
+
+void AddPackageModuleToContext(const EvalContext *ctx, PackageModuleBody *pm)
+{
+    /* First check if the body is there added from previous pre-evaluation 
+     * iteration. If it is there update it as we can have new expanded variables. */
+    ssize_t pm_seq_index;
+    if ((pm_seq_index = SeqIndexOf(ctx->package_promise_context->package_modules_bodies, 
+            pm->name, PackageManagerSeqCompare)) != -1)
+    {
+        SeqRemove(ctx->package_promise_context->package_modules_bodies, pm_seq_index);
+    }
+    SeqAppend(ctx->package_promise_context->package_modules_bodies, pm);
+}
+
+PackageModuleBody *GetPackageModuleFromContext(const EvalContext *ctx,
+        const char *name)
+{
+    if (name == NULL || StringSafeEqual("cf_null", name))
+    {
+        return NULL;
+    }
+    
+    for (int i = 0;
+         i < SeqLength(ctx->package_promise_context->package_modules_bodies);
+         i++)
+    {
+        PackageModuleBody *pm =
+                SeqAt(ctx->package_promise_context->package_modules_bodies, i);
+        if (strcmp(name, pm->name) == 0)
+        {
+            return pm;
+        }
+    }
+    return NULL;
+}
+
+PackageModuleBody *GetDefaultPackageModuleFromContext(const EvalContext *ctx)
+{
+    char *def_pm_name = ctx->package_promise_context->control_package_module;
+    return GetPackageModuleFromContext(ctx, def_pm_name);
+}
+
+Rlist *GetDefaultInventoryFromContext(const EvalContext *ctx)
+{
+    return ctx->package_promise_context->control_package_inventory;
+}
+
+PackagePromiseContext *GetPackagePromiseContext(const EvalContext *ctx)
+{
+    return ctx->package_promise_context;
+}
+
 
 static StackFrame *LastStackFrame(const EvalContext *ctx, size_t offset)
 {
@@ -180,27 +296,14 @@ static LogLevel CalculateReportLevel(const Promise *pp)
     return report_level;
 }
 
-static char *LogHook(LoggingPrivContext *pctx, LogLevel level, const char *message)
+const char *EvalContextStackToString(EvalContext *ctx)
 {
-    const EvalContext *ctx = pctx->param;
-
     StackFrame *last_frame = LastStackFrame(ctx, 0);
     if (last_frame)
     {
-        if (last_frame->type == STACK_FRAME_TYPE_PROMISE_ITERATION)
-        {
-            if (level <= LOG_LEVEL_INFO)
-            {
-                RingBufferAppend(last_frame->data.promise_iteration.log_messages, xstrdup(message));
-            }
-        }
-
-        return StringConcatenate(3, last_frame->path, ": ", message);
+        return last_frame->path;
     }
-    else
-    {
-        return xstrdup(message);
-    }
+    return "";
 }
 
 static const char *GetAgentAbortingContext(const EvalContext *ctx)
@@ -443,7 +546,7 @@ void EvalContextHeapPersistentSave(EvalContext *ctx, const char *name, unsigned 
     CF_DB *dbp;
     if (!OpenDB(&dbp, dbid_state))
     {
-        char *db_path = DBIdToPath(GetWorkDir(), dbid_state);
+        char *db_path = DBIdToPath(dbid_state);
         Log(LOG_LEVEL_ERR, "While persisting class, unable to open database at '%s' (OpenDB: %s)",
             db_path, GetErrorStr());
         free(db_path);
@@ -475,7 +578,7 @@ void EvalContextHeapPersistentSave(EvalContext *ctx, const char *name, unsigned 
                     now < existing_info->expires &&
                     strcmp(existing_info->tags, new_info->tags) == 0)
                 {
-                    Log(LOG_LEVEL_VERBOSE, "Persisent class '%s' is already in a preserved state --  %jd minutes to go",
+                    Log(LOG_LEVEL_VERBOSE, "Persistent class '%s' is already in a preserved state --  %jd minutes to go",
                         key, (intmax_t)((existing_info->expires - now) / 60));
                     CloseDB(dbp);
                     free(key);
@@ -525,7 +628,7 @@ void EvalContextHeapPersistentLoadAll(EvalContext *ctx)
 {
     time_t now = time(NULL);
 
-    Banner("Loading persistent classes");
+    Log(LOG_LEVEL_VERBOSE, "Loading persistent classes");
 
     CF_DB *dbp;
     if (!OpenDB(&dbp, dbid_state))
@@ -561,6 +664,10 @@ void EvalContextHeapPersistentLoadAll(EvalContext *ctx)
             /* This is char pointer, it can point to unaligned data. */
             tags = ((PersistentClassInfo *) info_p)->tags;
         }
+        else
+        {
+            tags = "";                                          /* no tags */
+        }
 
         if (now > info.expires)
         {
@@ -587,8 +694,6 @@ void EvalContextHeapPersistentLoadAll(EvalContext *ctx)
 
     DeleteDBCursor(dbcp);
     CloseDB(dbp);
-
-    Banner("Loaded persistent memory");
 }
 
 bool Abort(EvalContext *ctx)
@@ -612,59 +717,6 @@ void SetBundleAborted(EvalContext *ctx)
     ctx->bundle_aborted = true;
 }
 
-bool VarClassExcluded(const EvalContext *ctx, const Promise *pp, char **classes)
-{
-    Constraint *cp = PromiseGetConstraint(pp, "ifvarclass");
-    if (!cp)
-    {
-        return false;
-    }
-
-    if (cp->rval.type == RVAL_TYPE_FNCALL)
-    {
-        return false;
-    }
-
-    *classes = PromiseGetConstraintAsRval(pp, "ifvarclass", RVAL_TYPE_SCALAR);
-
-    if (*classes == NULL)
-    {
-        return true;
-    }
-
-    if (strchr(*classes, '$') || strchr(*classes, '@'))
-    {
-        Log(LOG_LEVEL_DEBUG, "Class expression did not evaluate");
-        return true;
-    }
-
-    if (*classes && IsDefinedClass(ctx, *classes))
-    {
-        return false;
-    }
-    else
-    {
-        return true;
-    }
-}
-
-bool EvalContextPromiseIsActive(const EvalContext *ctx, const Promise *pp)
-{
-    if (!IsDefinedClass(ctx, pp->classes))
-    {
-        return false;
-    }
-    else
-    {
-        char *classes = NULL;
-        if (VarClassExcluded(ctx, pp, &classes))
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
 
 void EvalContextHeapAddAbort(EvalContext *ctx, const char *context, const char *activated_on_context)
 {
@@ -706,20 +758,8 @@ bool MissingDependencies(EvalContext *ctx, const Promise *pp)
 
         if (!StringSetContains(ctx->dependency_handles, RlistScalarValue(rp)))
         {
-            if (LEGACY_OUTPUT)
-            {
-                Log(LOG_LEVEL_VERBOSE, "\n");
-                Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
-                Log(LOG_LEVEL_VERBOSE, "Skipping whole next promise (%s), as promise dependency %s has not yet been kept",
+            Log(LOG_LEVEL_VERBOSE, "Skipping promise '%s', as promise dependency '%s' has not yet been kept",
                     pp->promiser, RlistScalarValue(rp));
-                Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
-            }
-            else
-            {
-                Log(LOG_LEVEL_VERBOSE, "Skipping next promise '%s', as promise dependency '%s' has not yet been kept",
-                    pp->promiser, RlistScalarValue(rp));
-            }
-
             return true;
         }
     }
@@ -783,54 +823,82 @@ static void StackFrameDestroy(StackFrame *frame)
     }
 }
 
+static
+void FreePackageManager(PackageModuleBody *manager)
+{
+    free(manager->name);
+    RlistDestroy(manager->options);
+    free(manager);
+}
+
+static
+PackagePromiseContext *PackagePromiseConfigNew()
+{
+    PackagePromiseContext *package_promise_defaults = 
+            xmalloc(sizeof(PackagePromiseContext));
+    package_promise_defaults->control_package_module = NULL;
+    package_promise_defaults->control_package_inventory = NULL;
+    package_promise_defaults->package_modules_bodies =
+            SeqNew(5, FreePackageManager);
+    
+    return package_promise_defaults;
+}
+
+static
+void FreePackagePromiseContext(PackagePromiseContext *pp_ctx)
+{
+    SeqDestroy(pp_ctx->package_modules_bodies);
+    RlistDestroy(pp_ctx->control_package_inventory);
+    free(pp_ctx);
+}
+
+/* Keeps the last 5 messages of each promise in a ring buffer in the
+ * EvalContext, which are written to a JSON file from the Enterprise function
+ * EvalContextLogPromiseIterationOutcome() at the end of each promise. */
+char *MissionPortalLogHook(LoggingPrivContext *pctx, LogLevel level, const char *message)
+{
+    const EvalContext *ctx = pctx->param;
+
+    StackFrame *last_frame = LastStackFrame(ctx, 0);
+    if (last_frame
+        && last_frame->type == STACK_FRAME_TYPE_PROMISE_ITERATION
+        && level <= LOG_LEVEL_INFO)
+    {
+        RingBufferAppend(last_frame->data.promise_iteration.log_messages, xstrdup(message));
+    }
+    return xstrdup(message);
+}
+
+ENTERPRISE_VOID_FUNC_1ARG_DEFINE_STUB(void, EvalContextSetupMissionPortalLogHook,
+                                      ARG_UNUSED EvalContext *, ctx)
+{
+}
+
 EvalContext *EvalContextNew(void)
 {
-    EvalContext *ctx = xmalloc(sizeof(EvalContext));
+    EvalContext *ctx = xcalloc(1, sizeof(EvalContext));
 
     ctx->eval_options = EVAL_OPTION_FULL;
-    ctx->bundle_aborted = false;
-    ctx->checksum_updates_default = false;
-    ctx->ip_addresses = NULL;
-    ctx->ignore_locks = false;
-
-    ctx->heap_abort = NULL;
-    ctx->heap_abort_current_bundle = NULL;
-
     ctx->stack = SeqNew(10, StackFrameDestroy);
-
     ctx->global_classes = ClassTableNew();
-
     ctx->global_variables = VariableTableNew();
     ctx->match_variables = VariableTableNew();
-
     ctx->dependency_handles = StringSetNew();
 
     ctx->uid = getuid();
     ctx->gid = getgid();
     ctx->pid = getpid();
 
-#ifdef __MINGW32__
-    ctx->ppid = 0;
-#else
+#ifndef __MINGW32__
     ctx->ppid = getppid();
 #endif
 
     ctx->promise_lock_cache = StringSetNew();
-    ctx->function_cache = RBTreeNew(NULL, NULL, NULL,
-                                    NULL, NULL, NULL);
+    ctx->function_cache = FuncCacheMapNew();
 
-    {
-        LoggingPrivContext *pctx = LoggingPrivGetContext();
-        assert(!pctx && "Logging context bound to something else");
+    EvalContextSetupMissionPortalLogHook(ctx);
 
-        pctx = xcalloc(1, sizeof(LoggingPrivContext));
-        pctx->param = ctx;
-        pctx->log_hook = &LogHook;
-
-        LoggingPrivSetContext(pctx);
-    }
-
-    ctx->launch_directory = NULL;
+    ctx->package_promise_context = PackagePromiseConfigNew();
 
     return ctx;
 }
@@ -852,6 +920,8 @@ void EvalContextDestroy(EvalContext *ctx)
         DeleteItemList(ctx->heap_abort);
         DeleteItemList(ctx->heap_abort_current_bundle);
 
+        RlistDestroy(ctx->args);
+
         SeqDestroy(ctx->stack);
 
         ClassTableDestroy(ctx->global_classes);
@@ -861,17 +931,9 @@ void EvalContextDestroy(EvalContext *ctx)
         StringSetDestroy(ctx->dependency_handles);
         StringSetDestroy(ctx->promise_lock_cache);
 
-        {
-            RBTreeIterator *it = RBTreeIteratorNew(ctx->function_cache);
-            Rval *rval = NULL;
-            while (RBTreeIteratorNext(it, NULL, (void **)&rval))
-            {
-                RvalDestroy(*rval);
-                free(rval);
-            }
-            RBTreeIteratorDestroy(it);
-            RBTreeDestroy(ctx->function_cache);
-        }
+        FuncCacheMapDestroy(ctx->function_cache);
+
+        FreePackagePromiseContext(ctx->package_promise_context);
 
         free(ctx);
     }
@@ -935,19 +997,32 @@ void EvalContextClear(EvalContext *ctx)
     VariableTableClear(ctx->match_variables, NULL, NULL, NULL);
     StringSetClear(ctx->promise_lock_cache);
     SeqClear(ctx->stack);
+    FuncCacheMapClear(ctx->function_cache);
+}
 
+void EvalContextSetBundleArgs(EvalContext *ctx, const Rlist *args)
+{
+    if (ctx->args)
     {
-        RBTreeIterator *it = RBTreeIteratorNew(ctx->function_cache);
-        Rval *rval = NULL;
-        while (RBTreeIteratorNext(it, NULL, (void **)&rval))
-        {
-            RvalDestroy(*rval);
-            free(rval);
-        }
-        RBTreeIteratorDestroy(it);
-        RBTreeClear(ctx->function_cache);
+        RlistDestroy(ctx->args);
     }
 
+    ctx->args = RlistCopy(args);
+}
+
+Rlist *EvalContextGetBundleArgs(EvalContext *ctx)
+{
+    return (Rlist *) ctx->args;
+}
+
+void EvalContextSetPass(EvalContext *ctx, int pass)
+{
+    ctx->pass = pass;
+}
+
+int EvalContextGetPass(EvalContext *ctx)
+{
+    return ctx->pass;
 }
 
 static StackFrame *StackFrameNew(StackFrameType type, bool inherit_previous)
@@ -1184,7 +1259,7 @@ Promise *EvalContextStackPushPromiseIterationFrame(EvalContext *ctx, size_t iter
 
     bool excluded = false;
     Promise *pexp = ExpandDeRefPromise(ctx, LastStackFrame(ctx, 0)->data.promise.owner, &excluded);
-    if (excluded)
+    if (excluded || !pexp)
     {
         PromiseDestroy(pexp);
         return NULL;
@@ -1289,7 +1364,18 @@ static bool EvalContextClassPut(EvalContext *ctx, const char *ns, const char *na
         char context_copy[CF_MAXVARSIZE];
         char canonified_context[CF_MAXVARSIZE];
 
-        strcpy(canonified_context, name);
+
+        /* Redmine #7013
+         * Fix for classes names longer than CF_MAXVARSIZE. */
+        if (strlen(name) >= sizeof(canonified_context))
+        {
+            Log(LOG_LEVEL_WARNING, "Skipping adding class [%s] as its name "
+                "is equal or longer than %zu", name, sizeof(canonified_context));
+            return false;
+        }
+        
+        strlcpy(canonified_context, name, sizeof(canonified_context));
+        
         if (Chop(canonified_context, CF_EXPANDSIZE) == -1)
         {
             Log(LOG_LEVEL_ERR, "Chop was called on a string that seemed to have no terminator");
@@ -1395,7 +1481,19 @@ bool EvalContextClassPutHard(EvalContext *ctx, const char *name, const char *tag
 
 bool EvalContextClassPutSoft(EvalContext *ctx, const char *name, ContextScope scope, const char *tags)
 {
-    return EvalContextClassPut(ctx, EvalContextCurrentNamespace(ctx), name, true, scope, tags);
+    bool ret;
+    char *ns = NULL;
+    char *delim = strchr(name, ':');
+
+    if (delim)
+    {
+        ns = xstrndup(name, delim - name);
+    }
+
+    ret = EvalContextClassPut(ctx, ns ? ns : EvalContextCurrentNamespace(ctx),
+                              ns ? delim + 1 : name, true, scope, tags);
+    free(ns);
+    return ret;
 }
 
 
@@ -1464,23 +1562,7 @@ char *EvalContextStackPath(const EvalContext *ctx)
         case STACK_FRAME_TYPE_PROMISE_ITERATION:
             BufferAppendChar(path, '/');
             BufferAppendChar(path, '\'');
-            for (const char *ch = frame->data.promise_iteration.owner->promiser; *ch != '\0'; ch++)
-            {
-                switch (*ch)
-                {
-                case '*':
-                    BufferAppendChar(path, ':');
-                    break;
-
-                case '#':
-                    BufferAppendChar(path, '.');
-                    break;
-
-                default:
-                    BufferAppendChar(path, *ch);
-                    break;
-                }
-            }
+            BufferAppendAbbreviatedStr(path, frame->data.promise_iteration.owner->promiser, CF_MAXFRAGMENT);
             BufferAppendChar(path, '\'');
             if (i == SeqLength(ctx->stack) - 1)
             {
@@ -1540,6 +1622,9 @@ StringSet *EvalContextStackPromisees(const EvalContext *ctx)
     return promisees;
 }
 
+/*
+ * Copies value, so you need to free your own copy afterwards.
+ */
 bool EvalContextVariablePutSpecial(EvalContext *ctx, SpecialScope scope, const char *lval, const void *value, DataType type, const char *tags)
 {
     if (strchr(lval, '['))
@@ -1595,6 +1680,7 @@ static VariableTable *GetVariableTableForScope(const EvalContext *ctx,
     switch (SpecialScopeFromString(scope))
     {
     case SPECIAL_SCOPE_SYS:
+    case SPECIAL_SCOPE_DEF:
     case SPECIAL_SCOPE_MON:
     case SPECIAL_SCOPE_CONST:
         assert(!ns || strcmp("default", ns) == 0);
@@ -1714,6 +1800,9 @@ static void VarRefStackQualify(const EvalContext *ctx, VarRef *ref)
     }
 }
 
+/*
+ * Copies value, so you need to free your own copy afterwards.
+ */
 bool EvalContextVariablePut(EvalContext *ctx,
                             const VarRef *ref, const void *value,
                             DataType type, const char *tags)
@@ -1865,11 +1954,7 @@ StringSet *EvalContextClassTags(const EvalContext *ctx, const char *ns, const ch
         return NULL;
     }
 
-    if (!cls->tags)
-    {
-        cls->tags = StringSetNew();
-    }
-
+    assert(cls->tags != NULL);
     return cls->tags;
 }
 
@@ -1881,11 +1966,7 @@ StringSet *EvalContextVariableTags(const EvalContext *ctx, const VarRef *ref)
         return NULL;
     }
 
-    if (!var->tags)
-    {
-        var->tags = StringSetNew();
-    }
-
+    assert(var->tags != NULL);
     return var->tags;
 }
 
@@ -1900,12 +1981,17 @@ VariableTableIterator *EvalContextVariableTableIteratorNew(const EvalContext *ct
     return table ? VariableTableIteratorNew(table, ns, scope, lval) : NULL;
 }
 
+
+VariableTableIterator *EvalContextVariableTableFromRefIteratorNew(const EvalContext *ctx, const VarRef *ref)
+{
+    assert(ref);
+    VariableTable *table = ref->scope ? GetVariableTableForScope(ctx, ref->ns, ref->scope) : ctx->global_variables;
+    return table ? VariableTableIteratorNewFromVarRef(table, ref) : NULL;
+}
+
 const void *EvalContextVariableControlCommonGet(const EvalContext *ctx, CommonControl lval)
 {
-    if (lval >= COMMON_CONTROL_MAX)
-    {
-        return NULL;
-    }
+    assert(lval >= 0 && lval < COMMON_CONTROL_MAX);
 
     VarRef *ref = VarRefParseFromScope(CFG_CONTROLBODY[lval].lval, "control_common");
     const void *ret = EvalContextVariableGet(ctx, ref, NULL);
@@ -1991,15 +2077,21 @@ void EvalContextPromiseLockCachePut(EvalContext *ctx, const char *key)
     StringSetAdd(ctx->promise_lock_cache, xstrdup(key));
 }
 
-bool EvalContextFunctionCacheGet(const EvalContext *ctx, const FnCall *fp, const Rlist *args, Rval *rval_out)
+void EvalContextPromiseLockCacheRemove(EvalContext *ctx, const char *key)
+{
+    StringSetRemove(ctx->promise_lock_cache, key);
+}
+
+bool EvalContextFunctionCacheGet(const EvalContext *ctx,
+                                 const FnCall *fp ARG_UNUSED,
+                                 const Rlist *args, Rval *rval_out)
 {
     if (!(ctx->eval_options & EVAL_OPTION_CACHE_SYSTEM_FUNCTIONS))
     {
         return false;
     }
 
-    size_t hash = RlistHash(args, FnCallHash(fp, 0, INT_MAX), INT_MAX);
-    Rval *rval = RBTreeGet(ctx->function_cache, (void*)hash);
+    Rval *rval = FuncCacheMapGet(ctx->function_cache, args);
     if (rval)
     {
         if (rval_out)
@@ -2014,17 +2106,18 @@ bool EvalContextFunctionCacheGet(const EvalContext *ctx, const FnCall *fp, const
     }
 }
 
-void EvalContextFunctionCachePut(EvalContext *ctx, const FnCall *fp, const Rlist *args, const Rval *rval)
+void EvalContextFunctionCachePut(EvalContext *ctx,
+                                 const FnCall *fp ARG_UNUSED,
+                                 const Rlist *args, const Rval *rval)
 {
     if (!(ctx->eval_options & EVAL_OPTION_CACHE_SYSTEM_FUNCTIONS))
     {
         return;
     }
 
-    size_t hash = RlistHash(args, FnCallHash(fp, 0, INT_MAX), INT_MAX);
     Rval *rval_copy = xmalloc(sizeof(Rval));
     *rval_copy = RvalCopy(*rval);
-    RBTreePut(ctx->function_cache, (void*)hash, rval_copy);
+    FuncCacheMapInsert(ctx->function_cache, RlistCopy(args), rval_copy);
 }
 
 /* cfPS and associated machinery */
@@ -2064,6 +2157,12 @@ static bool IsPromiseValuableForLogging(const Promise *pp)
 static void AddAllClasses(EvalContext *ctx, const Rlist *list, unsigned int persistence_ttl,
                           PersistentClassPolicy policy, ContextScope context_scope)
 {
+
+    if (list)
+    {
+        Log(LOG_LEVEL_VERBOSE, "\n");
+    }
+
     for (const Rlist *rp = list; rp != NULL; rp = rp->next)
     {
         char *classname = xstrdup(RlistScalarValue(rp));
@@ -2087,13 +2186,13 @@ static void AddAllClasses(EvalContext *ctx, const Rlist *list, unsigned int pers
                 Log(LOG_LEVEL_INFO, "Automatically promoting context scope for '%s' to namespace visibility, due to persistence", classname);
             }
 
-            Log(LOG_LEVEL_VERBOSE, "Defining persistent promise result class '%s'", classname);
+            Log(LOG_LEVEL_VERBOSE, "C:    + persistent outcome class '%s'", classname);
             EvalContextHeapPersistentSave(ctx, classname, persistence_ttl, policy, "");
             EvalContextClassPutSoft(ctx, classname, CONTEXT_SCOPE_NAMESPACE, "");
         }
         else
         {
-            Log(LOG_LEVEL_VERBOSE, "Defining promise result class '%s'", classname);
+            Log(LOG_LEVEL_VERBOSE, "C:    + promise outcome class '%s'", classname);
 
             switch (context_scope)
             {
@@ -2113,6 +2212,12 @@ static void AddAllClasses(EvalContext *ctx, const Rlist *list, unsigned int pers
         }
         free(classname);
     }
+
+    if (list)
+    {
+        Log(LOG_LEVEL_VERBOSE, "\n");
+    }
+
 }
 
 static void DeleteAllClasses(EvalContext *ctx, const Rlist *list)
@@ -2189,40 +2294,6 @@ static void SetPromiseOutcomeClasses(EvalContext *ctx, PromiseResult status, Def
 
     AddAllClasses(ctx, add_classes, dc.persist, dc.timer, dc.scope);
     DeleteAllClasses(ctx, del_classes);
-}
-
-static void UpdatePromiseComplianceStatus(PromiseResult status, const Promise *pp, const char *reason)
-{
-    if (!IsPromiseValuableForLogging(pp))
-    {
-        return;
-    }
-
-    char compliance_status;
-
-    switch (status)
-    {
-    case PROMISE_RESULT_CHANGE:
-        compliance_status = PROMISE_STATE_REPAIRED;
-        break;
-
-    case PROMISE_RESULT_WARN:
-    case PROMISE_RESULT_TIMEOUT:
-    case PROMISE_RESULT_FAIL:
-    case PROMISE_RESULT_DENIED:
-    case PROMISE_RESULT_INTERRUPTED:
-        compliance_status = PROMISE_STATE_NOTKEPT;
-        break;
-
-    case PROMISE_RESULT_NOOP:
-        compliance_status = PROMISE_STATE_ANY;
-        break;
-
-    default:
-        ProgrammingError("Unknown status '%c' has been passed to UpdatePromiseComplianceStatus", status);
-    }
-
-    NotePromiseCompliance(pp, compliance_status, reason);
 }
 
 static void SummarizeTransaction(EvalContext *ctx, TransactionContext tc, const char *logname)
@@ -2428,7 +2499,6 @@ void cfPS(EvalContext *ctx, LogLevel level, PromiseResult status, const Promise 
     /* Now complete the exits status classes and auditing */
 
     ClassAuditLog(ctx, pp, attr, status);
-    UpdatePromiseComplianceStatus(status, pp, msg);
     free(msg);
 }
 
@@ -2489,4 +2559,128 @@ void EvalContextSetIgnoreLocks(EvalContext *ctx, bool ignore)
 bool EvalContextIsIgnoringLocks(const EvalContext *ctx)
 {
     return ctx->ignore_locks;
+}
+
+StringSet *ClassesMatching(const EvalContext *ctx, ClassTableIterator *iter, const char* regex, const Rlist *tags, bool first_only)
+{
+    StringSet *matching = StringSetNew();
+
+    pcre *rx = CompileRegex(regex);
+
+    Class *cls;
+    while ((cls = ClassTableIteratorNext(iter)))
+    {
+        char *expr = ClassRefToString(cls->ns, cls->name);
+
+        /* FIXME: review this strcmp. Moved out from StringMatch */
+        if (!strcmp(regex, expr) ||
+            (rx && StringMatchFullWithPrecompiledRegex(rx, expr)))
+        {
+            bool pass = false;
+            StringSet *tagset = EvalContextClassTags(ctx, cls->ns, cls->name);
+
+            if (tags)
+            {
+                for (const Rlist *arg = tags; arg; arg = arg->next)
+                {
+                    const char *tag_regex = RlistScalarValue(arg);
+                    const char *element;
+                    StringSetIterator it = StringSetIteratorInit(tagset);
+                    while ((element = StringSetIteratorNext(&it)))
+                    {
+                        /* FIXME: review this strcmp. Moved out from StringMatch */
+                        if (strcmp(tag_regex, element) == 0 ||
+                            StringMatchFull(tag_regex, element))
+                        {
+                            pass = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            else                        // without any tags queried, accept class
+            {
+                pass = true;
+            }
+
+            if (pass)
+            {
+                StringSetAdd(matching, expr);
+            }
+            else
+            {
+                free(expr);
+            }
+        }
+        else
+        {
+            free(expr);
+        }
+
+        if (first_only && StringSetSize(matching) > 0)
+        {
+            break;
+        }
+    }
+
+    if (rx)
+    {
+        pcre_free(rx);
+    }
+
+    return matching;
+}
+
+JsonElement* JsonExpandElement(EvalContext *ctx, const JsonElement *source)
+{
+    if (JsonGetElementType(source) == JSON_ELEMENT_TYPE_PRIMITIVE)
+    {
+        Buffer *expbuf;
+        JsonElement *expanded_json;
+
+        switch (JsonGetPrimitiveType(source))
+        {
+        case JSON_PRIMITIVE_TYPE_STRING:
+            expbuf = BufferNew();
+            ExpandScalar(ctx, NULL, "this", JsonPrimitiveGetAsString(source), expbuf);
+            expanded_json = JsonStringCreate(BufferData(expbuf));
+            BufferDestroy(expbuf);
+            return expanded_json;
+            break;
+
+        default:
+            return JsonCopy(source);
+            break;
+        }
+    }
+    else if (JsonGetElementType(source) == JSON_ELEMENT_TYPE_CONTAINER)
+    {
+        if (JsonGetContainerType(source) == JSON_CONTAINER_TYPE_OBJECT)
+        {
+            JsonElement *dest = JsonObjectCreate(JsonLength(source));
+            JsonIterator iter = JsonIteratorInit(source);
+            const char *key;
+            while ((key = JsonIteratorNextKey(&iter)))
+            {
+                Buffer *expbuf = BufferNew();
+                ExpandScalar(ctx, NULL, "this", key, expbuf);
+                JsonObjectAppendElement(dest, BufferData(expbuf), JsonExpandElement(ctx, JsonObjectGet(source, key)));
+                BufferDestroy(expbuf);
+            }
+
+            return dest;
+        }
+        else
+        {
+            JsonElement *dest = JsonArrayCreate(JsonLength(source));
+            for (size_t i = 0; i < JsonLength(source); i++)
+            {
+                JsonArrayAppendElement(dest, JsonExpandElement(ctx, JsonArrayGet(source, i)));
+            }
+            return dest;
+        }
+    }
+
+    ProgrammingError("JsonExpandElement: unexpected container type");
+    return NULL;
 }

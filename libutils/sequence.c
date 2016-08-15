@@ -115,7 +115,6 @@ void SeqAppendSeq(Seq *seq, const Seq *items)
 void SeqRemoveRange(Seq *seq, size_t start, size_t end)
 {
     assert(seq);
-    assert(start >= 0);
     assert(end < seq->length);
     assert(start <= end);
 
@@ -219,8 +218,6 @@ static void Swap(void **l, void **r)
 // adopted from http://rosettacode.org/wiki/Sorting_algorithms/Quicksort#C
 static void QuickSortRecursive(void **data, int n, SeqItemComparator Compare, void *user_data, size_t maxterm)
 {
-    assert(maxterm < 1000);
-
     if (n < 2)
     {
         return;
@@ -273,7 +270,6 @@ Seq *SeqSoftSort(const Seq *seq, SeqItemComparator compare, void *user_data)
 void SeqSoftRemoveRange(Seq *seq, size_t start, size_t end)
 {
     assert(seq);
-    assert(start >= 0);
     assert(end < seq->length);
     assert(start <= end);
 
@@ -349,4 +345,46 @@ Seq *SeqGetRange(const Seq *seq, size_t start, size_t end)
     }
 
     return sub;
+}
+
+void SeqStringAddSplit(Seq *seq, const char *str, char delimiter)
+{
+    if (str) // TODO: remove this inconsistency, add assert(str)
+    {
+        const char *prev = str;
+        const char *cur = str;
+
+        while (*cur != '\0')
+        {
+            if (*cur == delimiter)
+            {
+                size_t len = cur - prev;
+                if (len > 0)
+                {
+                    SeqAppend(seq, xstrndup(prev, len));
+                }
+                else
+                {
+                    SeqAppend(seq, xstrdup(""));
+                }
+                prev = cur + 1;
+            }
+
+            cur++;
+        }
+
+        if (cur > prev)
+        {
+            SeqAppend(seq, xstrndup(prev, cur - prev));
+        }
+    }
+}
+
+Seq *SeqStringFromString(const char *str, char delimiter)
+{
+    Seq *seq = SeqNew(10, &free);
+
+    SeqStringAddSplit(seq, str, delimiter);
+
+    return seq;
 }

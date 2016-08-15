@@ -37,9 +37,19 @@
 #include <regex.h>                                       /* StringMatchFull */
 
 
-static int EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *pp);
-static bool ValidClassName(const char *str);
+static bool EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *pp);
 
+static bool ValidClassName(const char *str)
+{
+    ParseResult res = ParseExpression(str, 0, strlen(str));
+
+    if (res.result)
+    {
+        FreeExpression(res.result);
+    }
+
+    return res.result && res.position == strlen(str);
+}
 
 PromiseResult VerifyClassPromise(EvalContext *ctx, const Promise *pp, ARG_UNUSED void *param)
 {
@@ -98,19 +108,18 @@ PromiseResult VerifyClassPromise(EvalContext *ctx, const Promise *pp, ARG_UNUSED
                 (a.context.scope == CONTEXT_SCOPE_NONE &&
                  0 == strcmp(PromiseGetBundle(pp)->type, "common")))
             {
-                Log(LOG_LEVEL_VERBOSE, "Adding global class '%s'", pp->promiser);
+                Log(LOG_LEVEL_VERBOSE, "C:     +  Global class: %s ", pp->promiser);
                 EvalContextClassPutSoft(ctx, pp->promiser, CONTEXT_SCOPE_NAMESPACE, tags);
             }
             else
             {
-                Log(LOG_LEVEL_VERBOSE, "Adding local bundle class '%s'", pp->promiser);
+                Log(LOG_LEVEL_VERBOSE, "C:     +  Private class: %s ", pp->promiser);
                 EvalContextClassPutSoft(ctx, pp->promiser, CONTEXT_SCOPE_BUNDLE, tags);
             }
 
             if (a.context.persistent > 0)
             {
-                Log(LOG_LEVEL_VERBOSE, "Adding persistent class '%s'. (%d minutes)", pp->promiser,
-                      a.context.persistent);
+                Log(LOG_LEVEL_VERBOSE, "C:     +  Persistent class: '%s'. (%d minutes)", pp->promiser, a.context.persistent);
                 EvalContextHeapPersistentSave(ctx, pp->promiser, a.context.persistent,
                                               CONTEXT_STATE_POLICY_RESET, tags);
             }
@@ -124,20 +133,165 @@ PromiseResult VerifyClassPromise(EvalContext *ctx, const Promise *pp, ARG_UNUSED
     return PROMISE_RESULT_NOOP;
 }
 
-static int EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *pp)
+static bool SelectClass(EvalContext *ctx, const Rlist *list, const Promise *pp)
+{
+    int count = 0;
+    for (const Rlist *rp = list; rp != NULL; rp = rp->next)
+    {
+        count++;
+    }
+
+    /* At least in some cases we will have cf_null once list is empty. */
+    if (count == 0 ||
+        (count == 1 && strcmp(RlistScalarValue(list), "cf_null") == 0))
+    {
+        Log(LOG_LEVEL_ERR, "No classes to select on RHS");
+        PromiseRef(LOG_LEVEL_ERR, pp);
+        return false;
+    }
+    else if (count == 1 && IsVarList(RlistScalarValue(list)))
+    {
+        Log(LOG_LEVEL_VERBOSE,
+            "select_class: Can not expand list '%s' for setting class.",
+            RlistScalarValue(list));
+        PromiseRef(LOG_LEVEL_VERBOSE, pp);
+        return false;
+    }
+    
+    assert(list);
+
+    char splay[CF_MAXVARSIZE];
+    snprintf(splay, CF_MAXVARSIZE, "%s+%s+%ju",
+             VFQNAME, VIPADDRESS, (uintmax_t)getuid());
+    double hash = (double) StringHash(splay, 0, CF_HASHTABLESIZE);
+    assert(hash < CF_HASHTABLESIZE);
+    int n = (int) (count * hash / (double) CF_HASHTABLESIZE);
+    assert(n < count);
+
+    while (n > 0 && list->next != NULL)
+    {
+        n--;
+        list = list->next;
+    }
+    
+    /* We are not having expanded variable or list at this point,
+     * so we can not set select_class. */
+    if (IsExpandable(RlistScalarValue(list)))
+    {
+        Log(LOG_LEVEL_VERBOSE,
+            "select_class: Can not use not expanded element '%s' for setting class.",
+            RlistScalarValue(list));
+        PromiseRef(LOG_LEVEL_VERBOSE, pp);
+        return false;
+    }
+
+    EvalContextClassPutSoft(ctx, RlistScalarValue(list),
+                            CONTEXT_SCOPE_NAMESPACE, "source=promise");
+    return true;
+}
+
+static bool DistributeClass(EvalContext *ctx, const Rlist *dist, const Promise *pp)
+{
+    int total = 0;
+    const Rlist *rp;
+
+    for (rp = dist; rp != NULL; rp = rp->next)
+    {
+        int result = IntFromString(RlistScalarValue(rp));
+
+        if (result < 0)
+        {
+            Log(LOG_LEVEL_ERR, "Negative integer in class distribution");
+            PromiseRef(LOG_LEVEL_ERR, pp);
+            return false;
+        }
+
+        total += result;
+    }
+
+    if (total == 0)
+    {
+        Log(LOG_LEVEL_ERR, "An empty distribution was specified on RHS");
+        PromiseRef(LOG_LEVEL_ERR, pp);
+        return false;
+    }
+
+    double fluct = drand48() * total;
+    assert(0 <= fluct && fluct < total);
+
+    for (rp = dist; rp != NULL; rp = rp->next)
+    {
+        fluct -= IntFromString(RlistScalarValue(rp));
+        if (fluct < 0)
+        {
+            break;
+        }
+    }
+    assert(rp);
+
+    char buffer[CF_MAXVARSIZE];
+    snprintf(buffer, CF_MAXVARSIZE, "%s_%s", pp->promiser, RlistScalarValue(rp));
+
+    if (strcmp(PromiseGetBundle(pp)->type, "common") == 0)
+    {
+        EvalContextClassPutSoft(ctx, buffer, CONTEXT_SCOPE_NAMESPACE,
+                                "source=promise");
+    }
+    else
+    {
+        EvalContextClassPutSoft(ctx, buffer, CONTEXT_SCOPE_BUNDLE,
+                                "source=promise");
+    }
+
+    return true;
+}
+
+enum combine_t { c_or, c_and, c_xor }; // Class combinations
+static bool EvalBoolCombination(EvalContext *ctx, const Rlist *list,
+                                enum combine_t logic)
+{
+    bool result = (logic == c_and);
+
+    for (const Rlist *rp = list; rp != NULL; rp = rp->next)
+    {
+        // tolerate unexpanded entries here and interpret as "class not set"
+        bool here = (rp->val.type == RVAL_TYPE_SCALAR &&
+                     IsDefinedClass(ctx, RlistScalarValue(rp)));
+
+        // shortcut "and" and "or"
+        switch (logic)
+        {
+        case c_or:
+            if (here)
+            {
+                return true;
+            }
+            break;
+
+        case c_and:
+            if (!here)
+            {
+                return false;
+            }
+            break;
+
+        default:
+            result ^= here;
+            break;
+        }
+    }
+
+    return result;
+}
+
+static bool EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *pp)
 {
     assert(pp);
 
-    int result_and = true;
-    int result_or = false;
-    int result_xor = 0;
-    int result = 0, total = 0;
-    char buffer[CF_MAXVARSIZE];
-    Rlist *rp;
-
     if (cp == NULL) // ProgrammingError ?  We'll crash RSN anyway ...
     {
-        Log(LOG_LEVEL_ERR, "EvalClassExpression internal diagnostic discovered an ill-formed condition");
+        Log(LOG_LEVEL_ERR,
+            "EvalClassExpression internal diagnostic discovered an ill-formed condition");
     }
 
     if (!IsDefinedClass(ctx, pp->classes))
@@ -149,7 +303,9 @@ static int EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *
     {
         if (PromiseGetConstraintAsInt(ctx, "persistence", pp) == 0)
         {
-            Log(LOG_LEVEL_VERBOSE, " ?> Cancelling cached persistent class %s", pp->promiser);
+            Log(LOG_LEVEL_VERBOSE,
+                " ?> Cancelling cached persistent class %s",
+                pp->promiser);
             EvalContextHeapPersistentRemove(pp->promiser);
         }
         return false;
@@ -170,9 +326,10 @@ static int EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *
         break;
 
     case RVAL_TYPE_LIST:
-        for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
+        for (Rlist *rp = cp->rval.item; rp != NULL; rp = rp->next)
         {
-            rval = EvaluateFinalRval(ctx, PromiseGetPolicy(pp), NULL, "this", rp->val, true, pp);
+            rval = EvaluateFinalRval(ctx, PromiseGetPolicy(pp), NULL,
+                                     "this", rp->val, true, pp);
             RvalDestroy(rp->val);
             rp->val = rval;
         }
@@ -197,44 +354,7 @@ static int EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *
                 !IsDefinedClass(ctx, RvalScalarValue(cp->rval)));
     }
 
-// Class selection
-
-    if (strcmp(cp->lval, "select_class") == 0)
-    {
-        char splay[CF_MAXVARSIZE];
-        int i, n;
-        double hash;
-
-        total = 0;
-
-        for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
-        {
-            total++;
-        }
-
-        if (total == 0)
-        {
-            Log(LOG_LEVEL_ERR, "No classes to select on RHS");
-            PromiseRef(LOG_LEVEL_ERR, pp);
-            return false;
-        }
-
-        snprintf(splay, CF_MAXVARSIZE, "%s+%s+%ju", VFQNAME, VIPADDRESS, (uintmax_t)getuid());
-        hash = (double) StringHash(splay, 0, CF_HASHTABLESIZE);
-        n = (int) (total * hash / (double) CF_HASHTABLESIZE);
-
-        for (rp = (Rlist *) cp->rval.item, i = 0; rp != NULL; rp = rp->next, i++)
-        {
-            if (i == n)
-            {
-                EvalContextClassPutSoft(ctx, RlistScalarValue(rp), CONTEXT_SCOPE_NAMESPACE, "source=promise");
-                return true;
-            }
-        }
-    }
-
-/* If we get here, anything remaining on the RHS must be a clist */
-
+    /* If we get here, anything remaining on the RHS must be a clist */
     if (cp->rval.type != RVAL_TYPE_LIST)
     {
         Log(LOG_LEVEL_ERR, "RHS of promise body attribute '%s' is not a list", cp->lval);
@@ -242,103 +362,31 @@ static int EvalClassExpression(EvalContext *ctx, Constraint *cp, const Promise *
         return true;
     }
 
-// Class distributions
+    // Class selection
+    if (strcmp(cp->lval, "select_class") == 0)
+    {
+        return SelectClass(ctx, cp->rval.item, pp);
+    }
 
+    // Class distributions
     if (strcmp(cp->lval, "dist") == 0)
     {
-        for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
-        {
-            result = IntFromString(RlistScalarValue(rp));
-
-            if (result < 0)
-            {
-                Log(LOG_LEVEL_ERR, "Non-positive integer in class distribution");
-                PromiseRef(LOG_LEVEL_ERR, pp);
-                return false;
-            }
-
-            total += result;
-        }
-
-        if (total == 0)
-        {
-            Log(LOG_LEVEL_ERR, "An empty distribution was specified on RHS");
-            PromiseRef(LOG_LEVEL_ERR, pp);
-            return false;
-        }
-
-        double fluct = drand48();
-        double cum = 0.0;
-
-        for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
-        {
-            double prob = ((double) IntFromString(RlistScalarValue(rp))) / ((double) total);
-            cum += prob;
-
-            if (fluct < cum)
-            {
-                break;
-            }
-        }
-
-        snprintf(buffer, CF_MAXVARSIZE - 1, "%s_%s", pp->promiser, RlistScalarValue(rp));
-
-        if (strcmp(PromiseGetBundle(pp)->type, "common") == 0)
-        {
-            EvalContextClassPutSoft(ctx, buffer, CONTEXT_SCOPE_NAMESPACE, "source=promise");
-        }
-        else
-        {
-            EvalContextClassPutSoft(ctx, buffer, CONTEXT_SCOPE_BUNDLE, "source=promise");
-        }
-
-        return true;
+        return DistributeClass(ctx, cp->rval.item, pp);
     }
 
-    /* and/or/xor expressions */
-
-    for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
-    {
-        if (rp->val.type != RVAL_TYPE_SCALAR)
-        {
-            return false;
-        }
-
-        result = IsDefinedClass(ctx, RlistScalarValue(rp));
-
-        result_and = result_and && result;
-        result_or = result_or || result;
-        result_xor ^= result;
-    }
-
-// Class combinations
-
+    /* Combine with and/or/xor: */
     if (strcmp(cp->lval, "or") == 0)
     {
-        return result_or;
+        return EvalBoolCombination(ctx, cp->rval.item, c_or);
     }
-
-    if (strcmp(cp->lval, "xor") == 0)
+    else if (strcmp(cp->lval, "and") == 0)
     {
-        return (result_xor == 1) ? true : false;
+        return EvalBoolCombination(ctx, cp->rval.item, c_and);
     }
-
-    if (strcmp(cp->lval, "and") == 0)
+    else if (strcmp(cp->lval, "xor") == 0)
     {
-        return result_and;
+        return EvalBoolCombination(ctx, cp->rval.item, c_xor);
     }
 
     return false;
-}
-
-static bool ValidClassName(const char *str)
-{
-    ParseResult res = ParseExpression(str, 0, strlen(str));
-
-    if (res.result)
-    {
-        FreeExpression(res.result);
-    }
-
-    return res.result && res.position == strlen(str);
 }

@@ -28,7 +28,7 @@
 #include <cf3.defs.h>
 
 int IsRegex(const char *str); /* Pure */
-int IsRegexItemIn(EvalContext *ctx, const Item *list, const char *regex); /* Uses context */
+int IsRegexItemIn(const EvalContext *ctx, const Item *list, const char *regex); /* Uses context */
 
 char *ExtractFirstReference(const char *regexp, const char *teststring); /* Pure, not thread-safe */
 
@@ -36,6 +36,7 @@ int IsPathRegex(const char *str); /* Pure */
 bool HasRegexMetaChars(const char *string);
 void EscapeRegexChars(char *str, char *strEsc, int strEscSz); /* Pure */
 void EscapeSpecialChars(const char *str, char *strEsc, int strEscSz, char *noEscseq, char *noEsclist); /* Pure */
+size_t EscapeRegexCharsLen(const char *str); /* Pure */
 char *EscapeChar(char *str, int strSz, char esc); /* Pure */
 void AnchorRegex(const char *regex, char *out, int outSz); /* Pure */
 

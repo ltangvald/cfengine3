@@ -57,14 +57,27 @@ PromiseResult VerifyMethodsPromise(EvalContext *ctx, const Promise *pp)
 {
     Attributes a = GetMethodAttributes(ctx, pp);
 
-    const Constraint *cp = PromiseGetConstraint(pp, "usebundle");
-    if (!cp)
+    const Constraint *cp;
+    Rval method_name;
+    bool destroy_name;
+
+    if ((cp = PromiseGetConstraint(pp, "usebundle")))
     {
-        Log(LOG_LEVEL_VERBOSE, "Promise had no attribute 'usebundle', cannot call method");
-        return PROMISE_RESULT_FAIL;
+        method_name = cp->rval;
+        destroy_name = false;
+    }
+    else
+    {
+        method_name = RvalNew(pp->promiser, RVAL_TYPE_SCALAR);
+        destroy_name = true;
     }
 
-    PromiseResult result = VerifyMethod(ctx, cp->rval, a, pp);
+    PromiseResult result = VerifyMethod(ctx, method_name, a, pp);
+
+    if (destroy_name)
+    {
+        RvalDestroy(method_name);
+    }
 
     return result;
 }
@@ -73,27 +86,40 @@ PromiseResult VerifyMethodsPromise(EvalContext *ctx, const Promise *pp)
 
 PromiseResult VerifyMethod(EvalContext *ctx, const Rval call, Attributes a, const Promise *pp)
 {
-    assert(a.havebundle);
-
     const Rlist *args = NULL;
     Buffer *method_name = BufferNew();
     switch (call.type)
     {
     case RVAL_TYPE_FNCALL:
+    {
+        const FnCall *fp = RvalFnCallValue(call);
+        ExpandScalar(ctx, PromiseGetBundle(pp)->ns, PromiseGetBundle(pp)->name, fp->name, method_name);
+        args = fp->args;
+        int arg_index = 0;
+        while (args)
         {
-            const FnCall *fp = RvalFnCallValue(call);
-            ExpandScalar(ctx, PromiseGetBundle(pp)->ns, PromiseGetBundle(pp)->name, fp->name, method_name);
-            args = fp->args;
+           ++arg_index;
+           if (strcmp(args->val.item, CF_NULL_VALUE) == 0)
+           {
+               Log(LOG_LEVEL_DEBUG, "Skipping invokation of method '%s' due to null-values in argument '%d'",
+                   fp->name, arg_index);
+               BufferDestroy(method_name);
+               return PROMISE_RESULT_SKIPPED;
+           }
+           args = args->next;
         }
-        break;
+        args = fp->args;
+        EvalContextSetBundleArgs(ctx, args);
+    }
+    break;
 
     case RVAL_TYPE_SCALAR:
-        {
-            ExpandScalar(ctx, PromiseGetBundle(pp)->ns, PromiseGetBundle(pp)->name,
-                         RvalScalarValue(call), method_name);
-            args = NULL;
-        }
-        break;
+    {
+        ExpandScalar(ctx, PromiseGetBundle(pp)->ns, PromiseGetBundle(pp)->name,
+                     RvalScalarValue(call), method_name);
+        args = NULL;
+    }
+    break;
 
     default:
         BufferDestroy(method_name);
@@ -102,6 +128,7 @@ PromiseResult VerifyMethod(EvalContext *ctx, const Rval call, Attributes a, cons
 
     char lockname[CF_BUFSIZE];
     GetLockName(lockname, "method", pp->promiser, args);
+
     CfLock thislock = AcquireLock(ctx, lockname, VUQNAME, CFSTARTTIME, a.transaction, pp, false);
     if (thislock.lock == NULL)
     {
@@ -109,27 +136,45 @@ PromiseResult VerifyMethod(EvalContext *ctx, const Rval call, Attributes a, cons
         return PROMISE_RESULT_SKIPPED;
     }
 
-    PromiseBanner(pp);
+    PromiseBanner(ctx, pp);
 
     const Bundle *bp = EvalContextResolveBundleExpression(ctx, PromiseGetPolicy(pp), BufferData(method_name), "agent");
+
     if (!bp)
     {
         bp = EvalContextResolveBundleExpression(ctx, PromiseGetPolicy(pp), BufferData(method_name), "common");
     }
 
     PromiseResult result = PROMISE_RESULT_NOOP;
+
     if (bp)
     {
         if (a.transaction.action == cfa_warn) // don't skip for dry-runs (ie ignore DONTDO)
         {
             result = PROMISE_RESULT_WARN;
-            cfPS(ctx, LOG_LEVEL_ERR, result, pp, a, "Bundle '%s' should be invoked, but only a warning was promised!", BufferData(method_name));
+            cfPS(ctx, LOG_LEVEL_WARNING, result, pp, a, "Bundle '%s' should be invoked, but only a warning was promised!", BufferData(method_name));
         }
         else
         {
-            BannerSubBundle(bp, args);
-
+            BundleBanner(bp, args);
             EvalContextStackPushBundleFrame(ctx, bp, args, a.inherit);
+
+            /* Clear all array-variables that are already set in the sub-bundle.
+               Otherwise, array-data accumulates between multiple bundle evaluations.
+               Note: for bundles invoked multiple times via bundlesequence, array
+               data *does* accumulate. */
+            VariableTableIterator *iter = EvalContextVariableTableIteratorNew(ctx, bp->ns, bp->name, NULL);
+            Variable *var;
+            while ((var = VariableTableIteratorNext(iter)))
+            {
+                if (!var->ref->num_indices)
+                {
+                    continue;
+                }
+                EvalContextVariableRemove(ctx, var->ref);
+            }
+            VariableTableIteratorDestroy(iter);
+
             BundleResolve(ctx, bp);
 
             result = ScheduleAgentOperations(ctx, bp);
@@ -181,7 +226,7 @@ PromiseResult VerifyMethod(EvalContext *ctx, const Rval call, Attributes a, cons
         if (IsCf3VarString(BufferData(method_name)))
         {
             Log(LOG_LEVEL_ERR,
-                  "A variable seems to have been used for the name of the method. In this case, the promiser also needs to contain the unique name of the method");
+                "A variable seems to have been used for the name of the method. In this case, the promiser also needs to contain the unique name of the method");
         }
 
         cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a,
@@ -192,6 +237,8 @@ PromiseResult VerifyMethod(EvalContext *ctx, const Rval call, Attributes a, cons
 
     YieldCurrentLock(thislock);
     BufferDestroy(method_name);
+    EndBundleBanner(bp);
+
     return result;
 }
 

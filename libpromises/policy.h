@@ -114,7 +114,6 @@ struct Promise_
     char *promiser;
     Rval promisee;
     Seq *conlist;
-    bool has_subbundles;
 
     const Promise *org_pp;            /* A ptr to the unexpanded raw promise */
 
@@ -148,7 +147,7 @@ unsigned PolicyHash(const Policy *policy);
 StringSet *PolicySourceFiles(const Policy *policy);
 
 /**
- * @brief Merge two partial policy objects. The memory for the child objects of the original policies are transfered to the new parent.
+ * @brief Merge two partial policy objects. The memory for the child objects of the original policies are transferred to the new parent.
  * @param a
  * @param b
  * @return Merged policy
@@ -252,7 +251,7 @@ bool BodyHasConstraint(const Body *body, const char *lval);
 
 const char *ConstraintGetNamespace(const Constraint *cp);
 
-Promise *PromiseTypeAppendPromise(PromiseType *type, const char *promiser, Rval promisee, const char *classes);
+Promise *PromiseTypeAppendPromise(PromiseType *type, const char *promiser, Rval promisee, const char *classes, const char *varclasses);
 void PromiseTypeDestroy(PromiseType *promise_type);
 
 void PromiseDestroy(Promise *pp);
@@ -321,7 +320,7 @@ gid_t PromiseGetConstraintAsGid(const EvalContext *ctx, char *lval, const Promis
  */
 Rlist *PromiseGetConstraintAsList(const EvalContext *ctx, const char *lval, const Promise *pp);
 
-bool PromiseBundleConstraintExists(const EvalContext *ctx, const char *lval, const Promise *pp);
+bool PromiseBundleOrBodyConstraintExists(const EvalContext *ctx, const char *lval, const Promise *pp);
 
 void PromiseRecheckAllConstraints(const EvalContext *ctx, const Promise *pp);
 
@@ -340,6 +339,7 @@ int PromiseGetConstraintAsBoolean(const EvalContext *ctx, const char *lval, cons
  * @return Effective constraint if found, otherwise NULL
  */
 Constraint *PromiseGetConstraint(const Promise *promise, const char *lval);
+Constraint *PromiseGetConstraintWithType(const Promise *promise, const char *lval, RvalType type);
 
 /**
  * @brief Get the first constraint from the promise. Checks that constraint does
@@ -418,5 +418,11 @@ char *QualifiedNameScopeComponent(const char *qualified_name);
  * @brief Check whether the promise type is allowed one
  */
 bool BundleTypeCheck(const char *name);
+
+/**
+ * @brief Return a default bundle name for this method/service
+ */
+
+Rval DefaultBundleConstraint(const Promise *pp, char *promisetype);
 
 #endif

@@ -31,8 +31,11 @@
 #include <cfnet.h>
 
 
+extern uint32_t bwlimit_kbytes;
+
+
 int SendTransaction(const ConnectionInfo *conn_info, const char *buffer, int len, char status);
-int ReceiveTransaction(const ConnectionInfo *conn_info, char *buffer, int *more);
+int ReceiveTransaction(ConnectionInfo *conn_info, char *buffer, int *more);
 
 int SetReceiveTimeout(int fd, unsigned long ms);
 

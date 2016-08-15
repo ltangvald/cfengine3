@@ -232,7 +232,7 @@ static FnCallResult CallFunction(EvalContext *ctx, const Policy *policy, const F
                                                            fncall_type->args[argnum].pattern, 1);
             if (err != SYNTAX_TYPE_MATCH_OK && err != SYNTAX_TYPE_MATCH_ERROR_UNEXPANDED)
             {
-                FatalError(ctx, "In function '%s', '%s'", fp->name, SyntaxTypeMatchToString(err));
+                FatalError(ctx, "In function '%s', error in variable '%s', '%s'", fp->name, (const char *)rp->val.item, SyntaxTypeMatchToString(err));
             }
         }
 
@@ -289,11 +289,6 @@ FnCallResult FnCallEvaluate(EvalContext *ctx, const Policy *policy, FnCall *fp, 
             fp->name);
         return (FnCallResult) { FNCALL_FAILURE, { FnCallCopy(fp), RVAL_TYPE_FNCALL } };
     }
-    else if (caller && !EvalContextPromiseIsActive(ctx, caller))
-    {
-        Log(LOG_LEVEL_VERBOSE, "Skipping function '%s', because it was excluded by classes", fp->name);
-        return (FnCallResult) { FNCALL_FAILURE, { FnCallCopy(fp), RVAL_TYPE_FNCALL } };
-    }
 
     const FnCallType *fp_type = FnCallTypeGet(fp->name);
 
@@ -314,22 +309,66 @@ FnCallResult FnCallEvaluate(EvalContext *ctx, const Policy *policy, FnCall *fp, 
 
     Rlist *expargs = NewExpArgs(ctx, policy, fp);
 
+    Writer *fncall_writer;
+    const char *fncall_string;
+    if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG)
+    {
+        fncall_writer = StringWriter();
+        FnCallWrite(fncall_writer, fp);
+        fncall_string = StringWriterData(fncall_writer);
+    }
+
     if (RlistIsUnresolved(expargs))
     {
-        RlistDestroy(expargs);
-        return (FnCallResult) { FNCALL_FAILURE, { FnCallCopy(fp), RVAL_TYPE_FNCALL } };
+        // Special case: ifelse(isvariable("x"), $(x), "default")
+        // (the first argument will come down expanded as "!any")
+        if (0 == strcmp(fp->name, "ifelse") &&
+            RlistLen(expargs) == 3 &&
+            expargs->val.type == RVAL_TYPE_SCALAR &&
+            0 == strcmp("!any", RlistScalarValue(expargs)) &&
+            !RlistIsUnresolved(expargs->next->next))
+        {
+                Log(LOG_LEVEL_DEBUG, "Allowing ifelse() function evaluation even"
+                    " though its arguments contain unresolved variables: %s",
+                    fncall_string);
+        }
+        else
+        {
+            if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG)
+            {
+                Log(LOG_LEVEL_DEBUG, "Skipping function evaluation for now,"
+                    " arguments contain unresolved variables: %s",
+                    fncall_string);
+                WriterClose(fncall_writer);
+            }
+            RlistDestroy(expargs);
+            return (FnCallResult) { FNCALL_FAILURE, { FnCallCopy(fp), RVAL_TYPE_FNCALL } };
+        }
     }
 
     Rval cached_rval;
     if ((fp_type->options & FNCALL_OPTION_CACHED) && EvalContextFunctionCacheGet(ctx, fp, expargs, &cached_rval))
     {
+        if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG)
+        {
+            Log(LOG_LEVEL_DEBUG,
+                "Using previously cached result for function: %s",
+                fncall_string);
+            WriterClose(fncall_writer);
+        }
         Writer *w = StringWriter();
         FnCallWrite(w, fp);
-        Log(LOG_LEVEL_DEBUG, "Using previously cached result for function '%s'", StringWriterData(w));
         WriterClose(w);
         RlistDestroy(expargs);
 
         return (FnCallResult) { FNCALL_SUCCESS, RvalCopy(cached_rval) };
+    }
+
+    if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG)
+    {
+        Log(LOG_LEVEL_DEBUG, "Evaluating function: %s",
+            fncall_string);
+        WriterClose(fncall_writer);
     }
 
     FnCallResult result = CallFunction(ctx, policy, fp, expargs);
@@ -338,6 +377,13 @@ FnCallResult FnCallEvaluate(EvalContext *ctx, const Policy *policy, FnCall *fp, 
     {
         RlistDestroy(expargs);
         return (FnCallResult) { FNCALL_FAILURE, { FnCallCopy(fp), RVAL_TYPE_FNCALL } };
+    }
+    else if (result.rval.type == RVAL_TYPE_LIST && !result.rval.item)
+    {
+        Rlist *seq = NULL;
+        // don't pass NULL items to evaluator
+        RlistPrepend(&seq, CF_NULL_VALUE, RVAL_TYPE_SCALAR);
+        result.rval.item = seq;
     }
 
     if (fp_type->options & FNCALL_OPTION_CACHED)

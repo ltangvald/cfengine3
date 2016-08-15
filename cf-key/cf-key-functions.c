@@ -39,19 +39,20 @@
 #include <eval_context.h>
 #include <crypto.h>
 #include <file_lib.h>
+#include <known_dirs.h>
 
 
 static const char *const passphrase = "Cfengine passphrase";
 
-RSA* LoadPublicKey(const char* filename)
+RSA *LoadPublicKey(const char *filename)
 {
-    FILE* fp;
-    RSA* key;
+    FILE *fp;
+    RSA *key;
 
     fp = safe_fopen(filename, "r");
     if (fp == NULL)
     {
-        Log(LOG_LEVEL_ERR, "Cannot open file '%s'. (fopen: %s)", filename, GetErrorStr());
+        Log(LOG_LEVEL_ERR, "Cannot open public key file '%s' (fopen: %s)", filename, GetErrorStr());
         return NULL;
     };
 
@@ -59,7 +60,8 @@ RSA* LoadPublicKey(const char* filename)
                                      (void *)passphrase)) == NULL)
     {
         Log(LOG_LEVEL_ERR,
-            "Error reading public key. (PEM_read_RSAPublicKey: %s)",
+            "Error while reading public key '%s' (PEM_read_RSAPublicKey: %s)",
+            filename,
             CryptoLastErrorString());
         fclose(fp);
         return NULL;
@@ -69,7 +71,7 @@ RSA* LoadPublicKey(const char* filename)
 
     if (BN_num_bits(key->e) < 2 || !BN_is_odd(key->e))
     {
-        Log(LOG_LEVEL_ERR, "RSA Exponent in key '%s' too small or not odd. (BN_num_bits: %s)",
+        Log(LOG_LEVEL_ERR, "Error while reading public key '%s' - RSA Exponent is too small or not odd. (BN_num_bits: %s)",
             filename, GetErrorStr());
         return NULL;
     };
@@ -79,13 +81,13 @@ RSA* LoadPublicKey(const char* filename)
 
 /** Return a string with the printed digest of the given key file,
     or NULL if an error occurred. */
-char* GetPubkeyDigest(const char* pubkey)
+char *LoadPubkeyDigest(const char *filename)
 {
     unsigned char digest[EVP_MAX_MD_SIZE + 1];
-    RSA* key = NULL;
-    char* buffer = xmalloc(CF_HOSTKEY_STRING_SIZE);
+    RSA *key = NULL;
+    char *buffer = xmalloc(CF_HOSTKEY_STRING_SIZE);
 
-    key = LoadPublicKey(pubkey);
+    key = LoadPublicKey(filename);
     if (NULL == key)
     {
         return NULL;
@@ -97,13 +99,25 @@ char* GetPubkeyDigest(const char* pubkey)
     return buffer;
 }
 
+/** Return a string with the printed digest of the given key file. */
+char *GetPubkeyDigest(RSA *pubkey)
+{
+    unsigned char digest[EVP_MAX_MD_SIZE + 1];
+    char *buffer = xmalloc(CF_HOSTKEY_STRING_SIZE);
+
+    HashPubKey(pubkey, digest, CF_DEFAULT_DIGEST);
+    HashPrintSafe(buffer, CF_HOSTKEY_STRING_SIZE,
+                  digest, CF_DEFAULT_DIGEST, true);
+    return buffer;
+}
+
 /*****************************************************************************/
 
 /** Print digest of the specified public key file.
     Return 0 on success and 1 on error. */
-int PrintDigest(const char* pubkey)
+int PrintDigest(const char *pubkey)
 {
-    char *digeststr = GetPubkeyDigest(pubkey);
+    char *digeststr = LoadPubkeyDigest(pubkey);
 
     if (NULL == digeststr)
     {
@@ -115,21 +129,98 @@ int PrintDigest(const char* pubkey)
     return 0; /* OK exitcode */
 }
 
-int TrustKey(const char* pubkey)
+/**
+ * Split a "key" argument of the form "[[user@]address:]filename" into
+ * components (public) key file name, IP address, and (remote) user
+ * name.  Pointers to the corresponding segments of the #keyarg
+ * string will be written into the three output arguments #filename,
+ * #ipaddr, and #username. (Hence, the three output string have
+ * the same lifetime/scope as the #keyarg string.)
+ *
+ * The only required component is the file name.  If IP address is
+ * missing, NULL is written into the #ipaddr pointer.  If the
+ * username is missing, #username will point to the constant string
+ * "root".
+ *
+ * @NOTE the #keyarg argument is modified by this function!
+ */
+void ParseKeyArg(char *keyarg, char **filename, char **ipaddr, char **username)
 {
-    char *digeststr = GetPubkeyDigest(pubkey);
-    char outfilename[CF_BUFSIZE];
-    bool ok;
+    char *s;
 
-    if (NULL == digeststr)
-        return 1; /* ERROR exitcode */
+    /* set defaults */
+    *ipaddr = NULL;
+    *username = "root";
 
-    snprintf(outfilename, CF_BUFSIZE, "%s/ppkeys/root-%s.pub", CFWORKDIR, digeststr);
-    free(digeststr);
+    /* use rightmost colon so we can cope with IPv6 addresses */
+    s = strrchr(keyarg, ':');
+    if (s == NULL)
+    {
+        /* no colon, entire argument is a filename */
+        *filename = keyarg;
+        return;
+    }
 
-    ok = CopyRegularFileDisk(pubkey, outfilename);
+    *s = '\0';              /* split string */
+    *filename = s + 1;      /* filename starts at 1st character after ':' */
 
-    return (ok? 0 : 1);
+    s = strchr(keyarg, '@');
+    if (s == NULL)
+    {
+        /* no username given, use default */
+        *ipaddr = keyarg;
+        return;
+    }
+
+    *s = '\0';
+    *ipaddr = s + 1;
+    *username = keyarg;
+
+    /* special case: if we got user@:/path/to/file
+       then reset ipaddr to NULL instead of empty string */
+    if (**ipaddr == '\0')
+    {
+        *ipaddr = NULL;
+    }
+
+    return;
+}
+
+/**
+ * Trust the given key.  If #ipaddress is not NULL, then also
+ * update the "last seen" database.  The IP address is required for
+ * trusting a server key (on the client); it is -currently- optional
+ * for trusting a client key (on the server).
+ */
+bool TrustKey(const char *filename, const char *ipaddress, const char *username)
+{
+    RSA* key;
+    char *digest;
+
+    key = LoadPublicKey(filename);
+    if (key == NULL)
+    {
+        return false;
+    }
+
+    digest = GetPubkeyDigest(key);
+    if (digest == NULL)
+    {
+        return false;
+    }
+
+    if (ipaddress != NULL)
+    {
+        Log(LOG_LEVEL_VERBOSE,
+            "Adding a CONNECT entry in lastseen db: IP '%s', key '%s'",
+            ipaddress, digest);
+        LastSaw1(ipaddress, digest, LAST_SEEN_ROLE_CONNECT);
+    }
+
+    bool ret = SavePublicKey(username, digest, key);
+    free(digest);
+
+    return ret;
 }
 
 extern bool cf_key_interrupted;
@@ -171,7 +262,7 @@ void ShowLastSeenHosts()
  * @brief removes all traces of entry 'input' from lastseen and filesystem
  *
  * @param[in] key digest (SHA/MD5 format) or free host name string
- * @param[in] must_be_coherent. false : delete if lastseen is incoherent, 
+ * @param[in] must_be_coherent. false : delete if lastseen is incoherent,
  *                              true :  don't if lastseen is incoherent
  * @retval 0 if entry was deleted, >0 otherwise
  */
@@ -194,12 +285,12 @@ int RemoveKeys(const char *input, bool must_be_coherent)
 
     if ((removed_input == -1) || (removed_equivalent == -1))
     {
-        Log(LOG_LEVEL_ERR, "Unable to remove keys for the entry %s", input);
+        Log(LOG_LEVEL_ERR, "Last seen database: unable to remove keys for the entry '%s'", input);
         return 255;
     }
     else if (removed_input + removed_equivalent == 0)
     {
-        Log(LOG_LEVEL_ERR, "No key file(s) for entry %s were found on the filesytem", input);
+        Log(LOG_LEVEL_ERR, "No key file(s) for entry '%s' were found on the filesytem", input);
         return 1;
     }
     else
@@ -240,19 +331,19 @@ void KeepKeyPromises(const char *public_key_file, const char *private_key_file)
         return;
     }
 
-    printf("Making a key pair for cfengine, please wait, this could take a minute...\n");
+    printf("Making a key pair for CFEngine, please wait, this could take a minute...\n");
 
 #ifdef OPENSSL_NO_DEPRECATED
-    BN_set_word(rsa_bignum, 35);
+    BN_set_word(rsa_bignum, RSA_F4);
 
     if (!RSA_generate_key_ex(pair, 2048, rsa_bignum, NULL))
 #else
-    pair = RSA_generate_key(2048, 35, NULL, NULL);
+    pair = RSA_generate_key(2048, 65537, NULL, NULL);
 
     if (pair == NULL)
 #endif
     {
-        Log(LOG_LEVEL_ERR, "Unable to generate key (RSA_generate_key: %s)",
+        Log(LOG_LEVEL_ERR, "Unable to generate cryptographic key (RSA_generate_key: %s)",
             CryptoLastErrorString());
         return;
     }
@@ -261,13 +352,13 @@ void KeepKeyPromises(const char *public_key_file, const char *private_key_file)
 
     if (fd < 0)
     {
-        Log(LOG_LEVEL_ERR, "Open '%s' failed. (open: %s)", private_key_file, GetErrorStr());
+        Log(LOG_LEVEL_ERR, "Couldn't open private key file '%s' (open: %s)", private_key_file, GetErrorStr());
         return;
     }
 
     if ((fp = fdopen(fd, "w")) == NULL)
     {
-        Log(LOG_LEVEL_ERR, "Couldn't open private key '%s'. (fdopen: %s)", private_key_file, GetErrorStr());
+        Log(LOG_LEVEL_ERR, "Error while writing private key file '%s' (fdopen: %s)", private_key_file, GetErrorStr());
         close(fd);
         return;
     }
@@ -289,14 +380,14 @@ void KeepKeyPromises(const char *public_key_file, const char *private_key_file)
 
     if (fd < 0)
     {
-        Log(LOG_LEVEL_ERR, "Unable to open public key '%s'. (open: %s)",
+        Log(LOG_LEVEL_ERR, "Couldn't open public key file '%s' (open: %s)",
             public_key_file, GetErrorStr());
         return;
     }
 
     if ((fp = fdopen(fd, "w")) == NULL)
     {
-        Log(LOG_LEVEL_ERR, "Open '%s' failed. (fdopen: %s)", public_key_file, GetErrorStr());
+        Log(LOG_LEVEL_ERR, "Error while writing public key file '%s' (fdopen: %s)", public_key_file, GetErrorStr());
         close(fd);
         return;
     }
@@ -313,8 +404,14 @@ void KeepKeyPromises(const char *public_key_file, const char *private_key_file)
 
     fclose(fp);
 
-    snprintf(vbuff, CF_BUFSIZE, "%s/randseed", CFWORKDIR);
-    RAND_write_file(vbuff);
+    snprintf(vbuff, CF_BUFSIZE, "%s%crandseed", GetWorkDir(), FILE_SEPARATOR);
+    if (RAND_write_file(vbuff) != 1024)
+    {
+        Log(LOG_LEVEL_ERR, "Unable to write randseed");
+        unlink(vbuff); /* randseed isn't safe to use */
+        return;
+    }
+
     chmod(vbuff, 0644);
 }
 

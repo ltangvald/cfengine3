@@ -1,0 +1,30 @@
+From: Antonio Radici <antonio@debian.org>
+Date: Sun, 14 Aug 2016 22:07:44 +0100
+Subject: do_not_build_rpmver
+
+===================================================================
+---
+ Makefile.am  | 4 ++--
+ configure.ac | 1 -
+ 2 files changed, 2 insertions(+), 3 deletions(-)
+
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -41,7 +41,6 @@
+ 	cf-serverd \
+ 	cf-upgrade \
+ 	misc \
+-	ext \
+ 	examples \
+ 	tests
+ 
+--- a/configure.ac
++++ b/configure.ac
+@@ -1606,7 +1606,6 @@
+     cf-runagent/Makefile
+     cf-serverd/Makefile
+     misc/Makefile
+-    ext/Makefile
+     examples/Makefile
+     tests/Makefile
+     tests/acceptance/Makefile

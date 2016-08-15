@@ -22,12 +22,17 @@
   included file COSL.txt.
 */
 
-#include <cf3.defs.h>
+
+#include <platform.h>
+
+#include <logging.h>
 #include <process_lib.h>
 #include <process_unix_priv.h>
 #include <misc_lib.h>
 
+
 #define SLEEP_POLL_TIMEOUT_NS 10000000
+
 
 /*
  * Wait until process specified by #pid is stopped due to SIGSTOP signal.
@@ -45,13 +50,15 @@ static bool ProcessWaitUntilStopped(pid_t pid, long timeout_ns)
         switch (GetProcessState(pid))
         {
         case PROCESS_STATE_RUNNING:
-            break;
+            break;                                      /* retry in a while */
         case PROCESS_STATE_STOPPED:
             return true;
+        case PROCESS_STATE_ZOMBIE:
+            /* There is not much we can do by waiting a zombie process. It
+             * will never change to a stopped state. */
+            return false;
         case PROCESS_STATE_DOES_NOT_EXIST:
             return false;
-        default:
-            ProgrammingError("Unexpected value returned from GetProcessState");
         }
 
         struct timespec ts = {
@@ -74,21 +81,39 @@ static bool ProcessWaitUntilStopped(pid_t pid, long timeout_ns)
 }
 
 /*
- * FIXME: Only timeouts < 1s are supported
+ * Currently only timeouts < 1s are supported
  */
 static bool ProcessWaitUntilExited(pid_t pid, long timeout_ns)
 {
+    assert(timeout_ns < 1000000000);
+
     while (timeout_ns > 0)
     {
-        if (kill(pid, 0) < 0 && errno == ESRCH)
+        switch (GetProcessState(pid))
         {
+        case PROCESS_STATE_RUNNING:
+            break;                                      /* retry in a while */
+        case PROCESS_STATE_DOES_NOT_EXIST:
             return true;
+        case PROCESS_STATE_ZOMBIE:
+            /* There is not much we can do by waiting a zombie process. It's
+               the responsibility of the caller to reap the child so we're
+               considering it has already exited.  */
+            return true;
+        case PROCESS_STATE_STOPPED:
+            /* Almost the same case with a zombie process, but it will
+             * respond only to signals that can't be caught. */
+            return false;
         }
 
         struct timespec ts = {
             .tv_sec = 0,
             .tv_nsec = MIN(SLEEP_POLL_TIMEOUT_NS, timeout_ns),
         };
+
+        Log(LOG_LEVEL_DEBUG,
+            "PID %jd still alive after signalling, waiting for %lu ms...",
+            (intmax_t) pid, ts.tv_nsec / 1000000);
 
         while (nanosleep(&ts, &ts) < 0)
         {
@@ -104,9 +129,9 @@ static bool ProcessWaitUntilExited(pid_t pid, long timeout_ns)
     return false;
 }
 
-/* A timeout to wait for process to stop (pause) or exit.  Note that
- * it's important that it not over-flow 32 bits; no more than nine 9s
- * in a row ! */
+/* A timeout (in nanoseconds) to wait for process to stop (pause) or exit.
+ * Note that it's important that it does not overflow 32 bits; no more than
+ * nine 9s in a row, i.e. one second. */
 #define STOP_WAIT_TIMEOUT 999999999L
 
 /*
@@ -189,7 +214,7 @@ static int SafeKill(pid_t pid, time_t expected_start_time, int signal)
     int saved_errno = errno;
 
     /*
-     * We don't check return value of SIGCONT, as the proces may have been
+     * We don't check return value of SIGCONT, as the process may have been
      * terminated already by previous kill. Moreover, what would we do with the
      * return code?
      */
@@ -212,11 +237,25 @@ static int Kill(pid_t pid, time_t process_start_time, int signal)
     }
 }
 
-int GracefulTerminate(pid_t pid, time_t process_start_time)
+
+bool GracefulTerminate(pid_t pid, time_t process_start_time)
 {
+    /* We can't allow to kill ourselves. First it does not make sense, and
+     * second, once SafeKill() sends SIGSTOP, we will just freeze forever. */
+    if (pid == getpid())
+    {
+        Log(LOG_LEVEL_WARNING,
+            "Ignoring request to kill ourself (pid %jd)!",
+            (intmax_t) pid);
+        return false;
+    }
+
     if (Kill(pid, process_start_time, SIGINT) < 0)
     {
-        return errno == ESRCH;
+        /* If we failed to kill the process return error. If the process
+         * doesn't even exist (errno==ESRCH), again return error, we shouldn't
+         * have signalled the PID in the first place. */
+        return false;
     }
 
     if (ProcessWaitUntilExited(pid, STOP_WAIT_TIMEOUT))

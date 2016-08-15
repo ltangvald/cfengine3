@@ -27,6 +27,15 @@
 
 #include <cf3.defs.h>
 
+#ifdef WITH_XATTR_EXTRA_ARGS
+#define llistxattr(__arg1, __arg2, __arg3) \
+    llistxattr((__arg1), (__arg2), (__arg3), 0)
+#define lgetxattr(__arg1, __arg2, __arg3, __arg4) \
+    lgetxattr((__arg1), (__arg2), (__arg3), (__arg4), 0, 0)
+#define lsetxattr(__arg1, __arg2, __arg3, __arg4, __arg5) \
+    lsetxattr((__arg1), (__arg2), (__arg3), (__arg4), 0, (__arg5))
+#endif
+
 bool CopyRegularFileDisk(const char *source, const char *destination);
 bool CopyFilePermissionsDisk(const char *source, const char *destination);
 bool CopyFileExtendedAttributesDisk(const char *source, const char *destination);

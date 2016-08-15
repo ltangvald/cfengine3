@@ -40,18 +40,36 @@
 
 
 extern RSA *PRIVKEY, *PUBKEY;
-extern char CFWORKDIR[];
-
-
-/* Global SSL context for client connections over new TLS protocol. */
-static SSL_CTX *SSLCLIENTCONTEXT = NULL; /* GLOBAL_X */
-static X509 *SSLCLIENTCERT = NULL; /* GLOBAL_X */
 
 
 /**
- * @warning Make sure you've called CryptoInitialize() first!
+ * Global SSL context for initiated connections over the TLS protocol. For the
+ * agent, they are written only once, *after* the common control bundles have
+ * been evaluated.
+ *
+ * 1. Common bundles evaluation: LoadPolicy()->PolicyResolve()
+ * 2. Create TLS contexts:       GenericAgentDiscoverContext()->GenericAgentInitialize()->cfnet_init()
  */
-bool TLSClientInitialize()
+static SSL_CTX *SSLCLIENTCONTEXT = NULL;
+static X509 *SSLCLIENTCERT = NULL;
+
+
+bool TLSClientIsInitialized()
+{
+    return (SSLCLIENTCONTEXT != NULL);
+}
+
+/**
+ * @warning Make sure you've called CryptoInitialize() first!
+ *
+ * @TODO if this function is called a second time, it just returns true, and
+ * does not do nothing more. What if the settings (e.g. tls_min_version) have
+ * changed? This can happen when cf-serverd reloads policy. Fixing this goes
+ * much deeper though, as it would require cf-serverd to call
+ * GenericAgentDiscoverContext() when reloading policy.
+ */
+bool TLSClientInitialize(const char *tls_min_version,
+                         const char *ciphers)
 {
     int ret;
     static bool is_initialised = false;
@@ -61,6 +79,13 @@ bool TLSClientInitialize()
         return true;
     }
 
+    if (PRIVKEY == NULL || PUBKEY == NULL)
+    {
+        /* VERBOSE in case it's a custom, local-only installation. */
+        Log(LOG_LEVEL_VERBOSE, "No public/private key pair is loaded,"
+            " please create one using cf-key");
+        return false;
+    }
     if (!TLSGenericInitialize())
     {
         return false;
@@ -74,17 +99,20 @@ bool TLSClientInitialize()
         goto err1;
     }
 
-    TLSSetDefaultOptions(SSLCLIENTCONTEXT);
+    TLSSetDefaultOptions(SSLCLIENTCONTEXT, tls_min_version);
 
-    if (PRIVKEY == NULL || PUBKEY == NULL)
+    if (ciphers != NULL)
     {
-        Log(CryptoGetMissingKeyLogLevel(),
-            "No public/private key pair is loaded, trying to reload");
-        LoadSecretKeys();
-        if (PRIVKEY == NULL || PUBKEY == NULL)
+        Log(LOG_LEVEL_VERBOSE,
+            "Setting cipher list for outgoing TLS connections to: %s",
+            ciphers);
+
+        ret = SSL_CTX_set_cipher_list(SSLCLIENTCONTEXT, ciphers);
+        if (ret != 1)
         {
-            Log(CryptoGetMissingKeyLogLevel(),
-                "No public/private key pair found");
+            Log(LOG_LEVEL_ERR,
+                "No valid ciphers in cipher list: %s",
+                ciphers);
             goto err2;
         }
     }
@@ -179,14 +207,14 @@ int TLSClientIdentificationDialog(ConnectionInfo *conn_info,
     ret = TLSRecvLines(conn_info->ssl, line, sizeof(line));
 
     ProtocolVersion wanted_version;
-    if (conn_info->type == CF_PROTOCOL_UNDEFINED)
+    if (conn_info->protocol == CF_PROTOCOL_UNDEFINED)
     {
         /* TODO parse CFE_v%d received and use that version if it's lower. */
         wanted_version = CF_PROTOCOL_LATEST;
     }
     else
     {
-        wanted_version = conn_info->type;
+        wanted_version = conn_info->protocol;
     }
 
     /* Send "CFE_v%d cf-agent version". */
@@ -251,7 +279,7 @@ int TLSClientIdentificationDialog(ConnectionInfo *conn_info,
 
     /* Before it contained the protocol version we requested from the server,
      * now we put in the value that was negotiated. */
-    conn_info->type = wanted_version;
+    conn_info->protocol = wanted_version;
 
     return 1;
 }
@@ -265,17 +293,16 @@ int TLSClientIdentificationDialog(ConnectionInfo *conn_info,
  */
 int TLSTry(ConnectionInfo *conn_info)
 {
-    /* SSL Context might not be initialised up to now due to lack of keys, as
-     * they might be generated as part of the policy (e.g. failsafe.cf). */
-    if (!TLSClientInitialize())
+    if (PRIVKEY == NULL || PUBKEY == NULL)
     {
+        Log(LOG_LEVEL_ERR, "No public/private key pair is loaded,"
+            " please create one using cf-key");
         return -1;
     }
-    assert(SSLCLIENTCONTEXT != NULL && PRIVKEY != NULL && PUBKEY != NULL);
+    assert(SSLCLIENTCONTEXT != NULL);
 
-    ConnectionInfoSetSSL(conn_info, SSL_new(SSLCLIENTCONTEXT));
-    SSL *ssl = ConnectionInfoSSL(conn_info);
-    if (ssl == NULL)
+    conn_info->ssl = SSL_new(SSLCLIENTCONTEXT);
+    if (conn_info->ssl == NULL)
     {
         Log(LOG_LEVEL_ERR, "SSL_new: %s",
             TLSErrorString(ERR_get_error()));
@@ -283,22 +310,23 @@ int TLSTry(ConnectionInfo *conn_info)
     }
 
     /* Pass conn_info inside the ssl struct for TLSVerifyCallback(). */
-    SSL_set_ex_data(ssl, CONNECTIONINFO_SSL_IDX, conn_info);
+    SSL_set_ex_data(conn_info->ssl, CONNECTIONINFO_SSL_IDX, conn_info);
 
     /* Initiate the TLS handshake over the already open TCP socket. */
-    SSL_set_fd(ssl, ConnectionInfoSocket(conn_info));
+    SSL_set_fd(conn_info->ssl, conn_info->sd);
 
-    int ret = SSL_connect(ssl);
+    int ret = SSL_connect(conn_info->ssl);
     if (ret <= 0)
     {
-        TLSLogError(ssl, LOG_LEVEL_ERR,
+        TLSLogError(conn_info->ssl, LOG_LEVEL_ERR,
                     "Failed to establish TLS connection", ret);
         return -1;
     }
 
-    Log(LOG_LEVEL_VERBOSE, "TLS cipher negotiated: %s, %s",
-        SSL_get_cipher_name(ssl),
-        SSL_get_cipher_version(ssl));
+    Log(LOG_LEVEL_VERBOSE, "TLS version negotiated: %8s; Cipher: %s,%s",
+        SSL_get_version(conn_info->ssl),
+        SSL_get_cipher_name(conn_info->ssl),
+        SSL_get_cipher_version(conn_info->ssl));
     Log(LOG_LEVEL_VERBOSE, "TLS session established, checking trust...");
 
     return 0;

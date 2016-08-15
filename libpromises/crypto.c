@@ -54,7 +54,6 @@ void CRYPTO_set_id_callback(unsigned long (*func)(void));
 static void RandomSeed(void);
 static void SetupOpenSSLThreadLocks(void);
 static void CleanupOpenSSLThreadLocks(void);
-LogLevel CryptoGetMissingKeyLogLevel();
 
 /* TODO move crypto.[ch] to libutils. Will need to remove all manipulation of
  * lastseen db. */
@@ -87,10 +86,25 @@ void CryptoDeInitialize()
 {
     if (crypto_initialized)
     {
+        char randfile[CF_BUFSIZE];
+        snprintf(randfile, CF_BUFSIZE, "%s%crandseed",
+                 GetWorkDir(), FILE_SEPARATOR);
+
+        /* Only write out a seed if the file doesn't exist
+         * and we have enough entropy to do so. If RAND_write_File
+         * returns a bad value, delete the poor seed.
+         */
+        if (access(randfile, R_OK) && errno == ENOENT && RAND_write_file(randfile) != 1024)
+        {
+            Log(LOG_LEVEL_WARNING,
+                "Could not write randomness to '%s'", randfile);
+            unlink(randfile); /* do not reuse entropy */
+        }
+
+        chmod(randfile, 0600);
         EVP_cleanup();
         CleanupOpenSSLThreadLocks();
-        // TODO: Is there an ERR_unload_crypto_strings() ?
-        // TODO: Are there OpenSSL_clear_all_{digests,algorithms} ?
+        ERR_free_strings();
         crypto_initialized = false;
     }
 }
@@ -112,55 +126,36 @@ static void RandomSeed(void)
 
     /* 2. Seed the strong OpenSSL PRNG. */
 
-    /* randseed file is written by cf-key. */
-    char randfile[CF_BUFSIZE];
-    snprintf(randfile, CF_BUFSIZE, "%s%crandseed",
-             CFWORKDIR, FILE_SEPARATOR);
-    Log(LOG_LEVEL_VERBOSE, "Looking for a source of entropy in '%s'",
-        randfile);
-
-    if (!RAND_load_file(randfile, -1))
-    {
-        Log(LOG_LEVEL_VERBOSE,
-            "Could not read sufficient randomness from '%s'", randfile);
-    }
-
 #ifndef __MINGW32__                                     /* windows may hang */
     RAND_poll();
 #else
     RAND_screen();
 #endif
 
-    /* We should have had enough entropy by now. Else we print a message and
-     * use non-crypto-safe random data. */
     if (RAND_status() != 1)
     {
-        /* TODO raise to LOG_LEVEL_WARNING? */
-        Log(LOG_LEVEL_INFO,
-            "PRNG hasn't been seeded enough, using some pseudo-random bytes for seed!");
-        Log(LOG_LEVEL_INFO,
-            "A workaround is to copy 1KB of random bytes to '%s'",
+        /* randseed file is written on deinitialization of crypto system */
+        char randfile[CF_BUFSIZE];
+        snprintf(randfile, CF_BUFSIZE, "%s%crandseed",
+                 GetWorkDir(), FILE_SEPARATOR);
+        Log(LOG_LEVEL_VERBOSE, "Looking for a source of entropy in '%s'",
             randfile);
 
-        unsigned char rand_buf[128];
-        for (size_t i = 0; i < sizeof(rand_buf); i++)
+        if (RAND_load_file(randfile, -1) != 1024)
         {
-            rand_buf[i] = rand() % 256;
+            Log(LOG_LEVEL_CRIT,
+                "Could not read randomness from '%s'", randfile);
+            unlink(randfile); /* kill randseed if error reading it */
         }
-        RAND_seed(rand_buf, sizeof(rand_buf));
 
-        /* If we *still* do not have enough entropy, then things will be
-         * failing all over the place. Should never happen because of the
-         * rand() buffer above which should be enough for all cases. */
-        if (RAND_status() != 1)
-        {
-            UnexpectedError("Low entropy, crypto operations will fail! "
-                            "See verbose log and report which platform you are using.");
-        }
+        /* If we've used the random seed, then delete */
+        unlink(randfile);
     }
 }
 
-static const char *const priv_passphrase = "Cfengine passphrase";
+/* PEM functions need the const cast away, but hopefully the default
+ * call-back doesn't actually modify its user-data. */
+static const char priv_passphrase[] = "Cfengine passphrase";
 
 /**
  * @return true the error is not so severe that we must stop
@@ -172,15 +167,16 @@ bool LoadSecretKeys(void)
         FILE *fp = fopen(privkeyfile, "r");
         if (!fp)
         {
-            Log(CryptoGetMissingKeyLogLevel(),
+            /* VERBOSE in case it's a custom, local-only installation. */
+            Log(LOG_LEVEL_VERBOSE,
                 "Couldn't find a private key at '%s', use cf-key to get one. (fopen: %s)",
                 privkeyfile, GetErrorStr());
             free(privkeyfile);
             return false;
         }
 
-        if ((PRIVKEY = PEM_read_RSAPrivateKey(fp, (RSA **) NULL, NULL,
-                                              (void *)priv_passphrase)) == NULL)
+        PRIVKEY = PEM_read_RSAPrivateKey(fp, NULL, NULL, (void*) priv_passphrase);
+        if (PRIVKEY == NULL)
         {
             Log(LOG_LEVEL_ERR,
                 "Error reading private key. (PEM_read_RSAPrivateKey: %s)",
@@ -200,14 +196,15 @@ bool LoadSecretKeys(void)
         FILE *fp = fopen(pubkeyfile, "r");
         if (!fp)
         {
-            Log(CryptoGetMissingKeyLogLevel(),
+            /* VERBOSE in case it's a custom, local-only installation. */
+            Log(LOG_LEVEL_VERBOSE,
                 "Couldn't find a public key at '%s', use cf-key to get one (fopen: %s)",
                 pubkeyfile, GetErrorStr());
             free(pubkeyfile);
             return false;
         }
 
-        PUBKEY = PEM_read_RSAPublicKey(fp, NULL, NULL, (void *)priv_passphrase);
+        PUBKEY = PEM_read_RSAPublicKey(fp, NULL, NULL, (void*) priv_passphrase);
         if (NULL == PUBKEY)
         {
             Log(LOG_LEVEL_ERR,
@@ -235,10 +232,10 @@ bool LoadSecretKeys(void)
 
 void PolicyHubUpdateKeys(const char *policy_server)
 {
-    if (GetAmPolicyHub(CFWORKDIR)
-        && NULL != PUBKEY)
+    if (GetAmPolicyHub() && NULL != PUBKEY)
     {
         unsigned char digest[EVP_MAX_MD_SIZE + 1];
+        const char* const workdir = GetWorkDir();
 
         char dst_public_key_filename[CF_BUFSIZE] = "";
         {
@@ -246,7 +243,7 @@ void PolicyHubUpdateKeys(const char *policy_server)
             HashPubKey(PUBKEY, digest, CF_DEFAULT_DIGEST);
             snprintf(dst_public_key_filename, sizeof(dst_public_key_filename),
                      "%s/ppkeys/%s-%s.pub",
-                     CFWORKDIR, "root",
+                     workdir, "root",
                      HashPrintSafe(buffer, sizeof(buffer), digest,
                                    CF_DEFAULT_DIGEST, true));
             MapName(dst_public_key_filename);
@@ -256,7 +253,7 @@ void PolicyHubUpdateKeys(const char *policy_server)
         if ((stat(dst_public_key_filename, &sb) == -1))
         {
             char src_public_key_filename[CF_BUFSIZE] = "";
-            snprintf(src_public_key_filename, CF_MAXVARSIZE, "%s/ppkeys/localhost.pub", CFWORKDIR);
+            snprintf(src_public_key_filename, CF_MAXVARSIZE, "%s/ppkeys/localhost.pub", workdir);
             MapName(src_public_key_filename);
 
             // copy localhost.pub to root-HASH.pub on policy server
@@ -276,25 +273,21 @@ void PolicyHubUpdateKeys(const char *policy_server)
 /*********************************************************************/
 
 /**
- * @brief Search for a key just like HavePublicKey(), but get the
- *        hash value from lastseen db.
+ * @brief Search for a key given an IP address, by getting the
+ *        key hash value from lastseen db.
  * @return NULL if the key was not found in any form.
  */
 RSA *HavePublicKeyByIP(const char *username, const char *ipaddress)
 {
     char hash[CF_HOSTKEY_STRING_SIZE];
 
+    /* Get the key hash for that address from lastseen db. */
     bool found = Address2Hostkey(hash, sizeof(hash), ipaddress);
-    if (found)
-    {
-        return HavePublicKey(username, ipaddress, hash);
-    }
-    else
-    {
-        Log(LOG_LEVEL_VERBOSE, "Key for host '%s' not found in lastseen db",
-            ipaddress);
-        return HavePublicKey(username, ipaddress, "");
-    }
+
+    /* If not found, by passing "" as digest, we effectively look only for
+     * the old-style key file, e.g. root-1.2.3.4.pub. */
+    return HavePublicKey(username, ipaddress,
+                         found ? hash : "");
 }
 
 static const char *const pub_passphrase = "public";
@@ -311,18 +304,20 @@ RSA *HavePublicKey(const char *username, const char *ipaddress, const char *dige
     struct stat statbuf;
     FILE *fp;
     RSA *newkey = NULL;
+    const char* const workdir = GetWorkDir();
 
     snprintf(keyname, CF_MAXVARSIZE, "%s-%s", username, digest);
 
-    snprintf(newname, CF_BUFSIZE, "%s/ppkeys/%s.pub", CFWORKDIR, keyname);
+    snprintf(newname, CF_BUFSIZE, "%s/ppkeys/%s.pub", workdir, keyname);
     MapName(newname);
 
     if (stat(newname, &statbuf) == -1)
     {
         Log(LOG_LEVEL_VERBOSE, "Did not find new key format '%s'", newname);
-        snprintf(oldname, CF_BUFSIZE, "%s/ppkeys/%s-%s.pub", CFWORKDIR, username, ipaddress);
-        MapName(oldname);
 
+        snprintf(oldname, CF_BUFSIZE, "%s/ppkeys/%s-%s.pub",
+                 workdir, username, ipaddress);
+        MapName(oldname);
         Log(LOG_LEVEL_VERBOSE, "Trying old style '%s'", oldname);
 
         if (stat(oldname, &statbuf) == -1)
@@ -354,7 +349,8 @@ RSA *HavePublicKey(const char *username, const char *ipaddress, const char *dige
 
     if ((fp = fopen(newname, "r")) == NULL)
     {
-        Log(CryptoGetMissingKeyLogLevel(), "Couldn't find a public key '%s'. (fopen: %s)", newname, GetErrorStr());
+        Log(LOG_LEVEL_ERR, "Couldn't open public key file '%s' (fopen: %s)",
+            newname, GetErrorStr());
         return NULL;
     }
 
@@ -362,8 +358,8 @@ RSA *HavePublicKey(const char *username, const char *ipaddress, const char *dige
                                         (void *)pub_passphrase)) == NULL)
     {
         Log(LOG_LEVEL_ERR,
-            "Error reading public key. (PEM_read_RSAPublicKey: %s)",
-            CryptoLastErrorString());
+            "Error reading public key from '%s' (PEM_read_RSAPublicKey: %s)",
+            newname, CryptoLastErrorString());
         fclose(fp);
         return NULL;
     }
@@ -372,7 +368,8 @@ RSA *HavePublicKey(const char *username, const char *ipaddress, const char *dige
 
     if ((BN_num_bits(newkey->e) < 2) || (!BN_is_odd(newkey->e)))
     {
-        Log(LOG_LEVEL_ERR, "RSA Exponent too small or not odd");
+        Log(LOG_LEVEL_ERR, "RSA Exponent too small or not odd for key: %s",
+            newname);
         RSA_free(newkey);
         return NULL;
     }
@@ -382,7 +379,7 @@ RSA *HavePublicKey(const char *username, const char *ipaddress, const char *dige
 
 /*********************************************************************/
 
-void SavePublicKey(const char *user, const char *digest, const RSA *key)
+bool SavePublicKey(const char *user, const char *digest, const RSA *key)
 {
     char keyname[CF_MAXVARSIZE], filename[CF_BUFSIZE];
     struct stat statbuf;
@@ -394,21 +391,24 @@ void SavePublicKey(const char *user, const char *digest, const RSA *key)
     {
         Log(LOG_LEVEL_ERR, "USERNAME-KEY (%s-%s) string too long!",
             user, digest);
-        return;
+        return false;
     }
 
     ret = snprintf(filename, sizeof(filename), "%s/ppkeys/%s.pub",
-                   CFWORKDIR, keyname);
+                   GetWorkDir(), keyname);
     if (ret >= sizeof(filename))
     {
         Log(LOG_LEVEL_ERR, "Filename too long!");
-        return;
+        return false;
     }
 
     MapName(filename);
     if (stat(filename, &statbuf) != -1)
     {
-        return;
+        Log(LOG_LEVEL_VERBOSE,
+            "Public key file '%s' already exists, not rewriting",
+            filename);
+        return true;
     }
 
     Log(LOG_LEVEL_VERBOSE, "Saving public key to file '%s'", filename);
@@ -416,7 +416,7 @@ void SavePublicKey(const char *user, const char *digest, const RSA *key)
     if ((fp = fopen(filename, "w")) == NULL)
     {
         Log(LOG_LEVEL_ERR, "Unable to write a public key '%s'. (fopen: %s)", filename, GetErrorStr());
-        return;
+        return false;
     }
 
     if (!PEM_write_RSAPublicKey(fp, key))
@@ -424,9 +424,12 @@ void SavePublicKey(const char *user, const char *digest, const RSA *key)
         Log(LOG_LEVEL_ERR,
             "Error saving public key to '%s'. (PEM_write_RSAPublicKey: %s)",
             filename, CryptoLastErrorString());
+        fclose(fp);
+        return false;
     }
 
     fclose(fp);
+    return true;
 }
 
 int EncryptString(char type, const char *in, char *out, unsigned char *key, int plainlen)
@@ -536,20 +539,6 @@ char *PrivateKeyFile(const char *workdir)
     xasprintf(&keyfile,
               "%s" FILE_SEPARATOR_STR "ppkeys" FILE_SEPARATOR_STR "localhost.priv", workdir);
     return keyfile;
-}
-
-LogLevel CryptoGetMissingKeyLogLevel(void)
-{
-    if (getuid() == 0 &&
-        NULL == getenv("FAKEROOTKEY") &&
-        NULL == getenv("CFENGINE_TEST_OVERRIDE_WORKDIR"))
-    {
-        return LOG_LEVEL_ERR;
-    }
-    else
-    {
-        return LOG_LEVEL_VERBOSE;
-    }
 }
 
 

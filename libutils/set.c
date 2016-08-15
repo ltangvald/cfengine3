@@ -44,36 +44,44 @@ void SetDestroy(Set *set)
 
 void SetAdd(Set *set, void *element)
 {
+    assert(set != NULL);
     MapInsert(set, element, element);
 }
 
 bool SetContains(const Set *set, const void *element)
 {
+    assert(set != NULL);
     return MapHasKey(set, element);
 }
 
 bool SetRemove(Set *set, const void *element)
 {
+    assert(set != NULL);
     return MapRemove(set, element);
 }
 
 void SetClear(Set *set)
 {
+    assert(set != NULL);
     MapClear(set);
 }
 
 size_t SetSize(const Set *set)
 {
+    assert(set != NULL);
     return MapSize(set);
 }
 
 bool SetIsEqual(const Set *set1, const Set *set2)
 {
+    assert(set1 != NULL);
+    assert(set2 != NULL);
     return MapContainsSameKeys(set1, set2);
 }
 
 SetIterator SetIteratorInit(Set *set)
 {
+    assert(set != NULL);
     return MapIteratorInit(set);
 }
 
@@ -83,10 +91,27 @@ void *SetIteratorNext(SetIterator *i)
     return kv ? kv->key : NULL;
 }
 
+void SetJoin(Set *set, Set *otherset)
+{
+    assert(set != NULL);
+    assert(otherset != NULL);
+    if (set == otherset)
+        return;
+
+    SetIterator si = SetIteratorInit(otherset);
+    void *ptr = NULL;
+
+    for (ptr = SetIteratorNext(&si); ptr != NULL; ptr = SetIteratorNext(&si))
+    {
+        SetAdd(set, ptr);
+    }
+}
+
 Buffer *StringSetToBuffer(StringSet *set, const char delimiter)
 {
-    Buffer *buf = BufferNew();
+    assert(set != NULL);
 
+    Buffer *buf = BufferNew();
     StringSetIterator it = StringSetIteratorInit(set);
     const char *element = NULL;
     int pos = 0;
@@ -112,6 +137,7 @@ Buffer *StringSetToBuffer(StringSet *set, const char delimiter)
 
 void StringSetAddSplit(StringSet *set, const char *str, char delimiter)
 {
+    assert(set != NULL);
     if (str) // TODO: remove this inconsistency, add assert(str)
     {
         const char *prev = str;
@@ -154,8 +180,9 @@ StringSet *StringSetFromString(const char *str, char delimiter)
 
 JsonElement *StringSetToJson(const StringSet *set)
 {
-    JsonElement *arr = JsonArrayCreate(StringSetSize(set));
+    assert(set != NULL);
 
+    JsonElement *arr = JsonArrayCreate(StringSetSize(set));
     StringSetIterator it = StringSetIteratorInit((StringSet *)set);
     const char *el = NULL;
 

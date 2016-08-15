@@ -1,6 +1,12 @@
 #!/usr/bin/make -f
 # vim:noet:ts=4:sw=4:
 
+DPKG_EXPORT_BUILDFLAGS = 1
+include /usr/share/dpkg/buildflags.mk
+
+export EXPLICIT_VERSION = $(shell dpkg-parsechangelog -S version | cut  -f 1 -d -)
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
 %:
 	dh $@ --with quilt
 
@@ -13,17 +19,17 @@ override_dh_auto_configure:
 			--with-libvirt \
 			--with-lmdb \
 			--with-libxml2 \
+			--with-masterdir=\$${prefix}/share/cfengine3/masterfiles \
 			--with-workdir=/var/lib/cfengine3 \
 			--with-logdir=/var/log/cfengine3 \
 			--with-piddir=/var/run/cfengine3 \
 			--libdir=/usr/lib/cfengine3 \
 			--docdir=\$${prefix}/share/doc/cfengine3 \
 			--datadir=\$${prefix}/share/cfengine3 \
-			--mandir=\$${prefix}/share/man \
-			CFLAGS="$(CFLAGS)" LDFLAGS="-Wl,-z,relro" \
-			CPPFLAGS=-D_FORTIFY_SOURCE=2
-	cd masterfiles && ./autogen.sh  --prefix=/usr/share/cfengine3 \
-					--with-core=$(CURDIR)
+			--mandir=\$${prefix}/share/man
+	cd masterfiles && ./configure --prefix=/usr/share/cfengine3 \
+									--with-core=$(CURDIR)
+
 
 override_dh_clean:
 	dh_autoreconf_clean

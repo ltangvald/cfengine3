@@ -44,8 +44,8 @@
 #include "server_access.h"          /* access_CheckResource, acl_CheckExact */
 
 
-static SSL_CTX *SSLSERVERCONTEXT = NULL; /* GLOBAL_X */
-static X509 *SSLSERVERCERT = NULL; /* GLOBAL_X */
+static SSL_CTX *SSLSERVERCONTEXT = NULL;
+static X509 *SSLSERVERCERT = NULL;
 
 
 /**
@@ -69,12 +69,14 @@ bool ServerTLSInitialize()
         goto err1;
     }
 
-    TLSSetDefaultOptions(SSLSERVERCONTEXT);
+    TLSSetDefaultOptions(SSLSERVERCONTEXT, SV.allowtlsversion);
 
     /*
-     * CFEngine is not a web server so we don't need many ciphers. We only
-     * allow a safe but very common subset by default, extensible via
-     * "allowciphers" in body server control. By default allow:
+     * CFEngine is not a web server so it does not need to support many
+     * ciphers. It only allows a safe but very common subset by default,
+     * extensible via "allowciphers" in body server control. By default
+     * it allows:
+     *
      *     AES256-GCM-SHA384: most high-grade RSA-based cipher from TLSv1.2
      *     AES256-SHA: most backwards compatible but high-grade, from SSLv3
      */
@@ -84,18 +86,23 @@ bool ServerTLSInitialize()
         cipher_list ="AES256-GCM-SHA384:AES256-SHA";
     }
 
+    Log(LOG_LEVEL_VERBOSE,
+        "Setting cipher list for incoming TLS connections to: %s",
+        cipher_list);
+
     ret = SSL_CTX_set_cipher_list(SSLSERVERCONTEXT, cipher_list);
     if (ret != 1)
     {
         Log(LOG_LEVEL_ERR,
             "No valid ciphers in cipher list: %s",
             cipher_list);
+        goto err2;
     }
 
     if (PRIVKEY == NULL || PUBKEY == NULL)
     {
-        Log(LOG_LEVEL_ERR,
-            "No public/private key pair is loaded, create one with cf-key");
+        Log(LOG_LEVEL_ERR, "No public/private key pair is loaded,"
+            " please create one using cf-key");
         goto err2;
     }
 
@@ -239,8 +246,8 @@ int ServerTLSPeek(ConnectionInfo *conn_info)
  * @retval true if protocol version was successfully negotiated and IDENTITY
  *         command was parsed correctly. Identity fields (only #username for
  *         now) have the respective string values, or they are empty if field
- *         was not on IDENTITY line.  #conn_info->type has been updated with
- *         the negotiated protocol version.
+ *         was not on IDENTITY line.  #conn_info->protocol has been updated
+ *         with the negotiated protocol version.
  * @retval false in case of error.
  */
 static bool ServerIdentificationDialog(ConnectionInfo *conn_info,
@@ -357,7 +364,7 @@ static bool ServerIdentificationDialog(ConnectionInfo *conn_info,
     }
 
     /* Version client and server agreed on. */
-    conn_info->type = version_received;
+    conn_info->protocol = version_received;
 
     return true;
 }
@@ -401,9 +408,7 @@ static int ServerSendWelcome(const ServerConnectionState *conn)
  */
 int ServerTLSSessionEstablish(ServerConnectionState *conn)
 {
-    int ret;
-
-    if (ConnectionInfoConnectionStatus(conn->conn_info) != CF_CONNECTION_ESTABLISHED)
+    if (conn->conn_info->status != CONNECTIONINFO_STATUS_ESTABLISHED)
     {
         assert(ConnectionInfoSSL(conn->conn_info) == NULL);
         SSL *ssl = SSL_new(SSLSERVERCONTEXT);
@@ -421,7 +426,7 @@ int ServerTLSSessionEstablish(ServerConnectionState *conn)
         /* Now we are letting OpenSSL take over the open socket. */
         SSL_set_fd(ssl, ConnectionInfoSocket(conn->conn_info));
 
-        ret = SSL_accept(ssl);
+        int ret = SSL_accept(ssl);
         if (ret <= 0)
         {
             TLSLogError(ssl, LOG_LEVEL_ERR,
@@ -429,7 +434,8 @@ int ServerTLSSessionEstablish(ServerConnectionState *conn)
             return -1;
         }
 
-        Log(LOG_LEVEL_VERBOSE, "TLS cipher negotiated: %s, %s",
+        Log(LOG_LEVEL_VERBOSE, "TLS version negotiated: %8s; Cipher: %s,%s",
+            SSL_get_version(ssl),
             SSL_get_cipher_name(ssl),
             SSL_get_cipher_version(ssl));
         Log(LOG_LEVEL_VERBOSE, "TLS session established, checking trust...");
@@ -553,12 +559,11 @@ static ProtocolCommandNew GetCommandNew(char *str)
 
 bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
 {
-    /* The CF_BUFEXT extra space is there to ensure we're not reading out of
+    /* The CF_BUFEXT extra space is there to ensure we're not *reading* out of
      * bounds in commands that carry extra binary arguments, like MD5. */
     char recvbuffer[CF_BUFSIZE + CF_BUFEXT] = { 0 };
     char sendbuffer[CF_BUFSIZE] = { 0 };
     char filename[CF_BUFSIZE + 1];      /* +1 for appending slash sometimes */
-    int received;
     ServerFileGetState get_args = { 0 };
 
     /* We already encrypt because of the TLS layer, no need to encrypt more. */
@@ -569,18 +574,25 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
     assert(conn->user_data_set == 1);
 
     /* Receive up to CF_BUFSIZE - 1 bytes. */
-    received = ReceiveTransaction(conn->conn_info, recvbuffer, NULL);
-    if (received == -1 || received == 0)
+    const int received = ReceiveTransaction(conn->conn_info,
+                                            recvbuffer, NULL);
+
+    if (received > CF_BUFSIZE - 1)
     {
+        UnexpectedError("Received transaction of size %d", received);
         return false;
     }
-
+    if (received == -1 || received == 0)
+    {
+        /* Already logged in case of error. */
+        return false;
+    }
     if (strlen(recvbuffer) == 0)
     {
-        Log(LOG_LEVEL_WARNING, "Got NULL transmission, skipping!");
+        Log(LOG_LEVEL_WARNING,
+            "Got NULL transmission (of size %d)", received);
         return true;
     }
-
     /* Don't process request if we're signalled to exit. */
     if (IsPendingTermination())
     {
@@ -594,13 +606,16 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
     {
     case PROTOCOL_COMMAND_EXEC:
     {
-        /* TODO check it is always file, never directory, no end with '/' */
-        char args[256];
-        int ret = sscanf(recvbuffer, "EXEC %255[^\n]", args);
-        if (ret != 1)                    /* No arguments, use default args. */
-        {
-            args[0] = '\0';
-        }
+        const size_t EXEC_len = strlen(PROTOCOL_NEW[PROTOCOL_COMMAND_EXEC]);
+        /* Assert recvbuffer starts with EXEC. */
+        assert(strncmp(PROTOCOL_NEW[PROTOCOL_COMMAND_EXEC],
+                       recvbuffer, EXEC_len) == 0);
+
+        const char *args = &recvbuffer[EXEC_len];
+        args += strspn(args, " \t");                       /* bypass spaces */
+
+        Log(LOG_LEVEL_VERBOSE, "%14s %7s %s",
+            "Received:", "EXEC", args);
 
         if (!AllowedUser(conn->username))
         {
@@ -612,8 +627,11 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
 
         char arg0[PATH_MAX];
         size_t zret = CommandArg0_bound(arg0, CFRUNCOMMAND, sizeof(arg0));
+        /* TODO check it is always file, never directory, no end with '/' */
         if (zret == (size_t) -1)
         {
+            Log(LOG_LEVEL_ERR, "Internal size limit for cfruncommand,"
+                " please consider using a smaller cfruncommand");
             goto protocol_error;
         }
 
@@ -631,7 +649,7 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
 
         if (acl_CheckPath(paths_acl, arg0,
                           conn->ipaddr, conn->revdns,
-                          KeyPrintableHash(ConnectionInfoKey(conn->conn_info)))
+                          KeyPrintableHash(conn->conn_info->remote_key))
             == false)
         {
             Log(LOG_LEVEL_INFO, "EXEC denied due to ACL for file: %s", arg0);
@@ -639,6 +657,7 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
             return true;
         }
 
+        /* This matches cf-runagent -s class1,class2 */
         if (!MatchClasses(ctx, conn))
         {
             Log(LOG_LEVEL_INFO, "EXEC denied due to failed class match");
@@ -646,7 +665,7 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
             return true;
         }
 
-        DoExec(ctx, conn, args);
+        DoExec(conn, args);
         Terminate(conn->conn_info);
         return true;
     }
@@ -775,7 +794,7 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
         int ret = sscanf(recvbuffer, "SYNCH %ld STAT %[^\n]",
                          &time_no_see, filename);
 
-        if (ret != 2  || time_no_see == 0 || filename[0] == '\0')
+        if (ret != 2 || filename[0] == '\0')
         {
             goto protocol_error;
         }
@@ -1023,6 +1042,7 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
         break;
     }
     case PROTOCOL_COMMAND_CALL_ME_BACK:
+        /* Server side, handing the collect call off to cf-hub. */
 
         if (acl_CheckExact(query_acl, "collect_calls",
                            conn->ipaddr, conn->revdns,
@@ -1036,8 +1056,8 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
 
         ReceiveCollectCall(conn);
         /* On success that returned true; otherwise, it did all
-         * relevant Log()ging.  Either way, it closed the connection,
-         * so we're no longer busy with it: */
+         * relevant Log()ging.  Either way, we're no longer busy with
+         * it and our caller can close the connection: */
         return false;
 
     case PROTOCOL_COMMAND_BAD:
@@ -1057,6 +1077,7 @@ bool BusyWithNewProtocol(EvalContext *ctx, ServerConnectionState *conn)
 protocol_error:
     strcpy(sendbuffer, "BAD: Request denied");
     SendTransaction(conn->conn_info, sendbuffer, 0, CF_DONE);
-    Log(LOG_LEVEL_INFO, "Closing connection due to request: %s", recvbuffer);
+    Log(LOG_LEVEL_INFO,
+        "Closing connection due to illegal request: %s", recvbuffer);
     return false;
 }

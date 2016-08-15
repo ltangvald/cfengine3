@@ -51,7 +51,7 @@ typedef struct
 
 static ConvergeVariableOptions CollectConvergeVariableOptions(EvalContext *ctx, const Promise *pp, bool allow_redefine);
 static bool Epimenides(EvalContext *ctx, const char *ns, const char *scope, const char *var, Rval rval, int level);
-static int CompareRval(const void *rval1_item, RvalType rval1_type, const void *rval2_item, RvalType rval2_type);
+static bool CompareRval(const void *rval1_item, RvalType rval1_type, const void *rval2_item, RvalType rval2_type);
 
 static bool IsValidVariableName(const char *var_name)
 {
@@ -229,14 +229,14 @@ PromiseResult VerifyVarPromise(EvalContext *ctx, const Promise *pp, bool allow_d
                     switch (rval.type)
                     {
                     case RVAL_TYPE_SCALAR:
-                        Log(LOG_LEVEL_VERBOSE, "Redefinition of a constant scalar '%s', was '%s' now '%s'",
+                        Log(LOG_LEVEL_VERBOSE, "V: Redefinition of a constant scalar '%s', was '%s' now '%s'",
                             pp->promiser, (const char *)existing_value, RvalScalarValue(rval));
                         PromiseRef(LOG_LEVEL_VERBOSE, pp);
                         break;
 
                     case RVAL_TYPE_LIST:
                         {
-                            Log(LOG_LEVEL_VERBOSE, "Redefinition of a constant list '%s'", pp->promiser);
+                            Log(LOG_LEVEL_VERBOSE, "V: Redefinition of a constant list '%s'", pp->promiser);
                             Writer *w = StringWriter();
                             RlistWrite(w, existing_value);
                             char *oldstr = StringWriterClose(w);
@@ -246,7 +246,7 @@ PromiseResult VerifyVarPromise(EvalContext *ctx, const Promise *pp, bool allow_d
                             w = StringWriter();
                             RlistWrite(w, rval.item);
                             char *newstr = StringWriterClose(w);
-                            Log(LOG_LEVEL_VERBOSE, " New value '%s'", newstr);
+                            Log(LOG_LEVEL_VERBOSE, "V: New value '%s'", newstr);
                             free(newstr);
                             PromiseRef(LOG_LEVEL_VERBOSE, pp);
                         }
@@ -417,59 +417,8 @@ PromiseResult VerifyVarPromise(EvalContext *ctx, const Promise *pp, bool allow_d
     return result;
 }
 
-// FIX: this function is a mixture of Equal/Compare (boolean/diff).
-// somebody is bound to misuse this at some point
-static int CompareRlist(const Rlist *list1, const Rlist *list2)
-{
-    const Rlist *rp1, *rp2;
-
-    for (rp1 = list1, rp2 = list2; rp1 != NULL && rp2 != NULL; rp1 = rp1->next, rp2 = rp2->next)
-    {
-        if (rp1->val.item && rp2->val.item)
-        {
-            const Rlist *rc1, *rc2;
-
-            if (rp1->val.type == RVAL_TYPE_FNCALL || rp2->val.type == RVAL_TYPE_FNCALL)
-            {
-                return -1;      // inconclusive
-            }
-
-            rc1 = rp1;
-            rc2 = rp2;
-
-            // Check for list nesting with { fncall(), "x" ... }
-
-            if (rp1->val.type == RVAL_TYPE_LIST)
-            {
-                rc1 = rp1->val.item;
-            }
-
-            if (rp2->val.type == RVAL_TYPE_LIST)
-            {
-                rc2 = rp2->val.item;
-            }
-
-            if (IsCf3VarString(rc1->val.item) || IsCf3VarString(rp2->val.item))
-            {
-                return -1;      // inconclusive
-            }
-
-            if (strcmp(rc1->val.item, rc2->val.item) != 0)
-            {
-                return false;
-            }
-        }
-        else
-        {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static int CompareRval(const void *rval1_item, RvalType rval1_type,
-                       const void *rval2_item, RvalType rval2_type)
+static bool CompareRval(const void *rval1_item, RvalType rval1_type,
+                        const void *rval2_item, RvalType rval2_type)
 {
     if (rval1_type != rval2_type)
     {
@@ -493,7 +442,7 @@ static int CompareRval(const void *rval1_item, RvalType rval1_type,
         break;
 
     case RVAL_TYPE_LIST:
-        return CompareRlist(rval1_item, rval2_item);
+        return RlistEqual(rval1_item, rval2_item);
 
     case RVAL_TYPE_FNCALL:
         return -1;
@@ -595,7 +544,7 @@ static ConvergeVariableOptions CollectConvergeVariableOptions(EvalContext *ctx, 
             continue;
         }
 
-        if (strcmp(cp->lval, "ifvarclass") == 0)
+        if (strcmp(cp->lval, "ifvarclass") == 0 || strcmp(cp->lval, "if") == 0)
         {
             switch (cp->rval.type)
             {
@@ -608,33 +557,33 @@ static ConvergeVariableOptions CollectConvergeVariableOptions(EvalContext *ctx, 
                 break;
 
             case RVAL_TYPE_FNCALL:
+            {
+                bool excluded = false;
+
+                /* eval it: e.g. ifvarclass => not("a_class") */
+
+                Rval res = FnCallEvaluate(ctx, PromiseGetPolicy(pp), cp->rval.item, pp).rval;
+
+                /* Don't continue unless function was evaluated properly */
+                if (res.type != RVAL_TYPE_SCALAR)
                 {
-                    bool excluded = false;
-
-                    /* eval it: e.g. ifvarclass => not("a_class") */
-
-                    Rval res = FnCallEvaluate(ctx, PromiseGetPolicy(pp), cp->rval.item, pp).rval;
-
-                    /* Don't continue unless function was evaluated properly */
-                    if (res.type != RVAL_TYPE_SCALAR)
-                    {
-                        RvalDestroy(res);
-                        return opts;
-                    }
-
-                    excluded = !IsDefinedClass(ctx, res.item);
-
                     RvalDestroy(res);
-
-                    if (excluded)
-                    {
-                        return opts;
-                    }
+                    return opts;
                 }
-                break;
+
+                excluded = !IsDefinedClass(ctx, res.item);
+
+                RvalDestroy(res);
+
+                if (excluded)
+                {
+                    return opts;
+                }
+            }
+            break;
 
             default:
-                Log(LOG_LEVEL_ERR, "Invalid ifvarclass type '%c': should be string or function", cp->rval.type);
+                Log(LOG_LEVEL_ERR, "Invalid if/ifvarclass type '%c': should be string or function", cp->rval.type);
                 continue;
             }
 

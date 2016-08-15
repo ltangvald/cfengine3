@@ -46,13 +46,14 @@
 #include <verify_classes.h>
 #include <cf-monitord-enterprise-stubs.h>
 #include <unix_iface.h>
+#include <known_dirs.h>
 
 /*****************************************************************************/
 /* Globals                                                                   */
 /*****************************************************************************/
 
 #define CF_ENVNEW_FILE   "env_data.new"
-#define cf_noise_threshold 6    /* number that does not warrent large anomaly status */
+#define cf_noise_threshold 6    /* number that does not warrant large anomaly status */
 #define MON_THRESHOLD_HIGH 1000000      // samples should stay below this threshold
 #define LDT_BUFSIZE 10
 
@@ -116,15 +117,16 @@ void MonitorInitialize(void)
 {
     int i, j, k;
     char vbuff[CF_BUFSIZE];
+    const char* const statedir = GetStateDir();
 
-    snprintf(vbuff, sizeof(vbuff), "%s/state/cf_users", CFWORKDIR);
+    snprintf(vbuff, sizeof(vbuff), "%s/cf_users", statedir);
     MapName(vbuff);
     CreateEmptyFile(vbuff);
 
-    snprintf(ENVFILE_NEW, CF_BUFSIZE, "%s/state/%s", CFWORKDIR, CF_ENVNEW_FILE);
+    snprintf(ENVFILE_NEW, CF_BUFSIZE, "%s/%s", statedir, CF_ENVNEW_FILE);
     MapName(ENVFILE_NEW);
 
-    snprintf(ENVFILE, CF_BUFSIZE, "%s/state/%s", CFWORKDIR, CF_ENV_FILE);
+    snprintf(ENVFILE, CF_BUFSIZE, "%s/%s", statedir, CF_ENV_FILE);
     MapName(ENVFILE);
 
     MonEntropyClassesInit();
@@ -204,11 +206,13 @@ static void LoadHistogram(void)
 
     char filename[CF_BUFSIZE];
 
-    snprintf(filename, CF_BUFSIZE, "%s/state/histograms", CFWORKDIR);
+    snprintf(filename, CF_BUFSIZE, "%s%chistograms", GetStateDir(), FILE_SEPARATOR);
 
     if ((fp = fopen(filename, "r")) == NULL)
     {
-        Log(LOG_LEVEL_VERBOSE, "Unable to load histogram data. (fopen: %s)", GetErrorStr());
+        Log(LOG_LEVEL_VERBOSE,
+            "Unable to load histogram data from '%s' (fopen: %s)",
+            filename, GetErrorStr());
         return;
     }
 
@@ -266,7 +270,7 @@ void MonitorStartServer(EvalContext *ctx, const Policy *policy)
         Bundle *bp = PolicyAppendBundle(monitor_cfengine_policy, NamespaceDefault(), "monitor_cfengine_bundle", "agent", NULL, NULL);
         PromiseType *tp = BundleAppendPromiseType(bp, "monitor_cfengine");
 
-        pp = PromiseTypeAppendPromise(tp, "the monitor daemon", (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, NULL);
+        pp = PromiseTypeAppendPromise(tp, "the monitor daemon", (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, NULL, NULL);
     }
     assert(pp);
 
@@ -450,10 +454,10 @@ static Averages EvalAvQ(EvalContext *ctx, char *t)
         }
 
         Log(LOG_LEVEL_VERBOSE, "[%d] %s q=%lf, var=%lf, ex=%lf", i, name,
-              newvals.Q[i].q, newvals.Q[i].var, newvals.Q[i].expect);
+            newvals.Q[i].q, newvals.Q[i].var, newvals.Q[i].expect);
 
         Log(LOG_LEVEL_VERBOSE, "[%d] = %lf -> (%lf#%lf) local [%lf#%lf]", i, This, newvals.Q[i].expect,
-              sqrt(newvals.Q[i].var), LOCALAV.Q[i].expect, sqrt(LOCALAV.Q[i].var));
+            sqrt(newvals.Q[i].var), LOCALAV.Q[i].expect, sqrt(LOCALAV.Q[i].var));
 
         if (This > 0)
         {
@@ -814,11 +818,11 @@ static void UpdateDistributions(EvalContext *ctx, char *timekey, Averages *av)
             }
         }
 
-        snprintf(filename, CF_BUFSIZE, "%s/state/histograms", CFWORKDIR);
+        snprintf(filename, CF_BUFSIZE, "%s%chistograms", GetStateDir(), FILE_SEPARATOR);
 
         if ((fp = fopen(filename, "w")) == NULL)
         {
-            Log(LOG_LEVEL_ERR, "Unable to save histograms. (fopen: %s)", GetErrorStr());
+            Log(LOG_LEVEL_ERR, "Unable to save histograms to '%s' (fopen: %s)", filename, GetErrorStr());
             return;
         }
 

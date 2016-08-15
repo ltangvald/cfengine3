@@ -79,6 +79,7 @@ static bool ActionCheck(const Body *body, Seq *errors)
 
 static const ConstraintSyntax action_constraints[] =
 {
+    CONSTRAINT_SYNTAX_GLOBAL,
     ConstraintSyntaxNewOption("action_policy", "fix,warn,nop", "Whether to repair or report about non-kept promises", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("ifelapsed", CF_VALRANGE, "Number of minutes before next allowed assessment of promise. Default value: control body value", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("expireafter", CF_VALRANGE, "Number of minutes before a repair action is interrupted and retried. Default value: control body value", SYNTAX_STATUS_NORMAL),
@@ -102,6 +103,7 @@ static const BodySyntax action_body = BodySyntaxNew("action", action_constraints
 
 static const ConstraintSyntax classes_constraints[] =
 {
+    CONSTRAINT_SYNTAX_GLOBAL,
     ConstraintSyntaxNewOption("scope", "namespace,bundle", "Scope of the contexts set by this body", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("promise_repaired", CF_IDRANGE, "A list of classes to be defined globally", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("repair_failed", CF_IDRANGE, "A list of classes to be defined globally", SYNTAX_STATUS_NORMAL),
@@ -254,17 +256,22 @@ const ConstraintSyntax CFG_CONTROLBODY[COMMON_CONTROL_MAX + 1] =
     ConstraintSyntaxNewBool("require_comments", "Warn about promises that do not have comment documentation. Default value: false", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("host_licenses_paid", CF_VALRANGE, "This promise is deprecated since CFEngine version 3.1 and is ignored. Default value: 25", SYNTAX_STATUS_REMOVED),
     ConstraintSyntaxNewContextList("site_classes", "A list of classes that will represent geographical site locations for hosts. These should be defined elsewhere in the configuration in a classes promise.", SYNTAX_STATUS_NORMAL),
-    ConstraintSyntaxNewString("syslog_host", CF_IPRANGE, "The name or address of a host to which syslog messages should be sent directly by UDP. Default value: 514", SYNTAX_STATUS_NORMAL),
-    ConstraintSyntaxNewInt("syslog_port", CF_VALRANGE, "The port number of a UDP syslog service", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("syslog_host", CF_IPRANGE, "The name or address of a host to which syslog messages should be sent directly by UDP. Default value: localhost", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewInt("syslog_port", CF_VALRANGE, "The port number of a UDP syslog service. Default value: 514", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBool("fips_mode", "Activate full FIPS mode restrictions. Default value: false", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewReal("bwlimit", CF_VALRANGE, "Limit outgoing protocol bandwidth in Bytes per second", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBool("cache_system_functions", "Cache the result of system functions. Default value: true", SYNTAX_STATUS_NORMAL),
-    ConstraintSyntaxNewOption("protocol_version", "0,undefined,1,classic,2,latest", "CFEngine protocol version to use when connecting to the server. Default: classic", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewOption("protocol_version", "0,undefined,1,classic,2,latest", "CFEngine protocol version to use when connecting to the server. Default: \"latest\"", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("tls_ciphers", "", "List of acceptable ciphers in outgoing TLS connections, defaults to OpenSSL's default. For syntax help see man page for \"openssl ciphers\"", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("tls_min_version", "", "Minimum acceptable TLS version for outgoing connections, defaults to OpenSSL's default", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewStringList("package_inventory", ".*", "Name of the package manager used for software inventory management", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("package_module", ".*", "Name of the default package manager", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };
 
 const ConstraintSyntax CFA_CONTROLBODY[] =
 {
-    ConstraintSyntaxNewStringList("abortclasses", ".*", "A list of classes which if defined lead to termination of cf-agent", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewStringList("abortclasses", ".*", "A list of classes which if defined in an agent bundle lead to termination of cf-agent", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("abortbundleclasses", ".*", "A list of classes which if defined lead to termination of current bundle", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("addclasses", ".*", "A list of classes to be defined always in the current context", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("agentaccess", ".*", "A list of user names allowed to execute cf-agent", SYNTAX_STATUS_NORMAL),
@@ -310,7 +317,7 @@ const ConstraintSyntax CFA_CONTROLBODY[] =
     ConstraintSyntaxNewNull()
 };
 
-const ConstraintSyntax CFS_CONTROLBODY[SERVER_CONTROL_NONE + 1] =
+const ConstraintSyntax CFS_CONTROLBODY[SERVER_CONTROL_MAX + 1] =
 {
     ConstraintSyntaxNewStringList("allowallconnects", "","List of IPs or hostnames that may have more than one connection to the server port", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("allowconnects", "", "List of IPs or hostnames that may connect to the server port", SYNTAX_STATUS_NORMAL),
@@ -335,6 +342,7 @@ const ConstraintSyntax CFS_CONTROLBODY[SERVER_CONTROL_NONE + 1] =
     ConstraintSyntaxNewBool("listen", "true/false enable server daemon to listen on defined port. Default value: true", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("allowciphers", "", "List of ciphers the server accepts. For Syntax help see man page for \"openssl ciphers\". Default is \"AES256-GCM-SHA384:AES256-SHA\"", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("allowlegacyconnects", "", "List of IPs from whom we accept legacy protocol connections", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("allowtlsversion", "", "Minimum TLS version allowed for incoming connections", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };
 
@@ -374,7 +382,7 @@ const ConstraintSyntax CFEX_CONTROLBODY[] = /* enum cfexcontrol */
     ConstraintSyntaxNewStringList("schedule", "", "The class schedule used by cf-execd for activating cf-agent", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewOption("executorfacility", CF_FACILITY, "Menu option for syslog facility level. Default value: LOG_USER", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("exec_command", CF_ABSPATHRANGE,"The full path and command to the executable run by default (overriding builtin)", SYNTAX_STATUS_NORMAL),
-    ConstraintSyntaxNewInt("agent_expireafter", "0,10080", "Maximum agent runtime (in minutes). Default value: 10080", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewInt("agent_expireafter", "0,10080", "Maximum agent runtime (in minutes). Default value: 120", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };
 
@@ -384,6 +392,7 @@ const ConstraintSyntax CFH_CONTROLBODY[] =  /* enum cfh_control */
     ConstraintSyntaxNewStringList("exclude_hosts", "", "A list of IP addresses of hosts to exclude from report collection", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("hub_schedule", "", "The class schedule used by cf-hub for report collation", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("port", "1,65535", "Default port for contacting hub nodes. Default value: 5308", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewInt("client_history_timeout", "1,65535", "Threshold in hours over which if client did not report, hub will start query for full state of the host and discard all accumulated report history on the client. Default value: 6 hours", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };
 
@@ -476,7 +485,9 @@ const ConstraintSyntax CF_COMMON_BODIES[] =
     ConstraintSyntaxNewString("comment", "", "A comment about this promise's real intention that follows through the program", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("depends_on", "","A list of promise handles that this promise builds on or depends on somehow (for knowledge management)", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("handle", "", "A unique id-tag string for referring to this as a promisee elsewhere", SYNTAX_STATUS_NORMAL),
-    ConstraintSyntaxNewString("ifvarclass", "", "Extended classes ANDed with context", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("ifvarclass", "", "Extended classes ANDed with context (alias for 'if')", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("if", "", "Extended classes ANDed with context", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("unless", "", "Negated 'if'", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("meta", "", "User-data associated with policy, e.g. key=value strings", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };

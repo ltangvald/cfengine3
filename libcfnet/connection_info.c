@@ -48,13 +48,13 @@ void ConnectionInfoDestroy(ConnectionInfo **info)
         SSL_free((*info)->ssl);
     }
     KeyDestroy(&(*info)->remote_key);
-    free (*info);
+    free(*info);
     *info = NULL;
 }
 
 ProtocolVersion ConnectionInfoProtocolVersion(const ConnectionInfo *info)
 {
-    return info ? info->type : CF_PROTOCOL_UNDEFINED;
+    return info ? info->protocol : CF_PROTOCOL_UNDEFINED;
 }
 
 void ConnectionInfoSetProtocolVersion(ConnectionInfo *info, ProtocolVersion version)
@@ -68,29 +68,8 @@ void ConnectionInfoSetProtocolVersion(ConnectionInfo *info, ProtocolVersion vers
     case CF_PROTOCOL_UNDEFINED:
     case CF_PROTOCOL_CLASSIC:
     case CF_PROTOCOL_TLS:
-        info->type = version;
+        info->protocol = version;
         break;
-    default:
-        break;
-    }
-}
-
-ConnectionStatus ConnectionInfoConnectionStatus(const ConnectionInfo *info)
-{
-    return info ? info->status : CF_CONNECTION_NOT_ESTABLISHED;
-}
-
-void ConnectionInfoSetConnectionStatus(ConnectionInfo *info, ConnectionStatus status)
-{
-    if (!info)
-    {
-        return;
-    }
-    switch (status)
-    {
-    case CF_CONNECTION_NOT_ESTABLISHED:
-    case CF_CONNECTION_ESTABLISHED:
-        info->status = status;
     default:
         break;
     }

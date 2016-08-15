@@ -31,6 +31,7 @@
 #include <files_interfaces.h>
 #include <files_lib.h>
 #include <pipes.h>
+#include <known_dirs.h>
 
 /* Globals */
 
@@ -49,7 +50,7 @@ typedef struct
     enum observables out;
 } Sock;
 
-static const Sock ECGSOCKS[ATTR] =     /* extended to map old to new using enum */
+static const Sock ECGSOCKS[] =     /* extended to map old to new using enum */
 {
     {"137", "netbiosns", ob_netbiosns_in, ob_netbiosns_out},
     {"138", "netbiosdgm", ob_netbiosdgm_in, ob_netbiosdgm_out},
@@ -72,6 +73,7 @@ static const Sock ECGSOCKS[ATTR] =     /* extended to map old to new using enum 
     {"5432", "postgresql", ob_postgresql_in, ob_postgresql_out},
     {"631", "ipp", ob_ipp_in, ob_ipp_out},
 };
+#define ATTR (sizeof(ECGSOCKS) / sizeof(ECGSOCKS[0]))
 
 static const char *const VNETSTAT[] =
 {
@@ -80,6 +82,7 @@ static const char *const VNETSTAT[] =
     [PLATFORM_CONTEXT_HP] = "/usr/bin/netstat -rn",          /* hpux */
     [PLATFORM_CONTEXT_AIX] = "/usr/bin/netstat -rn",         /* aix */
     [PLATFORM_CONTEXT_LINUX] = "/bin/netstat -rn",           /* linux */
+    [PLATFORM_CONTEXT_BUSYBOX] = "/bin/netstat -rn",         /* linux */
     [PLATFORM_CONTEXT_SOLARIS] = "/usr/bin/netstat -rn",     /* solaris */
     [PLATFORM_CONTEXT_SUN_SOLARIS] = "/usr/bin/netstat -rn", /* solaris */
     [PLATFORM_CONTEXT_FREEBSD] = "/usr/bin/netstat -rn",     /* freebsd */
@@ -109,19 +112,22 @@ void MonNetworkInit(void)
 
     MON_UDP4 = MON_UDP6 = MON_TCP4 = MON_TCP6 = NULL;
 
+    char vbuff[CF_BUFSIZE];
+    const char* const statedir = GetStateDir();
+
+    const char* const file_stems[] = { "cf_incoming", "cf_outgoing" };
+    const size_t num_files = sizeof(file_stems) / sizeof(char*);
+
     for (int i = 0; i < ATTR; i++)
     {
-        char vbuff[CF_BUFSIZE];
+        for (int j = 0; j < num_files; j++)
+        {
+            snprintf(vbuff, CF_BUFSIZE, "%s/%s.%s",
+                     statedir, file_stems[j], ECGSOCKS[i].name);
 
-        snprintf(vbuff, sizeof(vbuff), "%s/state/cf_incoming.%s",
-                 CFWORKDIR, ECGSOCKS[i].name);
-        MapName(vbuff);
-        CreateEmptyFile(vbuff);
-
-        snprintf(vbuff, sizeof(vbuff), "%s/state/cf_outgoing.%s",
-                 CFWORKDIR, ECGSOCKS[i].name);
-        MapName(vbuff);
-        CreateEmptyFile(vbuff);
+            MapName(vbuff);
+            CreateEmptyFile(vbuff);
+        }
     }
 }
 
@@ -193,8 +199,19 @@ void MonNetworkGatherData(double *cf_this)
 
     DeleteItemList(ALL_INCOMING);
     ALL_INCOMING = NULL;
+    
+    DeleteItemList(MON_TCP4);
+    DeleteItemList(MON_TCP6);
+    DeleteItemList(MON_UDP4);
+    DeleteItemList(MON_UDP6);
+    MON_UDP4 = MON_UDP6 = MON_TCP4 = MON_TCP6 = NULL;
 
     sscanf(VNETSTAT[VSYSTEMHARDCLASS], "%s", comm);
+
+    if (!FileCanOpen(comm, "r"))
+    {
+        return;
+    }
 
     strcat(comm, " -an");
 
@@ -381,13 +398,17 @@ void MonNetworkGatherData(double *cf_this)
    the state is not smaller than the last or at least 40 minutes
    older. This mirrors the persistence of the maxima classes */
 
+    const char* const statedir = GetStateDir();
+
     for (i = 0; i < ATTR; i++)
     {
         struct stat statbuf;
         time_t now = time(NULL);
 
         Log(LOG_LEVEL_DEBUG, "save incoming '%s'", ECGSOCKS[i].name);
-        snprintf(vbuff, CF_MAXVARSIZE, "%s/state/cf_incoming.%s", CFWORKDIR, ECGSOCKS[i].name);
+
+        snprintf(vbuff, CF_MAXVARSIZE, "%s%ccf_incoming.%s", statedir, FILE_SEPARATOR, ECGSOCKS[i].name);
+
         if (stat(vbuff, &statbuf) != -1)
         {
             if (ItemListSize(in[i]) < statbuf.st_size &&
@@ -411,7 +432,7 @@ void MonNetworkGatherData(double *cf_this)
         time_t now = time(NULL);
 
         Log(LOG_LEVEL_DEBUG, "save outgoing '%s'", ECGSOCKS[i].name);
-        snprintf(vbuff, CF_MAXVARSIZE, "%s/state/cf_outgoing.%s", CFWORKDIR, ECGSOCKS[i].name);
+        snprintf(vbuff, CF_MAXVARSIZE, "%s%ccf_outgoing.%s", statedir, FILE_SEPARATOR, ECGSOCKS[i].name);
 
         if (stat(vbuff, &statbuf) != -1)
         {

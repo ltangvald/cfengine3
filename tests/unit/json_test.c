@@ -11,12 +11,13 @@ static const char *OBJECT_ARRAY = "{\n" "  \"first\": [\n" "    \"one\",\n" "   
 
 static const char *OBJECT_COMPOUND = "{\n"
     "  \"first\": \"one\",\n"
+    "  \"fourth\": {\n" "    \"fifth\": \"five\"\n" "  },\n"
     "  \"second\": {\n"
-    "    \"third\": \"three\"\n" "  },\n" "  \"fourth\": {\n" "    \"fifth\": \"five\"\n" "  }\n" "}";
+    "    \"third\": \"three\"\n" "  }\n" "}";
 
 static const char *OBJECT_SIMPLE = "{\n" "  \"first\": \"one\",\n" "  \"second\": \"two\"\n" "}";
 
-static const char *OBJECT_NUMERIC = "{\n" "  \"real\": 1234.5678,\n" "  \"int\": -1234567890\n" "}";
+static const char *OBJECT_NUMERIC = "{\n" "  \"int\": -1234567890,\n" "  \"real\": 1234.5678\n" "}";
 
 static const char *OBJECT_BOOLEAN = "{\n" "  \"bool_value\": true\n" "}";
 
@@ -211,7 +212,7 @@ static void test_show_object_compound_compact(void)
     JsonWriteCompact(writer, json);
     char *output = StringWriterClose(writer);
 
-    assert_string_equal("{\"first\":\"one\",\"second\":{\"third\":\"three\"},\"fourth\":{\"fifth\":\"five\"}}", output);
+    assert_string_equal("{\"first\":\"one\",\"fourth\":{\"fifth\":\"five\"},\"second\":{\"third\":\"three\"}}", output);
 
     JsonDestroy(json);
     free(output);
@@ -1235,6 +1236,149 @@ static void test_detach_key_from_object(void)
     JsonDestroy(detached);
 }
 
+static void test_parse_array_double_and_trailing_commas(void)
+{
+    {
+        const char *data = "[ \"foo\",, \"bar\" ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[\"foo\", , \"bar\" ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[ \"foo\", \"bar\",, ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[ \"foo\", \"bar\", , ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        // We accept one, and only one, trailing comma.
+        const char *data = "[ \"foo\", \"bar\", ]";
+        JsonElement *json = NULL;
+        assert_int_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        JsonDestroy(json);
+    }
+}
+
+static void test_parse_array_comma_after_brace(void)
+{
+    {
+        const char *data = "[ , \"foo\", \"bar\" ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[,\"foo\",\"bar\"]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+}
+
+static void test_parse_array_bad_nested_elems(void)
+{
+    {
+        const char *data = "[ \"foo\" [\"baz\"], \"bar\" ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[\"foo\"[\"baz\"],\"bar\"]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[ \"foo\" {\"boing\": \"baz\"}, \"bar\" ]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "[\"foo\"{\"boing\":\"baz\"},\"bar\"]";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+}
+
+static void test_parse_object_double_colon(void)
+{
+    {
+        const char *data = "{ \"foo\":: \"bar\" }";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "{\"foo\"::\"bar\"}";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+}
+
+static void test_parse_object_double_and_trailing_comma(void)
+{
+    {
+        const char *data = "{ ,, }";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "{,,}";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "{\"foo\":\"bar\",,}";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        const char *data = "{\"foo\": \"bar\", , }";
+        JsonElement *json = NULL;
+        assert_int_not_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        assert_false(json);
+    }
+
+    {
+        // We accept one, and only one, trailing comma.
+        const char *data = "{\"foo\": \"bar\", }";
+        JsonElement *json = NULL;
+        assert_int_equal(JSON_PARSE_OK, JsonParse(&data, &json));
+        JsonDestroy(json);
+    }
+}
+
 int main()
 {
     PRINT_TEST_BANNER();
@@ -1292,6 +1436,11 @@ int main()
         unit_test(test_array_remove_range),
         unit_test(test_remove_key_from_object),
         unit_test(test_detach_key_from_object),
+        unit_test(test_parse_array_double_and_trailing_commas),
+        unit_test(test_parse_array_comma_after_brace),
+        unit_test(test_parse_array_bad_nested_elems),
+        unit_test(test_parse_object_double_colon),
+        unit_test(test_parse_object_double_and_trailing_comma),
     };
 
     return run_tests(tests);

@@ -58,6 +58,7 @@ size_t StringBytesToHex(char *dst, size_t dst_size,
                         const unsigned char *src_bytes, size_t src_len);
 
 char *SafeStringDuplicate(const char *str);
+char *SafeStringNDuplicate(const char *str, size_t size);
 int SafeStringLength(const char *str);
 int StringSafeCompare(const char *a, const char *b);
 bool StringSafeEqual(const char *a, const char *b);
@@ -102,6 +103,15 @@ int StripTrailingNewline(char *str, size_t max_length);
  * @return 0 if successful, -1 if Chop was called on a string that seemed to have no terminator
  */
 int Chop(char *str, size_t max_length);
+
+/**
+ * @brief Check if a string ends with the given suffix
+ * @param str
+ * @param suffix
+ * @param case_fold whether the comparison is case-insensitive
+ * @return True if suffix matches
+ */
+bool StringEndsWithCase(const char *str, const char *suffix, const bool case_fold);
 
 /**
  * @brief Check if a string ends with the given suffix
@@ -161,5 +171,31 @@ bool StringNotMatchingSetCapped(const char *isp, int limit,
  * @return True if append was successful, false if the operation caused an overflow.
  */
 bool StringAppend(char *dst, const char *src, size_t n);
+
+/**
+ * @brief Like @c StringAppend, but replace characters @c '*' and @c '#' with their visible counterparts.
+ * @param buffer Buffer to be used.
+ * @param str    Constant string to append
+ * @param n Total size of dst buffer. The string will be truncated if this is exceeded.
+ */
+bool StringAppendPromise(char *dst, const char *str, size_t n);
+
+/**
+ * @brief Like @c BufferAppendPromiseStr, but if @c str contains newlines
+ *   and is longer than 2*N+3, then only copy an abbreviated version
+ *   consisting of the first and last N characters, separated by @c `...`
+ * @param buffer Buffer to be used.
+ * @param str    Constant string to append
+ * @param n Total size of dst buffer. The string will be truncated if this is exceeded.
+ * @param max_fragment Max. length of initial/final segment of @c str to keep
+ * @note 2*max_fragment+3 is the maximum length of the appended string (excl. terminating NULL)
+ *
+ */
+bool StringAppendAbbreviatedPromise(char *dst, const char *str, size_t n, const size_t max_fragment);
+
+char *StringCanonify(char *dst, const char *src);
+bool StringAppendDelimited(char *dst, size_t *dst_len, size_t dst_size,
+                           const char *src, char sep);
+bool PathAppend(char *path, size_t path_size, const char *leaf, char sep);
 
 #endif

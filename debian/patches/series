@@ -1,8 +1,8 @@
-redmine_6316
-clean_xml_output
-remove_man_errors
-remove_rpath
-do_not_build_rpmver
-skip_tests_failing_in_chroot
-fix_kfreebsd_build
-disable_failing_test_on_sparc
+0002-clean_xml_output.patch
+0003-remove_man_errors.patch
+0004-remove_rpath.patch
+0005-do_not_build_rpmver.patch
+0006-skip_tests_failing_in_chroot.patch
+0007-fix_kfreebsd_build.patch
+0008-disable_failing_test_on_sparc.patch
+0009_disable_spelling_errors.patch

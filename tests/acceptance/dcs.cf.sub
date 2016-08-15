@@ -21,9 +21,11 @@ bundle common G
     any::
       # General commands.
       "cmds" slist => { "date",
+                        "dd",
                         "diff",
                         "cat",
                         "colordiff",
+                        "cp",
                         "echo",
                         "egrep",
                         "env",
@@ -34,7 +36,10 @@ bundle common G
                         "ln",
                         "ls",
                         "mkdir",
+                        "mkfifo",
                         "mock_package_manager",
+                        "mv",
+                        "no_fds",
                         "od",
                         "perl",
                         "printf",
@@ -44,11 +49,14 @@ bundle common G
                         "rm",
                         "sed",
                         "seq",
+                        "sh",
                         "sleep",
                         "sort",
+                        "stat",
                         "tee",
                         "touch",
                         "true",
+                        "yes",
                         "wc",
                       };
       # Special cases.
@@ -129,6 +137,9 @@ bundle common G
       "testdir" string => "$(const.dirsep)tmp$(const.dirsep)TEST.cfengine";
       "testfile" string => "$(const.dirsep)tmp$(const.dirsep)TEST.cfengine";
 
+  classes:
+      "using_fakeroot"
+        expression => regcmp(".+", getenv("FAKEROOTKEY", "10"));
 }
 
 bundle common dcs_strings
@@ -181,6 +192,7 @@ bundle agent default(filename)
       "bundles" slist => bundlesmatching("default:(init|test|check)");
 
   methods:
+      "any" usebundle => collect_stories_metadata;
       "any" usebundle => test_precheck;
 
     proceed_with_test::
@@ -211,24 +223,42 @@ bundle agent test_run(filename)
       "cf-agent -f .$(const.dirsep)$(filename) -b $(tests)";
 }
 
+bundle agent collect_stories_metadata
+{
+  vars:
+    "test_meta_vars" slist => { "description", "story_id", "covers" };
+  classes:
+    "have_$(test_meta_vars)" expression => isvariable("test_meta.$(test_meta_vars)");
+
+  reports:
+    have_description::
+      "test description: $(test_meta.description)";
+    have_story_id::
+      "test story_id: $(test_meta.story_id)";
+    have_covers::
+      "test covers: $(test_meta.covers)";
+}
+
 bundle agent test_precheck
 {
   vars:
+      "fail_types" slist => { "suppress", "soft" };
+
       "test_skip_unsupported" slist => variablesmatching(".*_meta\.test_skip_unsupported");
       "test_skip_needs_work" slist => variablesmatching(".*_meta\.test_skip_needs_work");
-      "test_suppress_fail" slist => variablesmatching(".*_meta\.test_suppress_fail");
-      "test_suppress_fail_metatags" slist => getvariablemetatags("$(test_suppress_fail)");
-      "test_suppress_fail_redmine" slist => filter("redmine.*", "test_suppress_fail_metatags", "true", "false", 1);
+      "test_$(fail_types)_fail" slist => variablesmatching(".*_meta\.test_$(fail_types)_fail");
+      "test_$(fail_types)_fail_metatags" slist => getvariablemetatags("$(test_$(fail_types)_fail)");
+      "test_$(fail_types)_fail_ticket" slist => filter("(redmine|CFE-|ENT-|ARCHIVE-|QA-).*", "test_$(fail_types)_fail_metatags", "true", "false", 1);
 
   classes:
       "test_skip_unsupported_set" expression => some(".*", "test_skip_unsupported");
       "test_skip_needs_work_set" expression => some(".*", "test_skip_needs_work");
-      "test_suppress_fail_set" expression => some(".*", "test_suppress_fail");
-      "test_suppress_fail_redmine_set" expression => some(".*", "test_suppress_fail_redmine");
+      "test_$(fail_types)_fail_set" expression => some(".*", "test_$(fail_types)_fail");
+      "test_$(fail_types)_fail_ticket_set" expression => some(".*", "test_$(fail_types)_fail_ticket");
 
       "test_skip_unsupported_match" and => { "test_skip_unsupported_set", "$($(test_skip_unsupported))" };
       "test_skip_needs_work_match" and => { "test_skip_needs_work_set", "$($(test_skip_needs_work))" };
-      "test_suppress_fail_match" and => { "test_suppress_fail_set", "$($(test_suppress_fail))" };
+      "test_$(fail_types)_fail_match" and => { "test_$(fail_types)_fail_set", "$($(test_$(fail_types)_fail))" };
 
       "proceed_with_test"
       and => { "!test_skip_unsupported_match", "!test_skip_needs_work_match" },
@@ -239,10 +269,14 @@ bundle agent test_precheck
       "$(this.promise_filename) Skip/unsupported";
     test_skip_needs_work_match::
       "$(this.promise_filename) Skip/needs_work";
-    test_suppress_fail_match.test_suppress_fail_redmine_set::
-      "$(this.promise_filename) XFAIL/$(test_suppress_fail_redmine)";
-    test_suppress_fail_match.!test_suppress_fail_redmine_set::
-      "$(this.promise_filename) FAIL/no_redmine_number";
+    test_suppress_fail_match.test_suppress_fail_ticket_set::
+      "$(this.promise_filename) XFAIL/$(test_suppress_fail_ticket)";
+    test_suppress_fail_match.!test_suppress_fail_ticket_set::
+      "$(this.promise_filename) FAIL/no_ticket_number";
+    test_soft_fail_match.test_soft_fail_ticket_set::
+      "$(this.promise_filename) SFAIL/$(test_soft_fail_ticket)";
+    test_soft_fail_match.!test_soft_fail_ticket_set::
+      "$(this.promise_filename) FAIL/no_ticket_number";
 }
 
 #######################################################
@@ -253,6 +287,31 @@ bundle agent dcs_sort(infile, outfile)
       # Enforce byte sort order with LC_ALL.
       "$(G.env) LC_ALL=C $(G.sort) $(infile) > $(outfile)"
       contain => in_shell;
+}
+
+bundle agent dcs_check_state(bundlename, expected_file, test)
+{
+  vars:
+      "state" data => bundlestate($(bundlename));
+
+  methods:
+      "" usebundle => file_make("$(G.testdir)/template", "{{%state}}");
+      "" usebundle => file_make("$(G.testdir)/actual", "");
+      "any" usebundle => dcs_check_state_prep(@(state));
+      "any" usebundle => dcs_check_diff_expected("$(G.testdir)/actual",
+                                                $(expected_file),
+                                                $(test),
+                                                "no");
+}
+
+bundle agent dcs_check_state_prep(state_container)
+{
+  files:
+      "$(G.testdir)/actual"
+      create => "true",
+      edit_template => "$(G.testdir)/template",
+      template_data => mergedata('{ "state": state_container }'),
+      template_method => "mustache";
 }
 
 bundle agent dcs_check_diff(file1, file2, test)
@@ -501,7 +560,7 @@ bundle agent dcs_fini(file)
   commands:
       "$(G.rm) -rf $(file)*"
       contain => dcs_useshell;
-      "$(G.rm) -rf $(sys.workdir)/state/cf_state.*"
+      "$(G.rm) -rf $(sys.statedir)/cf_state.*"
       contain => dcs_useshell;
 
   reports:
@@ -709,21 +768,21 @@ bundle agent dcs_passif_output(wanted, unwanted, command, test)
 
   reports:
     DEBUG::
-      "$(this.bundle): bad: $(wanted) was NOT found in the output of $(command)"
+      "$(this.bundle): bad: '$(wanted)' was NOT found in the output of '$(command)'"
       ifvarclass => "!__passif_output_wanted";
 
-      "$(this.bundle): bad: $(unwanted) WAS found in the output of $(command)"
+      "$(this.bundle): bad: '$(unwanted)' WAS found in the output of '$(command)'"
       ifvarclass => "__passif_output_unwanted";
 
     EXTRA::
-      "$(this.bundle): good: $(wanted) WAS found in the output of $(command)"
+      "$(this.bundle): good: '$(wanted)' WAS found in the output of '$(command)'"
       ifvarclass => "__passif_output_wanted";
 
-      "$(this.bundle): good: $(unwanted) was NOT found in the output of $(command)"
+      "$(this.bundle): good: '$(unwanted)' was NOT found in the output of '$(command)'"
       ifvarclass => "!__passif_output_unwanted";
 
     DEBUG::
-      "$(this.bundle): the output of command '$(command)' was: $(subout)";
+      "$(this.bundle): the output of command '$(command)' was: '$(subout)'";
 }
 
 bundle agent dcs_passif_output1(wanted, command, test)
@@ -734,4 +793,31 @@ bundle agent dcs_passif_output1(wanted, command, test)
                                         $(command),
                                         $(test)),
       inherit => "true";
+}
+
+bundle agent generate_key
+{
+  classes:
+      "key_exists" expression => fileexists("$(sys.workdir)/ppkeys/localhost.pub");
+  files:
+    !key_exists::
+      "$(sys.workdir)/ppkeys/localhost.priv"
+        create => "true",
+        copy_from => dcs_sync("$(this.promise_dirname)/root-MD5=617eb383deffef843ea856b129d0a423.priv");
+      "$(sys.workdir)/ppkeys/localhost.pub"
+        create => "true",
+        copy_from => dcs_sync("$(this.promise_dirname)/root-MD5=617eb383deffef843ea856b129d0a423.pub");
+}
+
+body copy_from dcs_remote_cp(from,server, port)
+# @brief Download a file from a remote server. They server is always trusted.
+#
+# @param from The location of the file on the remote server
+# @param server The hostname or IP of the server from which to download
+{
+      servers     => { "$(server)" };
+      portnumber  => "$(port)";
+      source      => "$(from)";
+      compare     => "mtime";
+      trustkey    => "true";
 }

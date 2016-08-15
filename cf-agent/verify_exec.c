@@ -82,7 +82,7 @@ PromiseResult VerifyExecPromise(EvalContext *ctx, const Promise *pp)
         return PROMISE_RESULT_SKIPPED;
     }
 
-    PromiseBanner(pp);
+    PromiseBanner(ctx,pp);
 
     PromiseResult result = PROMISE_RESULT_NOOP;
     /* See VerifyCommandRetcode for interpretation of return codes.
@@ -253,7 +253,7 @@ static ActionResult RepairExec(EvalContext *ctx, Attributes a,
 
     if (a.transaction.action != cfa_fix)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a, "Command '%s' needs to be executed, but only warning was promised", cmdline);
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a, "Command '%s' needs to be executed, but only warning was promised", cmdline);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
         return ACTION_RESULT_OK;
     }
@@ -282,7 +282,7 @@ static ActionResult RepairExec(EvalContext *ctx, Attributes a,
         }
 
 #ifndef __MINGW32__
-        Log(LOG_LEVEL_VERBOSE, "(Setting umask to %jo)", (uintmax_t)a.contain.umask);
+        Log(LOG_LEVEL_VERBOSE, "Setting umask to %jo", (uintmax_t)a.contain.umask);
         maskval = umask(a.contain.umask);
 
         if (a.contain.umask == 0)
@@ -297,7 +297,7 @@ static ActionResult RepairExec(EvalContext *ctx, Attributes a,
 #ifdef __MINGW32__
             pfp =
                 cf_popen_powershell_setuid(cmdline, open_mode, a.contain.owner, a.contain.group, a.contain.chdir, a.contain.chroot,
-                                  a.transaction.background);
+                                           a.transaction.background);
 #else // !__MINGW32__
             Log(LOG_LEVEL_ERR, "Powershell is only supported on Windows");
             return ACTION_RESULT_FAILED;
@@ -359,7 +359,8 @@ static ActionResult RepairExec(EvalContext *ctx, Attributes a,
             {
                 ModuleProtocol(ctx, cmdline, line, !a.contain.nooutput, module_context, module_tags);
             }
-            else if ((!a.contain.nooutput) && (!EmptyString(line)))
+
+            if (!a.contain.nooutput && !EmptyString(line))
             {
                 lineOutLen = strlen(comm) + strlen(line) + 12;
 
@@ -457,14 +458,14 @@ void PreviewProtocolLine(char *line, char *comm)
      */
 
     char *prefixes[] =
-    {
-        ":silent:",
-        ":inform:",
-        ":verbose:",
-        ":editverbose:",
-        ":error:",
-        ":logonly:",
-    };
+        {
+            ":silent:",
+            ":inform:",
+            ":verbose:",
+            ":editverbose:",
+            ":error:",
+            ":logonly:",
+        };
 
     int precount = sizeof(prefixes) / sizeof(char *);
 

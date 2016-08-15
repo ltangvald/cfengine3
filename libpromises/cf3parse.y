@@ -36,6 +36,7 @@
 #include "mod_files.h"
 #include "string_lib.h"
 #include "logic_expressions.h"
+#include <json-yaml.h>
 
 // FIX: remove
 #include "syntax.h"
@@ -68,7 +69,6 @@ static size_t CURRENT_PROMISER_LINE = 0;
 %}
 
 %token IDSYNTAX BLOCKID QSTRING CLASS PROMISE_TYPE BUNDLE BODY ASSIGN ARROW NAKEDVAR
-%token OP CP OB CB
 %expect 1
 
 %%
@@ -219,12 +219,12 @@ arglist:               /* Empty */
                           ParseError("Error in bundle parameter list, expected ')', wrong input '%s'", yytext);
                        }
 
-arglist_begin:         OP
+arglist_begin:         '('
                        {
                            ParserDebug("P:%s:%s:%s arglist begin:%s\n", P.block,P.blocktype,P.blockid, yytext);
                        }
 
-arglist_end:           CP
+arglist_end:           ')'
                        {
                            ParserDebug("P:%s:%s:%s arglist end:%s\n", P.block,P.blocktype,P.blockid, yytext);
                        }
@@ -277,7 +277,7 @@ bundlebody:            body_begin
 
                        bundle_decl
 
-                       CB 
+                       '}'
                        {
                            INSTALL_SKIP = false;
                            P.offsets.last_id = -1;
@@ -292,7 +292,7 @@ bundlebody:            body_begin
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-body_begin:            OB
+body_begin:            '{'
                        {
                            ParserDebug("P:%s:%s:%s begin body open\n", P.block,P.blocktype,P.blockid);
                        }
@@ -432,7 +432,8 @@ promisee_statement:    promiser
 
                                P.currentpromise = PromiseTypeAppendPromise(P.currentstype, P.promiser,
                                                                            RvalCopy(P.rval),
-                                                                           P.currentclasses ? P.currentclasses : "any");
+                                                                           P.currentclasses ? P.currentclasses : "any",
+                                                                           P.currentvarclasses);
                                P.currentpromise->offset.line = CURRENT_PROMISER_LINE;
                                P.currentpromise->offset.start = P.offsets.last_string;
                                P.currentpromise->offset.context = P.offsets.last_class_id;
@@ -459,7 +460,8 @@ promiser_statement:    promiser
 
                                P.currentpromise = PromiseTypeAppendPromise(P.currentstype, P.promiser,
                                                                 (Rval) { NULL, RVAL_TYPE_NOPROMISEE },
-                                                                P.currentclasses ? P.currentclasses : "any");
+                                                                           P.currentclasses ? P.currentclasses : "any",
+                                                                           P.currentvarclasses);
                                P.currentpromise->offset.line = CURRENT_PROMISER_LINE;
                                P.currentpromise->offset.start = P.offsets.last_string;
                                P.currentpromise->offset.context = P.offsets.last_class_id;
@@ -574,6 +576,85 @@ constraint:            constraint_id                        /* BUNDLE ONLY */
                                        // Intentional fall
                                    case SYNTAX_STATUS_NORMAL:
                                        {
+                                           const char *item = P.rval.item;
+                                           // convert @(x) to mergedata(x)
+                                           if (P.rval.type == RVAL_TYPE_SCALAR &&
+                                               (strcmp(P.lval, "data") == 0 || strcmp(P.lval, "template_data") == 0) &&
+                                               strlen(item) > 3 &&
+                                               item[0] == '@' &&
+                                               (item[1] == '(' || item[1] == '{'))
+                                           {
+                                               Rlist *synthetic_args = NULL;
+                                               RlistAppendScalar(&synthetic_args, xstrndup(P.rval.item+2, strlen(P.rval.item)-3 ));
+                                               RvalDestroy(P.rval);
+
+                                               P.rval = (Rval) { FnCallNew(xstrdup("mergedata"), synthetic_args), RVAL_TYPE_FNCALL };
+                                           }
+                                           // convert 'json or yaml' to direct container or parsejson(x) or parseyaml(x)
+                                           else if (P.rval.type == RVAL_TYPE_SCALAR &&
+                                                    (strcmp(P.lval, "data") == 0 || strcmp(P.lval, "template_data") == 0))
+                                           {
+                                               JsonElement *json = NULL;
+                                               JsonParseError res;
+                                               bool json_parse_attempted = false;
+                                               Buffer *copy = BufferNewFrom(P.rval.item, strlen(P.rval.item));
+
+                                               const char* fname = NULL;
+                                               if (strlen(P.rval.item) > 3 && strncmp("---", P.rval.item, 3) == 0)
+                                               {
+                                                   fname = "parseyaml";
+
+                                                   // look for unexpanded variables
+                                                   if (NULL == strstr(P.rval.item, "$(") && NULL == strstr(P.rval.item, "${"))
+                                                   {
+                                                       const char *copy_data = BufferData(copy);
+                                                       res = JsonParseYamlString(&copy_data, &json);
+                                                       json_parse_attempted = true;
+                                                   }
+                                               }
+                                               else
+                                               {
+                                                   fname = "parsejson";
+                                                   // look for unexpanded variables
+                                                   if (NULL == strstr(P.rval.item, "$(") && NULL == strstr(P.rval.item, "${"))
+                                                   {
+                                                       const char *copy_data = BufferData(copy);
+                                                       res = JsonParse(&copy_data, &json);
+                                                       json_parse_attempted = true;
+                                                   }
+                                               }
+
+                                               BufferDestroy(copy);
+
+                                               if (json_parse_attempted && res != JSON_PARSE_OK)
+                                               {
+                                                   // Parsing failed, insert fncall so it can be retried during evaluation
+                                               }
+                                               else if (NULL != json && JsonGetElementType(json) == JSON_ELEMENT_TYPE_PRIMITIVE)
+                                               {
+                                                   // Parsing failed, insert fncall so it can be retried during evaluation
+                                                   JsonDestroy(json);
+                                                   json = NULL;
+                                               }
+
+                                               if (NULL != fname)
+                                               {
+                                                   if (NULL == json)
+                                                   {
+                                                       Rlist *synthetic_args = NULL;
+                                                       RlistAppendScalar(&synthetic_args, xstrdup(P.rval.item));
+                                                       RvalDestroy(P.rval);
+
+                                                       P.rval = (Rval) { FnCallNew(xstrdup(fname), synthetic_args), RVAL_TYPE_FNCALL };
+                                                   }
+                                                   else
+                                                   {
+                                                       RvalDestroy(P.rval);
+                                                       P.rval = (Rval) { json, RVAL_TYPE_CONTAINER };
+                                                   }
+                                               }
+                                           }
+
                                            {
                                                SyntaxTypeMatch err = CheckConstraint(P.currenttype, P.lval, P.rval, promise_type_syntax);
                                                if (err != SYNTAX_TYPE_MATCH_OK && err != SYNTAX_TYPE_MATCH_ERROR_UNEXPANDED)
@@ -582,7 +663,7 @@ constraint:            constraint_id                        /* BUNDLE ONLY */
                                                }
                                            }
 
-                                           if (P.rval.type == RVAL_TYPE_SCALAR && strcmp(P.lval, "ifvarclass") == 0)
+                                           if (P.rval.type == RVAL_TYPE_SCALAR && (strcmp(P.lval, "ifvarclass") == 0 || strcmp(P.lval, "if") == 0))
                                            {
                                                ValidateClassLiteral(P.rval.item);
                                            }
@@ -593,14 +674,6 @@ constraint:            constraint_id                        /* BUNDLE ONLY */
                                            cp->offset.end = P.offsets.current;
                                            cp->offset.context = P.offsets.last_class_id;
                                            P.currentstype->offset.end = P.offsets.current;
-
-                                           // Cache whether there are subbundles for later $(this.promiser) logic
-
-                                           if (strcmp(P.lval,"usebundle") == 0 || strcmp(P.lval,"edit_line") == 0
-                                               || strcmp(P.lval,"edit_xml") == 0 || strcmp(P.lval,"home_bundle") == 0)
-                                           {
-                                               P.currentpromise->has_subbundles = true;
-                                           }
                                        }
                                        break;
                                    case SYNTAX_STATUS_REMOVED:
@@ -694,7 +767,7 @@ bodybody:              body_begin
 
                        bodyattribs
 
-                       CB 
+                       '}'
                        {
                            P.offsets.last_id = -1;
                            P.offsets.last_string = -1;
@@ -751,7 +824,7 @@ selection:             selection_id                         /* BODY ONLY */
                                                yyerror(SyntaxTypeMatchToString(err));
                                            }
 
-                                           if (P.rval.type == RVAL_TYPE_SCALAR && strcmp(P.lval, "ifvarclass") == 0)
+                                           if (P.rval.type == RVAL_TYPE_SCALAR && (strcmp(P.lval, "ifvarclass") == 0 || strcmp(P.lval, "if") == 0))
                                            {
                                                ValidateClassLiteral(P.rval.item);
                                            }
@@ -765,6 +838,12 @@ selection:             selection_id                         /* BODY ONLY */
                                            {
                                                cp = BodyAppendConstraint(P.currentbody, P.lval, RvalCopy(P.rval), P.currentclasses, P.references_body);
                                            }
+
+                                           if (P.currentvarclasses != NULL)
+                                           {
+                                               ParseError("Body attributes can't be put under a variable class '%s'", P.currentvarclasses);
+                                           }
+
                                            cp->offset.line = P.line_no;
                                            cp->offset.start = P.offsets.last_id;
                                            cp->offset.end = P.offsets.current;
@@ -873,18 +952,18 @@ arrow_type:            ARROW
 
 class:                 CLASS
                        {
-                           P.offsets.last_class_id = P.offsets.current - strlen(P.currentclasses) - 2;
-                           ParserDebug("\tP:%s:%s:%s:%s class = %s\n", P.block, P.blocktype, P.blockid, P.currenttype, yytext);
+                           P.offsets.last_class_id = P.offsets.current - strlen(P.currentclasses ? P.currentclasses : P.currentvarclasses) - 2;
+                           ParserDebug("\tP:%s:%s:%s:%s %s = %s\n", P.block, P.blocktype, P.blockid, P.currenttype, P.currentclasses ? "class": "varclass", yytext);
 
-                           /* class literal includes terminating :: */
-                           /* Warning : AIX does not like yylen     */
-                           char *literal = xstrndup(yytext, strlen(yytext) - 2);
+                           if (NULL != P.currentclasses)
+                           {
+                               char *literal = xstrdup(P.currentclasses);
 
-                           ValidateClassLiteral(literal);
+                               ValidateClassLiteral(literal);
 
-                           free(literal);
+                               free(literal);
+                           }
                        }
-
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 
@@ -960,13 +1039,15 @@ rval:                  IDSYNTAX
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-list:                  OB litems CB
+list:                  '{' '}'
+                     | '{' litems '}'
+                     | '{' litems ',' '}'
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-litems:                /* empty */
-                     | litem
-                     | litem ','  litems
+litems:
+                       litem
+                     | litems ',' litem
                      | litem error
                        {
                            ParserDebug("P:rval:list:error yychar = %d\n", yychar);
@@ -976,7 +1057,9 @@ litems:                /* empty */
                            }
                            else if ( yychar == ASSIGN )
                            {
-                               ParseError("Check list statement  previous line, Expected '}', wrong input '%s'", yytext);
+                               ParseError("Check list statement previous line,"
+                                          " Expected '}', wrong input '%s'",
+                                          yytext);
                            }
                            else
                            {
@@ -988,15 +1071,27 @@ litems:                /* empty */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 litem:                 IDSYNTAX
-                       { 
-                           ParserDebug("\tP:%s:%s:%s:%s list append; id = %s\n", P.block, P.blocktype, P.blockid, P.currentclasses ? P.currentclasses : "any", P.currentid);
-                           RlistAppendScalar((Rlist **)&P.currentRlist, P.currentid);
+                       {
+                           ParserDebug("\tP:%s:%s:%s:%s list append: "
+                                       "id = %s\n",
+                                       P.block, P.blocktype, P.blockid,
+                                       (P.currentclasses ?
+                                            P.currentclasses : "any"),
+                                       P.currentid);
+                           RlistAppendScalar((Rlist **) &P.currentRlist,
+                                             P.currentid);
                        }
 
                      | QSTRING
                        {
-                           ParserDebug("\tP:%s:%s:%s:%s list append: qstring = %s\n", P.block, P.blocktype, P.blockid, P.currentclasses ? P.currentclasses : "any", P.currentstring);
-                           RlistAppendScalar((Rlist **)&P.currentRlist,(void *)P.currentstring);
+                           ParserDebug("\tP:%s:%s:%s:%s list append: "
+                                       "qstring = %s\n",
+                                       P.block, P.blocktype, P.blockid,
+                                       (P.currentclasses ?
+                                            P.currentclasses : "any"),
+                                       P.currentstring);
+                           RlistAppendScalar((Rlist **) &P.currentRlist,
+                                             (void *) P.currentstring);
                            free(P.currentstring);
                            P.currentstring = NULL;
                        }
@@ -1052,7 +1147,7 @@ usefunction:           functionid givearglist
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-givearglist:           OP 
+givearglist:           '('
                        {
                            if (++P.arg_nesting >= CF_MAX_NESTING)
                            {
@@ -1064,7 +1159,7 @@ givearglist:           OP
 
                        gaitems
 
-                       CP 
+                       ')'
                        {
                            ParserDebug("\tP:%s:%s:%s end givearglist for function %s, level %d\n", P.block,P.blocktype,P.blockid, P.currentfnid[P.arg_nesting], P.arg_nesting );
                            P.currentfncall[P.arg_nesting] = FnCallNew(P.currentfnid[P.arg_nesting], P.giveargs[P.arg_nesting]);

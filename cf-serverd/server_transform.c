@@ -44,16 +44,17 @@
 #include <cf-serverd-enterprise-stubs.h>
 #include <syslog_client.h>
 #include <verify_classes.h>
+#include <verify_vars.h>
 #include <generic_agent.h> /* HashControls */
 #include <file_lib.h>      /* IsDirReal */
 #include <matching.h>      /* IsRegex */
+#include <net.h>
 
 #include "server_common.h"                         /* PreprocessRequestPath */
 #include "server_access.h"
 #include "strlist.h"
 
 
-static void KeepContextBundles(EvalContext *ctx, const Policy *policy);
 static PromiseResult KeepServerPromise(EvalContext *ctx, const Promise *pp, void *param);
 static void InstallServerAuthPath(const char *path, Auth **list, Auth **listtail);
 static void KeepServerRolePromise(EvalContext *ctx, const Promise *pp);
@@ -267,7 +268,6 @@ void KeepPromises(EvalContext *ctx, const Policy *policy, GenericAgentConfig *co
         exit(255);
     }
 
-    KeepContextBundles(ctx, policy);
     KeepControlPromises(ctx, policy, config);
     KeepPromiseBundles(ctx, policy);
 }
@@ -282,13 +282,13 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
     CFRUNCOMMAND[0] = '\0';
     SetChecksumUpdatesDefault(ctx, true);
 
-/* Keep promised agent behaviour - control bodies */
+    /* Keep promised agent behaviour - control bodies */
 
     Banner("Server control promises..");
 
     PolicyResolve(ctx, policy, config);
 
-/* Now expand */
+    /* Now expand */
 
     Seq *constraints = ControlBodyConstraints(policy, AGENT_TYPE_SERVER);
     if (constraints)
@@ -296,6 +296,7 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
         for (size_t i = 0; i < SeqLength(constraints); i++)
         {
             Constraint *cp = SeqAt(constraints, i);
+#define IsControlBody(e) (strcmp(cp->lval, CFS_CONTROLBODY[e].lval) == 0)
 
             if (!IsDefinedClass(ctx, cp->classes))
             {
@@ -308,86 +309,81 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
 
             if (!value)
             {
-                Log(LOG_LEVEL_ERR, "Unknown lval '%s' in server control body", cp->lval);
-                continue;
+                Log(LOG_LEVEL_ERR,
+                    "Unknown lval '%s' in server control body",
+                    cp->lval);
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_SERVER_FACILITY].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_SERVER_FACILITY))
             {
                 SetFacility(value);
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_DENY_BAD_CLOCKS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_DENY_BAD_CLOCKS))
             {
                 DENYBADCLOCKS = BooleanFromString(value);
-                Log(LOG_LEVEL_VERBOSE, "Setting denybadclocks to '%s'", DENYBADCLOCKS ? "true" : "false");
-                continue;
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting denybadclocks to '%s'",
+                    DENYBADCLOCKS ? "true" : "false");
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_LOG_ENCRYPTED_TRANSFERS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_LOG_ENCRYPTED_TRANSFERS))
             {
                 LOGENCRYPT = BooleanFromString(value);
-                Log(LOG_LEVEL_VERBOSE, "Setting logencrypt to '%s'", LOGENCRYPT ? "true" : "false");
-                continue;
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting logencrypt to '%s'",
+                    LOGENCRYPT ? "true" : "false");
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_LOG_ALL_CONNECTIONS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_LOG_ALL_CONNECTIONS))
             {
                 SV.logconns = BooleanFromString(value);
                 Log(LOG_LEVEL_VERBOSE, "Setting logconns to %d", SV.logconns);
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_MAX_CONNECTIONS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_MAX_CONNECTIONS))
             {
                 CFD_MAXPROCESSES = (int) IntFromString(value);
                 MAXTRIES = CFD_MAXPROCESSES / 3;
-                Log(LOG_LEVEL_VERBOSE, "Setting maxconnections to %d", CFD_MAXPROCESSES);
-#ifdef LMDB
-                static int LSD_MAXREADERS = 0;
-                if (LSD_MAXREADERS < CFD_MAXPROCESSES)
-                {
-                    int rc = UpdateLastSeenMaxReaders(CFD_MAXPROCESSES);
-                    if (rc == 0)
-                    {
-                        LSD_MAXREADERS = CFD_MAXPROCESSES;
-                    }
-                }
-#endif
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting maxconnections to %d",
+                    CFD_MAXPROCESSES);
+                /* The handling of max_readers in LMDB is not ideal, but
+                 * here is how it is right now: We know that both cf-serverd and
+                 * cf-hub will access the lastseen database. Worst case every
+                 * single thread and process will do it at the same time, and
+                 * this has in fact been observed. So we add the maximum of
+                 * those two values together to provide a safe ceiling. In
+                 * addition, cf-agent can access the database occasionally as
+                 * well, so add a few extra for that too. */
+                DBSetMaximumConcurrentTransactions(CFD_MAXPROCESSES
+                                                   + EnterpriseGetMaxCfHubProcesses() + 10);
                 continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_CALL_COLLECT_INTERVAL].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_CALL_COLLECT_INTERVAL))
             {
                 COLLECT_INTERVAL = (int) 60 * IntFromString(value);
-                Log(LOG_LEVEL_VERBOSE, "Setting call_collect_interval to %d (seconds)", COLLECT_INTERVAL);
-                continue;
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting call_collect_interval to %d (seconds)",
+                    COLLECT_INTERVAL);
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_LISTEN].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_LISTEN))
             {
                 SERVER_LISTEN = BooleanFromString(value);
-                Log(LOG_LEVEL_VERBOSE, "Setting server listen to '%s' ",
-                      (SERVER_LISTEN)? "true":"false");
-                continue;
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting server listen to '%s' ",
+                    SERVER_LISTEN ? "true" : "false");
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_CALL_COLLECT_WINDOW].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_CALL_COLLECT_WINDOW))
             {
                 COLLECT_WINDOW = (int) IntFromString(value);
-                Log(LOG_LEVEL_VERBOSE, "Setting collect_window to %d (seconds)", COLLECT_INTERVAL);
-                continue;
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting collect_window to %d (seconds)",
+                    COLLECT_INTERVAL);
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_CF_RUN_COMMAND].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_CF_RUN_COMMAND))
             {
                 strlcpy(CFRUNCOMMAND, value, sizeof(CFRUNCOMMAND));
-                Log(LOG_LEVEL_VERBOSE, "Setting cfruncommand to '%s'", CFRUNCOMMAND);
-                continue;
+                Log(LOG_LEVEL_VERBOSE,
+                    "Setting cfruncommand to '%s'",
+                    CFRUNCOMMAND);
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_ALLOW_CONNECTS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_ALLOW_CONNECTS))
             {
                 Log(LOG_LEVEL_VERBOSE, "Setting allowing connections from ...");
 
@@ -398,11 +394,8 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
                         PrependItem(&SV.nonattackerlist, RlistScalarValue(rp), cp->classes);
                     }
                 }
-
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_DENY_CONNECTS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_DENY_CONNECTS))
             {
                 Log(LOG_LEVEL_VERBOSE, "Setting denying connections from ...");
 
@@ -413,16 +406,12 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
                         PrependItem(&SV.attackerlist, RlistScalarValue(rp), cp->classes);
                     }
                 }
-
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_SKIP_VERIFY].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_SKIP_VERIFY))
             {
-                continue;
+                /* Skip. */
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_ALLOW_ALL_CONNECTS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_ALLOW_ALL_CONNECTS))
             {
                 Log(LOG_LEVEL_VERBOSE, "Setting allowing multiple connections from ...");
 
@@ -433,11 +422,8 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
                         PrependItem(&SV.multiconnlist, RlistScalarValue(rp), cp->classes);
                     }
                 }
-
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_ALLOW_USERS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_ALLOW_USERS))
             {
                 Log(LOG_LEVEL_VERBOSE, "SET Allowing users ...");
 
@@ -448,11 +434,8 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
                         PrependItem(&SV.allowuserlist, RlistScalarValue(rp), cp->classes);
                     }
                 }
-
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_TRUST_KEYS_FROM].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_TRUST_KEYS_FROM))
             {
                 Log(LOG_LEVEL_VERBOSE, "Setting trust keys from ...");
 
@@ -463,11 +446,8 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
                         PrependItem(&SV.trustkeylist, RlistScalarValue(rp), cp->classes);
                     }
                 }
-
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_ALLOWLEGACYCONNECTS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_ALLOWLEGACYCONNECTS))
             {
                 Log(LOG_LEVEL_VERBOSE, "Setting allowing legacy connections from ...");
 
@@ -478,33 +458,35 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
                         PrependItem(&SV.allowlegacyconnects, RlistScalarValue(rp), cp->classes);
                     }
                 }
-
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_PORT_NUMBER].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_PORT_NUMBER))
             {
                 CFENGINE_PORT = IntFromString(value);
                 strlcpy(CFENGINE_PORT_STR, value, sizeof(CFENGINE_PORT_STR));
                 Log(LOG_LEVEL_VERBOSE, "Setting default port number to %d",
                     CFENGINE_PORT);
-                continue;
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_BIND_TO_INTERFACE].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_BIND_TO_INTERFACE))
             {
                 strlcpy(BINDINTERFACE, value, sizeof(BINDINTERFACE));
-                Log(LOG_LEVEL_VERBOSE, "Setting bindtointerface to '%s'", BINDINTERFACE);
-                continue;
+                Log(LOG_LEVEL_VERBOSE, "Setting bindtointerface to: %s",
+                    BINDINTERFACE);
             }
-
-            if (strcmp(cp->lval, CFS_CONTROLBODY[SERVER_CONTROL_ALLOWCIPHERS].lval) == 0)
+            else if (IsControlBody(SERVER_CONTROL_ALLOWCIPHERS))
             {
-
+                assert(SV.allowciphers == NULL);                /* no leak */
                 SV.allowciphers = xstrdup(value);
-                Log(LOG_LEVEL_VERBOSE, "Setting allowciphers to '%s'", SV.allowciphers);
-                continue;
+                Log(LOG_LEVEL_VERBOSE, "Setting allowciphers to: %s",
+                    SV.allowciphers);
             }
+            else if (IsControlBody(SERVER_CONTROL_ALLOWTLSVERSION))
+            {
+                assert(SV.allowtlsversion == NULL);             /* no leak */
+                SV.allowtlsversion = xstrdup(value);
+                Log(LOG_LEVEL_VERBOSE, "Setting allowtlsversion to: %s",
+                    SV.allowtlsversion);
+            }
+#undef IsControlBody
         }
     }
 
@@ -540,97 +522,143 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericA
     {
         LASTSEENEXPIREAFTER = IntFromString(value) * 60;
     }
-}
 
-/*********************************************************************/
-
-static void KeepContextBundles(EvalContext *ctx, const Policy *policy)
-{
-/* Dial up the generic promise expansion with a callback */
-
-    for (size_t i = 0; i < SeqLength(policy->bundles); i++)
+    value = EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_BWLIMIT);
+    if (value)
     {
-        Bundle *bp = SeqAt(policy->bundles, i);
-
-        if ((strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_SERVER]) == 0) || (strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_COMMON]) == 0))
+        double bval;
+        if (DoubleFromString(value, &bval))
         {
-            if (RlistLen(bp->args) > 0)
-            {
-                Log(LOG_LEVEL_WARNING, "Cannot implicitly evaluate bundle '%s %s', as this bundle takes arguments.", bp->type, bp->name);
-                continue;
-            }
-
-            BannerBundle(bp, NULL);
-
-            EvalContextStackPushBundleFrame(ctx, bp, NULL, false);
-            for (size_t j = 0; j < SeqLength(bp->promise_types); j++)
-            {
-                PromiseType *sp = SeqAt(bp->promise_types, j);
-
-                if ((strcmp(sp->name, "vars") != 0) && (strcmp(sp->name, "classes") != 0))
-                {
-                    continue;
-                }
-
-                BannerPromiseType(bp->name, sp->name, 0);
-
-                EvalContextStackPushPromiseTypeFrame(ctx, sp);
-                for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
-                {
-                    Promise *pp = SeqAt(sp->promises, ppi);
-                    ExpandPromise(ctx, pp, KeepServerPromise, NULL);
-                }
-                EvalContextStackPopFrame(ctx);
-
-            }
-            EvalContextStackPopFrame(ctx);
+            bwlimit_kbytes = (uint32_t) ( bval / 1000.0);
+            Log(LOG_LEVEL_VERBOSE, "Setting rate limit to %d kBytes/sec", bwlimit_kbytes);
         }
     }
+
 }
 
 /*********************************************************************/
+
+/* Sequence in which server promise types should be evaluated */
+static const char *const SERVER_TYPESEQUENCE[] =
+{
+    "vars",
+    "classes",
+    "roles",
+    "access",
+    NULL
+};
+
+static const char *const COMMON_TYPESEQUENCE[] =
+{
+    "meta",
+    "vars",
+    "classes",
+    "reports",
+    NULL
+};
+
+/* Check if promise is NOT belonging to default server types 
+ * (see SERVER_TYPESEQUENCE)*/
+static bool IsPromiseTypeNotInTypeSequence(const char *promise_type,
+                                           const char * const *seq)
+{
+    for (int type = 0; seq[type] != NULL; type++)
+    {
+        if (strcmp(promise_type, seq[type]) == 0)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+static void EvaluateBundle(EvalContext *ctx, const Bundle *bp, const char * const *seq)
+{
+    EvalContextStackPushBundleFrame(ctx, bp, NULL, false);
+
+    for (int type = 0; seq[type] != NULL; type++)
+    {
+        const PromiseType *sp = BundleGetPromiseType((Bundle *)bp, seq[type]);
+
+        /* Some promise types might not be there. */
+        if (!sp || SeqLength(sp->promises) == 0)
+        {
+            Log(LOG_LEVEL_DEBUG, "No promise type %s in bundle %s",
+                                 seq[type], bp->name);
+            continue;
+        }
+
+        EvalContextStackPushPromiseTypeFrame(ctx, sp);
+        for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
+        {
+            Promise *pp = SeqAt(sp->promises, ppi);
+            ExpandPromise(ctx, pp, KeepServerPromise, NULL);
+        }
+        EvalContextStackPopFrame(ctx);
+    }
+
+    /* Check if we are having some other promise types which we
+     * should evaluate. THIS IS ONLY FOR BACKWARD COMPATIBILITY! */
+    for (size_t j = 0; j < SeqLength(bp->promise_types); j++)
+    {
+        PromiseType *sp = SeqAt(bp->promise_types, j);
+
+        /* Skipping evaluation of promise as this was evaluated in
+         * loop above. */
+        if (!IsPromiseTypeNotInTypeSequence(sp->name, seq))
+        {
+            Log(LOG_LEVEL_DEBUG, "Skipping subsequent evaluation of "
+                    "promise type %s in bundle %s", sp->name, bp->name);
+            continue;
+        }
+
+        Log(LOG_LEVEL_WARNING, "Trying to evaluate unsupported/obsolete "
+                    "promise type %s in %s bundle %s", sp->name, bp->type, bp->name);
+
+        EvalContextStackPushPromiseTypeFrame(ctx, sp);
+        for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
+        {
+            Promise *pp = SeqAt(sp->promises, ppi);
+            ExpandPromise(ctx, pp, KeepServerPromise, NULL);
+        }
+        EvalContextStackPopFrame(ctx);
+
+    }
+
+    EvalContextStackPopFrame(ctx);
+}
 
 static void KeepPromiseBundles(EvalContext *ctx, const Policy *policy)
 {
-/* Dial up the generic promise expansion with a callback */
+    /* Dial up the generic promise expansion with a callback */
 
     CleanReportBookFilterSet();
 
     for (size_t i = 0; i < SeqLength(policy->bundles); i++)
     {
         Bundle *bp = SeqAt(policy->bundles, i);
+        bool server_bundle = strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_SERVER]) == 0;
+        bool common_bundle = strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_COMMON]) == 0;
 
-        if ((strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_SERVER]) == 0) || (strcmp(bp->type, CF_AGENTTYPES[AGENT_TYPE_COMMON]) == 0))
+        if (server_bundle || common_bundle)
         {
             if (RlistLen(bp->args) > 0)
             {
-                Log(LOG_LEVEL_WARNING, "Cannot implicitly evaluate bundle '%s %s', as this bundle takes arguments.", bp->type, bp->name);
+                Log(LOG_LEVEL_WARNING,
+                    "Cannot implicitly evaluate bundle '%s %s', as this bundle takes arguments.",
+                    bp->type, bp->name);
                 continue;
             }
+        }
 
-            BannerBundle(bp, NULL);
+        if (server_bundle)
+        {
+            EvaluateBundle(ctx, bp, SERVER_TYPESEQUENCE);
+        }
 
-            EvalContextStackPushBundleFrame(ctx, bp, NULL, false);
-            for (size_t j = 0; j < SeqLength(bp->promise_types); j++)
-            {
-                PromiseType *sp = SeqAt(bp->promise_types, j);
-
-                if ((strcmp(sp->name, "access") != 0) && (strcmp(sp->name, "roles") != 0))
-                {
-                    continue;
-                }
-
-                BannerPromiseType(bp->name, sp->name, 0);
-
-                EvalContextStackPushPromiseTypeFrame(ctx, sp);
-                for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
-                {
-                    Promise *pp = SeqAt(sp->promises, ppi);
-                    ExpandPromise(ctx, pp, KeepServerPromise, NULL);
-                }
-                EvalContextStackPopFrame(ctx);
-            }
-            EvalContextStackPopFrame(ctx);
+        else if (common_bundle)
+        {
+            EvaluateBundle(ctx, bp, COMMON_TYPESEQUENCE);
         }
     }
 }
@@ -638,7 +666,13 @@ static void KeepPromiseBundles(EvalContext *ctx, const Policy *policy)
 static PromiseResult KeepServerPromise(EvalContext *ctx, const Promise *pp, ARG_UNUSED void *param)
 {
     assert(!param);
+    PromiseBanner(ctx, pp);
 
+    if (strcmp(pp->parent_promise_type->name, "vars") == 0)
+    {
+        return VerifyVarPromise(ctx, pp, NULL);
+    }
+    
     if (strcmp(pp->parent_promise_type->name, "classes") == 0)
     {
         return VerifyClassPromise(ctx, pp, NULL);
@@ -886,12 +920,10 @@ static void NewHostToOldACL(Auth *old, const char *host)
             do
             {
                 dot++; /* Step over prior dot. */
-            }
-            while (dot[0] == '.'); /* Treat many dots as one. */
+            } while (dot[0] == '.'); /* Treat many dots as one. */
             extra++; /* For a backslash before the dot */
             dot = strchr(dot, '.');
-        }
-        while (dot);
+        } while (dot);
 
         char regex[strlen(host) + extra], *dst = regex;
         dst++[0] = '.';
@@ -908,8 +940,7 @@ static void NewHostToOldACL(Auth *old, const char *host)
             do /* Step over prior dot(s), as before. */
             {
                 dot++;
-            }
-            while (dot[0] == '.');
+            } while (dot[0] == '.');
 
             /* Identify next fragment: */
             const char *d = strchr(dot, '.');
@@ -921,8 +952,7 @@ static void NewHostToOldACL(Auth *old, const char *host)
 
             /* Advance: */
             dot = d;
-        }
-        while (dot);
+        } while (dot);
 
         /* Terminate: */
         assert(dst < regex + sizeof(regex));
@@ -950,8 +980,6 @@ static void AccessPromise_AddAccessConstraints(const EvalContext *ctx,
                                                struct resource_acl *racl,
                                                Auth *ap, Auth *dp)
 {
-    Rlist *rp;
-
     for (size_t i = 0; i < SeqLength(pp->conlist); i++)
     {
         const Constraint *cp = SeqAt(pp->conlist, i);
@@ -964,14 +992,15 @@ static void AccessPromise_AddAccessConstraints(const EvalContext *ctx,
 
         switch (cp->rval.type)
         {
+#define IsAccessBody(e) (strcmp(cp->lval, CF_REMACCESS_BODIES[e].lval) == 0)
+
         case RVAL_TYPE_SCALAR:
 
-            if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_IFENCRYPTED].lval) == 0)
+            if (IsAccessBody(REMOTE_ACCESS_IFENCRYPTED))
             {
                 ap->encrypt = BooleanFromString(cp->rval.item);
-                continue;
             }
-            if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_SHORTCUT].lval) == 0)
+            else if (IsAccessBody(REMOTE_ACCESS_SHORTCUT))
             {
                 const char *shortcut = cp->rval.item;
 
@@ -980,48 +1009,42 @@ static void AccessPromise_AddAccessConstraints(const EvalContext *ctx,
                     Log(LOG_LEVEL_ERR,
                         "slashes are forbidden in ACL shortcut: %s",
                         shortcut);
-                    continue;
                 }
-
-                bool bret = StringMapHasKey(SV.path_shortcuts, shortcut);
-                if (bret)
+                else if (StringMapHasKey(SV.path_shortcuts, shortcut))
                 {
                     Log(LOG_LEVEL_WARNING,
                         "Already existing shortcut for path '%s' was replaced",
                         pp->promiser);
-                    continue;
                 }
+                else
+                {
+                    StringMapInsert(SV.path_shortcuts,
+                                    xstrdup(shortcut), xstrdup(pp->promiser));
 
-                StringMapInsert(SV.path_shortcuts,
-                                xstrdup(shortcut), xstrdup(pp->promiser));
-
-                Log(LOG_LEVEL_DEBUG, "Added shortcut '%s' for path: %s",
-                    shortcut, pp->promiser);
-                continue;
+                    Log(LOG_LEVEL_DEBUG, "Added shortcut '%s' for path: %s",
+                        shortcut, pp->promiser);
+                }
             }
-
             break;
 
         case RVAL_TYPE_LIST:
 
-            for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
+            for (const Rlist *rp = (const Rlist *) cp->rval.item;
+                 rp != NULL; rp = rp->next)
             {
-
                 /* TODO keys, ips, hostnames are valid such strings. */
 
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_ADMITIPS].lval) == 0)
+                if (IsAccessBody(REMOTE_ACCESS_ADMITIPS))
                 {
                     ret = StrList_Append(&racl->admit.ips, RlistScalarValue(rp));
                     PrependItem(&(ap->accesslist), RlistScalarValue(rp), NULL);
-                    continue;
                 }
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_DENYIPS].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_DENYIPS))
                 {
                     ret = StrList_Append(&racl->deny.ips, RlistScalarValue(rp));
                     PrependItem(&(dp->accesslist), RlistScalarValue(rp), NULL);
-                    continue;
                 }
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_ADMITHOSTNAMES].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_ADMITHOSTNAMES))
                 {
                     ret = StrList_Append(&racl->admit.hostnames, RlistScalarValue(rp));
                     /* If any hostname rule got added,
@@ -1031,9 +1054,8 @@ static void AccessPromise_AddAccessConstraints(const EvalContext *ctx,
                         TurnOnReverseLookups();
                     }
                     NewHostToOldACL(ap, RlistScalarValue(rp));
-                    continue;
                 }
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_DENYHOSTNAMES].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_DENYHOSTNAMES))
                 {
                     ret = StrList_Append(&racl->deny.hostnames, RlistScalarValue(rp));
                     /* If any hostname rule got added,
@@ -1043,38 +1065,29 @@ static void AccessPromise_AddAccessConstraints(const EvalContext *ctx,
                         TurnOnReverseLookups();
                     }
                     NewHostToOldACL(dp, RlistScalarValue(rp));
-                    continue;
                 }
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_ADMITKEYS].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_ADMITKEYS))
                 {
                     ret = StrList_Append(&racl->admit.keys, RlistScalarValue(rp));
-                    continue;
                 }
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_DENYKEYS].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_DENYKEYS))
                 {
                     ret = StrList_Append(&racl->deny.keys, RlistScalarValue(rp));
-                    continue;
                 }
-
                 /* Legacy stuff */
-
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_ADMIT].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_ADMIT))
                 {
                     ret = racl_SmartAppend(&racl->admit, RlistScalarValue(rp));
                     PrependItem(&(ap->accesslist), RlistScalarValue(rp), NULL);
-                    continue;
                 }
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_DENY].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_DENY))
                 {
                     ret = racl_SmartAppend(&racl->deny, RlistScalarValue(rp));
                     PrependItem(&(dp->accesslist), RlistScalarValue(rp), NULL);
-                    continue;
                 }
-
-                if (strcmp(cp->lval, CF_REMACCESS_BODIES[REMOTE_ACCESS_MAPROOT].lval) == 0)
+                else if (IsAccessBody(REMOTE_ACCESS_MAPROOT))
                 {
                     PrependItem(&(ap->maproot), RlistScalarValue(rp), NULL);
-                    continue;
                 }
             }
 
@@ -1090,6 +1103,8 @@ static void AccessPromise_AddAccessConstraints(const EvalContext *ctx,
         default:
             UnexpectedError("Unknown constraint type!");
             break;
+
+#undef IsAccessBody
         }
     }
 
@@ -1145,7 +1160,10 @@ static void KeepFileAccessPromise(const EvalContext *ctx, const Promise *pp)
     {
         if (errno != ENOENT)                        /* something went wrong */
         {
-            goto err_unknown;
+            Log(LOG_LEVEL_ERR,
+                "Failed to canonicalize path '%s' in access_rules, ignoring!",
+                pp->promiser);
+            return;
         }
         else                      /* file does not exist, it doesn't matter */
         {
@@ -1201,16 +1219,10 @@ static void KeepFileAccessPromise(const EvalContext *ctx, const Promise *pp)
     return;
 
   err_too_long:
-        Log(LOG_LEVEL_ERR,
-            "Path '%s' in access_rules is too long (%zu > %d), ignoring!",
-            pp->promiser, strlen(pp->promiser), PATH_MAX);
-        return;
-
-  err_unknown:
-        Log(LOG_LEVEL_ERR,
-            "Failed to canonicalize path '%s' in access_rules, ignoring!",
-            pp->promiser);
-        return;
+    Log(LOG_LEVEL_ERR,
+        "Path '%s' in access_rules is too long (%zu > %d), ignoring!",
+        pp->promiser, strlen(pp->promiser), PATH_MAX);
+    return;
 }
 
 /*********************************************************************/
@@ -1220,7 +1232,7 @@ void KeepLiteralAccessPromise(EvalContext *ctx, const Promise *pp, const char *t
     Auth *ap, *dp;
     const char *handle = PromiseGetHandle(pp);
 
-    if ((handle == NULL) && (strcmp(type,"literal") == 0))
+    if (handle == NULL && strcmp(type, "literal") == 0)
     {
         Log(LOG_LEVEL_ERR, "Access to literal server data requires you to define a promise handle for reference");
         return;
@@ -1292,13 +1304,10 @@ void KeepLiteralAccessPromise(EvalContext *ctx, const Promise *pp, const char *t
 
 static void KeepQueryAccessPromise(EvalContext *ctx, const Promise *pp)
 {
-    Auth *ap, *dp;
-
-    ap = GetOrCreateAuth(pp->promiser, &SV.varadmit, &SV.varadmittail);
-    dp = GetOrCreateAuth(pp->promiser, &SV.vardeny, &SV.vardenytail);
+    Auth *dp = GetOrCreateAuth(pp->promiser, &SV.vardeny, &SV.vardenytail),
+        *ap = GetOrCreateAuth(pp->promiser, &SV.varadmit, &SV.varadmittail);
 
     RegisterLiteralServerData(ctx, pp->promiser, pp);
-
     ap->literal = true;
 
     size_t pos = acl_SortedInsert(&query_acl, pp->promiser);
@@ -1318,88 +1327,60 @@ static void KeepQueryAccessPromise(EvalContext *ctx, const Promise *pp)
 
 static void KeepServerRolePromise(EvalContext *ctx, const Promise *pp)
 {
-    Rlist *rp;
-    Auth *ap;
+    Auth *ap = GetOrCreateAuth(pp->promiser, &SV.roles, &SV.rolestail);
+    const char *const authorizer = CF_REMROLE_BODIES[REMOTE_ROLE_AUTHORIZE].lval;
+    size_t i = SeqLength(pp->conlist);
 
-    ap = GetOrCreateAuth(pp->promiser, &SV.roles, &SV.rolestail);
-
-    for (size_t i = 0; i < SeqLength(pp->conlist); i++)
+    while (i > 0)
     {
+        i--;
         Constraint *cp = SeqAt(pp->conlist, i);
-
-        if (!IsDefinedClass(ctx, cp->classes))
+        if (strcmp(cp->lval, authorizer) == 0)
         {
-            continue;
-        }
-
-        switch (cp->rval.type)
-        {
-        case RVAL_TYPE_LIST:
-
-            for (rp = (Rlist *) cp->rval.item; rp != NULL; rp = rp->next)
+            if (cp->rval.type != RVAL_TYPE_LIST)
+            {
+                Log(LOG_LEVEL_ERR,
+                    "Right-hand side of authorize promise for '%s' should be a list",
+                    pp->promiser);
+            }
+            else if (IsDefinedClass(ctx, cp->classes))
             {
                 /* This is for remote class activation by means of cf-runagent.*/
-                if (strcmp(cp->lval, CF_REMROLE_BODIES[REMOTE_ROLE_AUTHORIZE].lval) == 0)
+                for (const Rlist *rp = cp->rval.item; rp != NULL; rp = rp->next)
                 {
                     PrependItem(&(ap->accesslist), RlistScalarValue(rp), NULL);
-                    continue;
                 }
             }
-            break;
-
-        case RVAL_TYPE_FNCALL:
-            UnexpectedError("Constraint of type FNCALL is invalid in this context!");
-            break;
-
-        default:
-
-            if ((strcmp(cp->lval, "comment") == 0) || (strcmp(cp->lval, "handle") == 0))
-            {
-            }
-            else
-            {
-                Log(LOG_LEVEL_ERR, "Right-hand side of authorize promise for '%s' should be a list", pp->promiser);
-            }
-            break;
+        }
+        else if (strcmp(cp->lval, "comment") != 0 &&
+                 strcmp(cp->lval, "handle") != 0 &&
+                 /* Are there other known list constraints ? if not, skip this: */
+                 cp->rval.type != RVAL_TYPE_LIST)
+        {
+            Log(LOG_LEVEL_WARNING,
+                "Unrecognised promise '%s' for %s",
+                cp->lval, pp->promiser);
         }
     }
 }
 
 static void InstallServerAuthPath(const char *path, Auth **list, Auth **listtail)
 {
-    Auth *ptr;
-
-    ptr = xcalloc(1, sizeof(Auth));
-
-    if (*listtail == NULL)       /* Last element in the list */
-    {
-        assert(*list == NULL);
-        *list = ptr;
-    }
-    else
-    {
-        (*listtail)->next = ptr;
-    }
-
-    char *path_dup = xstrdup(path);
+    Auth **nextp = *listtail ? &((*listtail)->next) : list;
+    assert(*nextp == NULL);
+    *listtail = *nextp = xcalloc(1, sizeof(Auth));
+    (*nextp)->path = xstrdup(path);
 
 #ifdef __MINGW32__
-    int i;
-
-    for (i = 0; path_dup[i] != '\0'; i++)
+    for (char *p = (*nextp)->path; *p != '\0'; p++)
     {
-        path_dup[i] = ToLower(path_dup[i]);
+        *p = ToLower(*p);
     }
 #endif /* __MINGW32__ */
-
-    ptr->path = path_dup;
-    *listtail = ptr;
 }
 
 static Auth *GetAuthPath(const char *path, Auth *list)
 {
-    Auth *ap;
-
     size_t path_len = strlen(path);
     char unslashed_path[path_len + 1];
     memcpy(unslashed_path, path, path_len + 1);
@@ -1413,7 +1394,7 @@ static Auth *GetAuthPath(const char *path, Auth *list)
         DeleteSlash(unslashed_path);
     }
 
-    for (ap = list; ap != NULL; ap = ap->next)
+    for (Auth *ap = list; ap != NULL; ap = ap->next)
     {
         if (strcmp(ap->path, unslashed_path) == 0)
         {
