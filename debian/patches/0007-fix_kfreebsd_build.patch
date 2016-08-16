@@ -1,11 +1,4 @@
-From: Antonio Radici <antonio@debian.org>
-Date: Sun, 14 Aug 2016 22:07:44 +0100
-Subject: fix_kfreebsd_build
-
-===================================================================
----
- cf-agent/verify_users_pam.c | 3 +++
- 1 file changed, 3 insertions(+)
+To fix the kfreebsd build
 
 --- a/cf-agent/verify_users_pam.c
 +++ b/cf-agent/verify_users_pam.c

@@ -1,3 +1,13 @@
+cfengine3 (3.7.4-3) unstable; urgency=medium
+
+  * debian/patches:
+    + consolidated all failing tests into 0006-skip_failing_tests.patch
+    + added rlist_test to the above patch, it fails in reproducibility test
+    + 0010_disable_date_annotation.patch to disable the date annotation in the
+      manual, otherwise the reproducibility build fails.
+
+ -- Antonio Radici <antonio@debian.org>  Tue, 16 Aug 2016 20:43:40 +0100
+
 cfengine3 (3.7.4-2) unstable; urgency=medium
 
   * debian/patches:

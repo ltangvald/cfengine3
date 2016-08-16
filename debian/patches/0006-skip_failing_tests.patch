@@ -1,24 +1,18 @@
-From: Antonio Radici <antonio@debian.org>
-Date: Sun, 14 Aug 2016 22:07:44 +0100
-Subject: skip_tests_failing_in_chroot
+Skip tests that fail for various reasons.
 
-===================================================================
----
- tests/Makefile.am                                  |  2 +-
- .../acceptance/01_vars/02_functions/network/008.cf | 66 ----------------------
- .../01_vars/02_functions/network/selectservers.cf  | 52 -----------------
- tests/acceptance/01_vars/03_lists/016.cf           | 60 --------------------
- .../templating/timed/expired_edit_line_locks.cf    | 44 ---------------
- tests/acceptance/14_reports/00_output/002.cf       | 47 ---------------
- tests/acceptance/16_cf-serverd/01_start/004.cf     | 19 -------
- tests/unit/Makefile.am                             |  3 -
- 8 files changed, 1 insertion(+), 292 deletions(-)
- delete mode 100644 tests/acceptance/01_vars/02_functions/network/008.cf
- delete mode 100644 tests/acceptance/01_vars/02_functions/network/selectservers.cf
- delete mode 100644 tests/acceptance/01_vars/03_lists/016.cf
- delete mode 100644 tests/acceptance/10_files/templating/timed/expired_edit_line_locks.cf
- delete mode 100644 tests/acceptance/14_reports/00_output/002.cf
- delete mode 100644 tests/acceptance/16_cf-serverd/01_start/004.cf
+Fails in chroot:
+  + acceptance/01_vars/02_functions/network/008.cf
+  + acceptance/10_files/templating/timed/expired_edit_line_locks.cf
+  + unit/buffer_test
+  + unit/enterprise_extension_test
+  + load/run_last_seen_threaded_load
+
+Fails on sparc:
+  + unit/mon_cpu_test
+
+Fails during reproducibility testing on amd64:
+  + unit/rlist_test
+
 
 --- a/tests/Makefile.am
 +++ b/tests/Makefile.am
@@ -146,7 +140,15 @@ Subject: skip_tests_failing_in_chroot
 -}
 --- a/tests/unit/Makefile.am
 +++ b/tests/unit/Makefile.am
-@@ -140,7 +140,6 @@
+@@ -98,7 +98,6 @@
+ 	atexit_test \
+ 	csv_writer_test \
+ 	item_test \
+-	rlist_test \
+ 	domainname_test \
+ 	set_test \
+ 	set_domainname_test \
+@@ -140,7 +139,6 @@
  	files_interfaces_test \
  	refcount_test \
  	list_test \
@@ -154,51 +156,23 @@ Subject: skip_tests_failing_in_chroot
  	cf_key_functions_test \
  	connection_management_test \
  	expand_test \
-@@ -216,18 +215,6 @@
- 
+@@ -157,7 +155,6 @@
+ 	rb-tree-test \
+ 	variable_test \
+ 	protocol_test \
+-	mon_cpu_test \
+ 	mon_load_test \
+ 	mon_processes_test \
+ 	mustache_test \
+@@ -217,11 +214,8 @@
  conversion_test_SOURCES = conversion_test.c ../../libpromises/conversion.c
  
--if !BUILTIN_EXTENSIONS
+ if !BUILTIN_EXTENSIONS
 -    check_PROGRAMS += enterprise_extension_test
 -
--    enterprise_extension_test_SOURCES = enterprise_extension_test.c
--
+     enterprise_extension_test_SOURCES = enterprise_extension_test.c
+ 
 -    check_LTLIBRARIES += cfengine-enterprise.la
--    cfengine_enterprise_la_SOURCES = enterprise_extension_test_lib.c
--    cfengine_enterprise_la_LDFLAGS = $(AM_LDFLAGS) \
--	-avoid-version -module -shared -export-dynamic -rpath /
--    EXTRA_enterprise_extension_test_DEPENDENCIES = cfengine-enterprise.la
--endif
--
- set_domainname_test_SOURCES = set_domainname_test.c
- set_domainname_test_LDADD = libstr.la ../../libpromises/libpromises.la
- 
---- a/tests/load/Makefile.am
-+++ b/tests/load/Makefile.am
-@@ -38,15 +38,11 @@
- 	-I../../libcfnet \
- 	-I../../libpromises
- 
--EXTRA_DIST = \
--	run_db_load.sh \
--	run_lastseen_threaded_load.sh
--
--TESTS = \
--	run_db_load.sh \
--	run_lastseen_threaded_load.sh
-+EXTRA_DIST = run_db_load.sh
- 
--check_PROGRAMS = db_load lastseen_load lastseen_threaded_load
-+TESTS = run_db_load.sh
-+
-+check_PROGRAMS = db_load lastseen_load
- 
- 
- db_load_SOURCES = db_load.c
-@@ -58,6 +54,3 @@
- 	$(srcdir)/../../libutils/statistics.c
- lastseen_load_LDADD = ../unit/libdb.la ../../libpromises/libpromises.la
- endif
--
--lastseen_threaded_load_LDADD = ../unit/libtest.la \
--	../../libpromises/libpromises.la
+     cfengine_enterprise_la_SOURCES = enterprise_extension_test_lib.c
+     cfengine_enterprise_la_LDFLAGS = $(AM_LDFLAGS) \
+ 	-avoid-version -module -shared -export-dynamic -rpath /

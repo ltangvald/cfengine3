@@ -1,0 +1,18 @@
+Remove the date modified otherwise we fail the Debian reproducibility test.
+
+The reason for the failure is that those builds might run at a different date
+from the upload, or the date on the system running it might be different from
+the upload date, therefore we will generate different binaries and fail the
+reproducibility test.
+
+--- a/libutils/man.c
++++ b/libutils/man.c
+@@ -69,7 +69,7 @@
+         strftime(date_modified, 19, "%Y-%m-%d", &t);
+     }
+ 
+-    WriterWriteF(out, ".TH %s 8 \"%s\" \"CFEngine\" \"System Administration\"\n", program_upper, date_modified);
++    WriterWriteF(out, ".TH %s 8 \"CFEngine\" \"System Administration\"\n", program_upper);
+ }
+ 
+ static void WriteAvailability(Writer *out, const char *program)
