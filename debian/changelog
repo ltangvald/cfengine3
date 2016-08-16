@@ -1,3 +1,11 @@
+cfengine3 (3.7.4-2) unstable; urgency=medium
+
+  * debian/patches:
+    + 0007-fix_kfreebsd_build.patch updated to remove process_test which fails
+      in kfreebsd builds
+
+ -- Antonio Radici <antonio@debian.org>  Tue, 16 Aug 2016 09:38:03 +0100
+
 cfengine3 (3.7.4-1) unstable; urgency=medium
 
   * Upgraded to the latest upstream LTS.
