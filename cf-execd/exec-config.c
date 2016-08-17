@@ -26,6 +26,7 @@
 
 #include <alloc.h>
 #include <string_lib.h>
+#include <writer.h>
 
 #include <rlist.h>
 #include <eval_context.h>
@@ -33,26 +34,21 @@
 #include <generic_agent.h> // TODO: fix
 #include <item_lib.h>
 
-static const int THREE_HOURS = 3 * 60 * 60;
 
 static char *GetIpAddresses(const EvalContext *ctx)
 {
-    /* FIXME: correctly handle cases with a lot of IPs assigned to a host */
-    char ipbuf[CF_MAXVARSIZE] = "";
+    Writer *ipbuf = StringWriter();
+
     for (Item *iptr = EvalContextGetIpAddresses(ctx); iptr != NULL; iptr = iptr->next)
     {
-        if ((SafeStringLength(ipbuf) + SafeStringLength(iptr->name)) < sizeof(ipbuf))
+        WriterWrite(ipbuf, iptr->name);
+        if (iptr->next != NULL)
         {
-            strcat(ipbuf, iptr->name);
-            strcat(ipbuf, " ");
-        }
-        else
-        {
-            break;
+            WriterWriteChar(ipbuf, ' ');
         }
     }
-    Chop(ipbuf, sizeof(ipbuf));
-    return xstrdup(ipbuf);
+
+    return StringWriterClose(ipbuf);
 }
 
 ExecConfig *ExecConfigNew(bool scheduled_run, const EvalContext *ctx, const Policy *policy)
@@ -61,7 +57,7 @@ ExecConfig *ExecConfigNew(bool scheduled_run, const EvalContext *ctx, const Poli
 
     exec_config->scheduled_run = scheduled_run;
     exec_config->exec_command = xstrdup("");
-    exec_config->agent_expireafter = THREE_HOURS;
+    exec_config->agent_expireafter = 2 * 60;                   /* two hours */
 
     exec_config->mail_server = xstrdup("");
     exec_config->mail_from_address = xstrdup("");
@@ -90,9 +86,10 @@ ExecConfig *ExecConfigNew(bool scheduled_run, const EvalContext *ctx, const Poli
             const void *value = EvalContextVariableGet(ctx, ref, NULL);
             if (!value)
             {
-                /* FIXME: figure out whether this is reachable */
-                // TODO: should've been checked before this point. change to programming error
-                Log(LOG_LEVEL_ERR, "Unknown lval '%s' in exec control body", cp->lval);
+                /* Has already been checked by the parser. */
+                ProgrammingError(
+                    "Unknown attribute in body executor control: %s",
+                    cp->lval);
                 VarRefDestroy(ref);
                 continue;
             }

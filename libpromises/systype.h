@@ -34,6 +34,7 @@ typedef enum
     PLATFORM_CONTEXT_HP,
     PLATFORM_CONTEXT_AIX,
     PLATFORM_CONTEXT_LINUX,
+    PLATFORM_CONTEXT_BUSYBOX, /* Linux-based Busybox toolset */
     PLATFORM_CONTEXT_SOLARIS, /* > 5.10, BSD-compatible system tools */
     PLATFORM_CONTEXT_SUN_SOLARIS, /* < 5.11, BSD tools in /usr/ucb */
     PLATFORM_CONTEXT_FREEBSD,
@@ -56,6 +57,7 @@ typedef enum
 /*******************************************************************/
 
 extern PlatformContext VSYSTEMHARDCLASS;
+extern PlatformContext VPSHARDCLASS; /* used to define which ps command to use*/
 extern const char *const CLASSTEXT[PLATFORM_CONTEXT_MAX];
 extern const char *const VPSCOMM[PLATFORM_CONTEXT_MAX];
 extern const char *const VPSOPTS[PLATFORM_CONTEXT_MAX];

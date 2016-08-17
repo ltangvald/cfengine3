@@ -173,8 +173,6 @@ int ScheduleEditXmlOperations(EvalContext *ctx, const Bundle *bp, Attributes a, 
                 continue;
             }
 
-            BannerSubPromiseType(ctx, bp->name, sp->name);
-
             EvalContextStackPushPromiseTypeFrame(ctx, sp);
             for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
             {
@@ -204,7 +202,7 @@ int ScheduleEditXmlOperations(EvalContext *ctx, const Bundle *bp, Attributes a, 
 static PromiseResult KeepEditXmlPromise(EvalContext *ctx, const Promise *pp,
                                         ARG_UNUSED void *param)
 {
-    PromiseBanner(pp);
+    PromiseBanner(ctx, pp);
 
     if (strcmp("classes", pp->parent_promise_type->name) == 0)
     {
@@ -1063,7 +1061,7 @@ static bool InsertTreeInFile(EvalContext *ctx, char *rawtree, xmlDocPtr doc, Att
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to insert the promised tree '%s' into an empty XML document '%s' - but only a warning was promised",
              rawtree, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1136,7 +1134,7 @@ static bool DeleteTreeInNode(EvalContext *ctx, char *rawtree, xmlDocPtr doc, xml
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to delete the promised tree '%s' at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawtree, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1224,7 +1222,7 @@ static bool InsertTreeInNode(EvalContext *ctx, char *rawtree, xmlDocPtr doc, xml
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to insert the promised tree '%s' at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawtree, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1285,7 +1283,7 @@ static bool DeleteAttributeInNode(EvalContext *ctx, char *rawname, xmlNodePtr do
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to delete the promised attribute '%s', at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawname, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1356,7 +1354,7 @@ static bool SetAttributeInNode(EvalContext *ctx, char *rawname, char *rawvalue, 
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to set the promised attribute, with name '%s' and value '%s', at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawname, rawvalue, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1417,7 +1415,7 @@ static bool DeleteTextInNode(EvalContext *ctx, char *rawtext, xmlDocPtr doc, xml
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to delete the promised text '%s' at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawtext, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1488,7 +1486,7 @@ static bool SetTextInNode(EvalContext *ctx, char *rawtext, xmlDocPtr doc, xmlNod
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to set the promised text '%s' at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawtext, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1559,7 +1557,7 @@ static bool InsertTextInNode(EvalContext *ctx, char *rawtext, xmlDocPtr doc, xml
 
     if (a.transaction.action == cfa_warn)
     {
-        cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
              "Need to insert the promised text '%s' at XPath '%s' in XML document '%s' - but only a warning was promised",
              rawtext, a.xml.select_xpath, edcontext->filename);
         *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1953,9 +1951,6 @@ static bool XmlNodesCompareAttributes(const xmlNodePtr node1, const xmlNodePtr n
 static bool XmlNodesCompareNodes(const xmlNodePtr node1, const xmlNodePtr node2, Attributes a, const Promise *pp)
 /* Does node1 contain same nodes found in node2? */
 {
-
-    int count1, count2, compare = true;
-
     if (!node1 && !node2)
     {
         return true;
@@ -1966,29 +1961,25 @@ static bool XmlNodesCompareNodes(const xmlNodePtr node1, const xmlNodePtr node2,
         return false;
     }
 
-    count1 = xmlChildElementCount(node1);
-    count2 = xmlChildElementCount(node2);
+    int count1 = xmlChildElementCount(node1);
+    int count2 = xmlChildElementCount(node2);
 
     if (count1 != count2)
     {
         return false;
     }
 
-
-    //get node list from node1 and node2
     xmlNodePtr child1 = xmlFirstElementChild(node1);
-
-    while (child1)
+    bool compare = true;
+    while (child1 != NULL)
     {
         if (!XmlVerifyNodeInNodeExact(child1, node2, a, pp))
         {
             compare = false;
             break;
         }
-        child1 = xmlNextElementSibling(node1);
+        child1 = xmlNextElementSibling(child1);
     }
-
-    xmlFreeNode(child1);
 
     return compare;
 }
@@ -2164,9 +2155,6 @@ static bool XmlNodesSubsetOfAttributes(const xmlNodePtr node1, const xmlNodePtr 
 static bool XmlNodesSubsetOfNodes(const xmlNodePtr node1, const xmlNodePtr node2, Attributes a, const Promise *pp)
 /* Does node1 contain matching subset of nodes found in node2? */
 {
-    xmlNodePtr child1 = NULL;
-    int subset = true;
-
     if (!node1 && !node2)
     {
         return true;
@@ -2178,16 +2166,16 @@ static bool XmlNodesSubsetOfNodes(const xmlNodePtr node1, const xmlNodePtr node2
     }
 
     //get node list from node1 and node2
-    child1 = xmlFirstElementChild(node1);
-
-    while (child1)
+    xmlNodePtr child1 = xmlFirstElementChild(node1);
+    bool subset = true;
+    while (child1 != NULL)
     {
         if (!XmlVerifyNodeInNodeExact(child1, node2, a, pp))
         {
             subset = false;
             break;
         }
-        child1 = xmlNextElementSibling(node1);
+        child1 = xmlNextElementSibling(child1);
     }
 
     return subset;
@@ -2318,29 +2306,25 @@ static bool XmlVerifyNodeInNodeExact(const xmlNodePtr node1, const xmlNodePtr no
 /* Does node2 contain a node with content matching all content in node1?
    Returns a pointer to node found in node2 or NULL */
 {
-    xmlNodePtr comparenode = NULL;
 
     if ((node1 == NULL) || (node2 == NULL))
     {
         return false;
     }
 
-    if ((comparenode = xmlFirstElementChild(node2)) == NULL)
-    {
-        return false;
-    }
+    xmlNodePtr comparenode = xmlFirstElementChild(node2);
 
-    while (comparenode)
+    while (comparenode != NULL)
     {
         if (XmlNodesCompare(node1, comparenode, a, pp))
         {
-
             return true;
         }
+
         comparenode = xmlNextElementSibling(comparenode);
     }
 
-    return true;
+    return false;
 }
 
 /*********************************************************************/
@@ -2355,12 +2339,8 @@ xmlNodePtr XmlVerifyNodeInNodeSubset(xmlNodePtr node1, xmlNodePtr node2, Attribu
     }
 
     xmlNodePtr comparenode = xmlFirstElementChild(node2);
-    if (!comparenode)
-    {
-        return NULL;
-    }
 
-    while (comparenode)
+    while (comparenode != NULL)
     {
         if (XmlNodesSubset(node1, comparenode, a, pp))
         {
@@ -2370,7 +2350,6 @@ xmlNodePtr XmlVerifyNodeInNodeSubset(xmlNodePtr node1, xmlNodePtr node2, Attribu
         comparenode = xmlNextElementSibling(comparenode);
     }
 
-    xmlFree(comparenode);
     return NULL;
 }
 

@@ -39,6 +39,14 @@
 #include <cfnet.h>                       /* ProtocolVersion, CF_BUFSIZE etc */
 #include <misc_lib.h>                    /* xsnprintf, ProgrammingError etc */
 
+/*******************************************************************/
+/* Undef platform specific defines that pollute our namespace      */
+/*******************************************************************/
+
+#ifdef interface
+#undef interface
+#endif
+
 
 /*******************************************************************/
 /* Preprocessor tricks                                             */
@@ -52,12 +60,14 @@
 /* Various defines                                                 */
 /*******************************************************************/
 
+#define CF_MAXSIZE 102400000
 #define CF_BILLION 1000000000L
 #define CF_EXPANDSIZE (2*CF_BUFSIZE)
 #define CF_BUFFERMARGIN 128
 #define CF_BLOWFISHSIZE 16
 #define CF_MAXVARSIZE 1024
 #define CF_MAXSIDSIZE 2048      /* Windows only: Max size (bytes) of security identifiers */
+#define CF_MAXFRAGMENT 19       /* abbreviate long promise names to 2*MAXFRAGMENT+3 */
 #define CF_NONCELEN (CF_BUFSIZE/16)
 #define CF_MAXLINKSIZE 256
 #define CF_PROCCOLS 16
@@ -65,6 +75,7 @@
 #define CF_MACROALPHABET 61     /* a-z, A-Z plus a bit */
 #define CF_ALPHABETSIZE 256
 #define CF_SAMEMODE 7777
+/* CF_SAME_OWNER/GROUP should be -1; chown(-1) doesn't change ownership. */
 #define CF_SAME_OWNER ((uid_t)-1)
 #define CF_UNKNOWN_OWNER ((uid_t)-2)
 #define CF_SAME_GROUP ((gid_t)-1)
@@ -136,7 +147,6 @@ typedef enum
 #define CF_START_DOMAIN "undefined.domain"
 
 #define CF_GRAINS   64
-#define ATTR        20
 #define CF_NETATTR   7          /* icmp udp dns tcpsyn tcpfin tcpack */
 #define CF_MEASURE_INTERVAL (5.0*60.0)
 #define CF_SHIFT_INTERVAL (6*3600)
@@ -399,8 +409,13 @@ typedef enum
     COMMON_CONTROL_SYSLOG_HOST,
     COMMON_CONTROL_SYSLOG_PORT,
     COMMON_CONTROL_FIPS_MODE,
+    COMMON_CONTROL_BWLIMIT,
     COMMON_CONTROL_CACHE_SYSTEM_FUNCTIONS,
     COMMON_CONTROL_PROTOCOL_VERSION,
+    COMMON_CONTROL_TLS_CIPHERS,
+    COMMON_CONTROL_TLS_MIN_VERSION,
+    COMMON_CONTROL_PACKAGE_INVENTORY,
+    COMMON_CONTROL_PACKAGE_MODULE,
     COMMON_CONTROL_MAX
 } CommonControl;
 
@@ -476,6 +491,28 @@ typedef enum
     EDIT_ORDER_BEFORE,
     EDIT_ORDER_AFTER
 } EditOrder;
+
+/*************************************************************************/
+
+typedef enum
+{
+    TYPE_SEQUENCE_META,
+    TYPE_SEQUENCE_VARS,
+    TYPE_SEQUENCE_DEFAULTS,
+    TYPE_SEQUENCE_CONTEXTS,
+    TYPE_SEQUENCE_USERS,
+    TYPE_SEQUENCE_FILES,
+    TYPE_SEQUENCE_PACKAGES,
+    TYPE_SEQUENCE_ENVIRONMENTS,
+    TYPE_SEQUENCE_METHODS,
+    TYPE_SEQUENCE_PROCESSES,
+    TYPE_SEQUENCE_SERVICES,
+    TYPE_SEQUENCE_COMMANDS,
+    TYPE_SEQUENCE_STORAGE,
+    TYPE_SEQUENCE_DATABASES,
+    TYPE_SEQUENCE_REPORTS,
+    TYPE_SEQUENCE_NONE
+} TypeSequence;
 
 /*************************************************************************/
 /* Syntax module range/pattern constants for type validation             */
@@ -719,6 +756,13 @@ typedef enum
     PACKAGE_ACTION_VERIFY,
     PACKAGE_ACTION_NONE
 } PackageAction;
+
+typedef enum
+{
+    NEW_PACKAGE_ACTION_ABSENT,
+    NEW_PACKAGE_ACTION_PRESENT,
+    NEW_PACKAGE_ACTION_NONE
+} NewPackageAction;
 
 typedef enum
 {
@@ -1051,7 +1095,7 @@ typedef struct
     char *chdir;
     char *chroot;
     int preview;
-    int nooutput;
+    bool nooutput;
     int timeout;
 } ExecContain;
 
@@ -1212,7 +1256,6 @@ typedef struct
 typedef struct
 {
     PackageAction package_policy;
-    int have_package_methods;
     char *package_version;
     Rlist *package_architectures;
     PackageVersionComparator package_select;
@@ -1257,7 +1300,43 @@ typedef struct
     char *package_version_equal_command;
 
     int package_noverify_returncode;
+    
+    bool has_package_method;
+    bool is_empty;
 } Packages;
+
+/*************************************************************************/
+
+typedef struct
+{
+    char *name;
+    int updates_ifelapsed;
+    int installed_ifelapsed;
+    Rlist *options;
+} PackageModuleBody;
+
+
+typedef struct
+{
+    Rlist *control_package_inventory; /* list of all inventory used package managers 
+                                       * names taken from common control */
+    char *control_package_module;    /* policy default package manager name */
+    Seq *package_modules_bodies; /* list of all discovered in policy PackageManagerBody 
+                                   * bodies taken from common control */
+} PackagePromiseContext;
+
+
+typedef struct
+{
+    NewPackageAction package_policy;
+    PackageModuleBody *module_body;
+    Rlist *package_inventory;
+    char *package_version;
+    char *package_architecture;
+    Rlist *package_options;
+    
+    bool is_empty;
+} NewPackages;
 
 /*************************************************************************/
 
@@ -1394,7 +1473,7 @@ typedef struct
     BackupOption backup;
     int stealth;
     int preserve;
-    int collapse;
+    int collapse;                               /* collapse_destination_dir */
     int check_root;
     int type_check;
     int force_update;
@@ -1420,6 +1499,7 @@ typedef struct
     FileLink link;
     EditDefaults edits;
     Packages packages;
+    NewPackages new_packages;
     ContextConstraint context;
     Measurement measure;
     Acl acl;

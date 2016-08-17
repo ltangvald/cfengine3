@@ -18,6 +18,10 @@
 /* Define if you want builtin Enterprise extensions */
 #undef BUILTIN_EXTENSIONS
 
+/* Whether chmod supports higher bit flags in mode argument when running as
+   alternative user. */
+#undef CHMOD_SETEUID_HIGHBITS_WORK
+
 /* Path to chpasswd tool */
 #undef CHPASSWD
 
@@ -64,6 +68,9 @@
 /* Define to 1 if you have the `clock_gettime' function. */
 #undef HAVE_CLOCK_GETTIME
 
+/* Define to 1 if you have the `closefrom' function. */
+#undef HAVE_CLOSEFROM
+
 /* Define to 1 if you have the declaration of `alarm', and to 0 if you don't.
    */
 #undef HAVE_DECL_ALARM
@@ -80,6 +87,10 @@
    don't. */
 #undef HAVE_DECL_CLOCK_GETTIME
 
+/* Define to 1 if you have the declaration of `closefrom', and to 0 if you
+   don't. */
+#undef HAVE_DECL_CLOSEFROM
+
 /* Define to 1 if you have the declaration of `dirfd', and to 0 if you don't.
    */
 #undef HAVE_DECL_DIRFD
@@ -91,6 +102,10 @@
 /* Define to 1 if you have the declaration of `endnetgrent', and to 0 if you
    don't. */
 #undef HAVE_DECL_ENDNETGRENT
+
+/* Define to 1 if you have the declaration of `fchmodat', and to 0 if you
+   don't. */
+#undef HAVE_DECL_FCHMODAT
 
 /* Define to 1 if you have the declaration of `fchownat', and to 0 if you
    don't. */
@@ -200,6 +215,10 @@
    you don't. */
 #undef HAVE_DECL_PTHREAD_SIGMASK
 
+/* Define to 1 if you have the declaration of `readlinkat', and to 0 if you
+   don't. */
+#undef HAVE_DECL_READLINKAT
+
 /* Define to 1 if you have the declaration of `realpath', and to 0 if you
    don't. */
 #undef HAVE_DECL_REALPATH
@@ -207,6 +226,10 @@
 /* Define to 1 if you have the declaration of `round', and to 0 if you don't.
    */
 #undef HAVE_DECL_ROUND
+
+/* Define to 1 if you have the declaration of `sched_yield', and to 0 if you
+   don't. */
+#undef HAVE_DECL_SCHED_YIELD
 
 /* Define to 1 if you have the declaration of `setlinebuf', and to 0 if you
    don't. */
@@ -235,6 +258,10 @@
 /* Define to 1 if you have the declaration of `strcasestr', and to 0 if you
    don't. */
 #undef HAVE_DECL_STRCASESTR
+
+/* Define to 1 if you have the declaration of `strchrnul', and to 0 if you
+   don't. */
+#undef HAVE_DECL_STRCHRNUL
 
 /* Define to 1 if you have the declaration of `strdup', and to 0 if you don't.
    */
@@ -322,6 +349,9 @@
 /* Define to 1 if you have the `fchmod' function. */
 #undef HAVE_FCHMOD
 
+/* Define to 1 if you have the `fchmodat' function. */
+#undef HAVE_FCHMODAT
+
 /* Define to 1 if you have the `fchownat' function. */
 #undef HAVE_FCHOWNAT
 
@@ -337,7 +367,7 @@
 /* Define to 1 if you have the `fgetpwent' function. */
 #undef HAVE_FGETPWENT
 
-/* Define to 1 if you have the `fgetspent' function. */
+/* Define if fgetspent is available */
 #undef HAVE_FGETSPENT
 
 /* Define to 1 if you have the `fpathconf' function. */
@@ -454,6 +484,9 @@
 /* Define to 1 if you have the `rt' library (-lrt). */
 #undef HAVE_LIBRT
 
+/* Define if -lsec is available */
+#undef HAVE_LIBSEC
+
 /* Define to 1 if you have the `ssl' library (-lssl). */
 #undef HAVE_LIBSSL
 
@@ -472,8 +505,11 @@
 /* Define to 1 if you have the <libxml/xmlwriter.h> header file. */
 #undef HAVE_LIBXML_XMLWRITER_H
 
-/* Define to 1 if you have the `listxattr' function. */
-#undef HAVE_LISTXATTR
+/* Define to 1 if you have the `yaml' library (-lyaml). */
+#undef HAVE_LIBYAML
+
+/* Define to 1 if you have the `llistxattr' function. */
+#undef HAVE_LLISTXATTR
 
 /* Define to 1 if you have the <lmdb.h> header file. */
 #undef HAVE_LMDB_H
@@ -529,8 +565,20 @@
 /* Define to 1 if you have the <ndir.h> header file, and it defines `DIR'. */
 #undef HAVE_NDIR_H
 
+/* Define to 1 if you have the <netinet/in.h> header file. */
+#undef HAVE_NETINET_IN_H
+
+/* Define to 1 if you have the <netinet/ip.h> header file. */
+#undef HAVE_NETINET_IP_H
+
+/* Define to 1 if you have the <net/if_arp.h> header file. */
+#undef HAVE_NET_IF_ARP_H
+
 /* Define to 1 if you have the <net/if_dl.h> header file. */
 #undef HAVE_NET_IF_DL_H
+
+/* Define to 1 if you have the <net/route.h> header file. */
+#undef HAVE_NET_ROUTE_H
 
 /* Define to 1 if you have the <nlist.h> header file. */
 #undef HAVE_NLIST_H
@@ -553,6 +601,9 @@
 /* Define to 1 if you have the `pstat_getdynamic' function. */
 #undef HAVE_PSTAT_GETDYNAMIC
 
+/* Define to 1 if you have the `pstat_getfile2' function. */
+#undef HAVE_PSTAT_GETFILE2
+
 /* Define if you have POSIX threads libraries and header files. */
 #undef HAVE_PTHREAD
 
@@ -568,11 +619,17 @@
 /* Define if pwdadm tool is present */
 #undef HAVE_PWDADM
 
+/* Define to 1 if you have the `readlinkat' function. */
+#undef HAVE_READLINKAT
+
 /* Define to 1 if you have the `round' function. */
 #undef HAVE_ROUND
 
 /* Do we have any route entry structure? */
 #undef HAVE_RTENTRY
+
+/* Define to 1 if you have the `sched_yield' function. */
+#undef HAVE_SCHED_YIELD
 
 /* Define to 1 if you have the <security/pam_appl.h> header file. */
 #undef HAVE_SECURITY_PAM_APPL_H
@@ -654,6 +711,9 @@
 
 /* Define to 1 if you have the `strcasestr' function. */
 #undef HAVE_STRCASESTR
+
+/* Define to 1 if you have the `strchrnul' function. */
+#undef HAVE_STRCHRNUL
 
 /* Define to 1 if you have the `strdup' function. */
 #undef HAVE_STRDUP
@@ -758,6 +818,9 @@
 
 /* Define to 1 if you have the <sys/param.h> header file. */
 #undef HAVE_SYS_PARAM_H
+
+/* Define to 1 if you have the <sys/pstat.h> header file. */
+#undef HAVE_SYS_PSTAT_H
 
 /* Define to 1 if you have the <sys/sockio.h> header file. */
 #undef HAVE_SYS_SOCKIO_H
@@ -864,6 +927,9 @@
 /* Define to 1 if you have the <ws2tcpip.h> header file. */
 #undef HAVE_WS2TCPIP_H
 
+/* Define to 1 if you have the <yaml.h> header file. */
+#undef HAVE_YAML_H
+
 /* Define to 1 if you have the <zone.h> header file. */
 #undef HAVE_ZONE_H
 
@@ -951,6 +1017,9 @@
 /* Path to the POSIX-compatible shell */
 #undef SHELL_PATH
 
+/* State directory location */
+#undef STATEDIR
+
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
 
@@ -1010,11 +1079,6 @@
    `char[]'. */
 #undef YYTEXT_POINTER
 
-/* Enable large inode numbers on Mac OS X 10.5.  */
-#ifndef _DARWIN_USE_64_BIT_INODE
-# define _DARWIN_USE_64_BIT_INODE 1
-#endif
-
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS
 
@@ -1023,6 +1087,9 @@
 
 /* Define for large files, on AIX-style hosts. */
 #undef _LARGE_FILES
+
+/* Enable wide data structures everywhere */
+#undef _PSTAT64
 
 /* SUSv3 */
 #undef _XOPEN_SOURCE

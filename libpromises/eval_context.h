@@ -137,6 +137,11 @@ void EvalContextStackPushPromiseTypeFrame(EvalContext *ctx, const PromiseType *o
 void EvalContextStackPushPromiseFrame(EvalContext *ctx, const Promise *owner, bool copy_bundle_context);
 Promise *EvalContextStackPushPromiseIterationFrame(EvalContext *ctx, size_t iteration_index, const PromiseIterator *iter_ctx);
 void EvalContextStackPopFrame(EvalContext *ctx);
+const char *EvalContextStackToString(EvalContext *ctx);
+void EvalContextSetBundleArgs(EvalContext *ctx, const Rlist *args);
+void EvalContextSetPass(EvalContext *ctx, int pass);
+Rlist *EvalContextGetBundleArgs(EvalContext *ctx);
+int EvalContextGetPass(EvalContext *ctx);
 
 char *EvalContextStackPath(const EvalContext *ctx);
 StringSet *EvalContextStackPromisees(const EvalContext *ctx);
@@ -153,9 +158,11 @@ bool EvalContextVariableRemove(const EvalContext *ctx, const VarRef *ref);
 StringSet *EvalContextVariableTags(const EvalContext *ctx, const VarRef *ref);
 bool EvalContextVariableClearMatch(EvalContext *ctx);
 VariableTableIterator *EvalContextVariableTableIteratorNew(const EvalContext *ctx, const char *ns, const char *scope, const char *lval);
+VariableTableIterator *EvalContextVariableTableFromRefIteratorNew(const EvalContext *ctx, const VarRef *ref);
 
 bool EvalContextPromiseLockCacheContains(const EvalContext *ctx, const char *key);
 void EvalContextPromiseLockCachePut(EvalContext *ctx, const char *key);
+void EvalContextPromiseLockCacheRemove(EvalContext *ctx, const char *key);
 bool EvalContextFunctionCacheGet(const EvalContext *ctx, const FnCall *fp, const Rlist *args, Rval *rval_out);
 void EvalContextFunctionCachePut(EvalContext *ctx, const FnCall *fp, const Rlist *args, const Rval *rval);
 
@@ -168,13 +175,14 @@ const void  *EvalContextVariableControlCommonGet(const EvalContext *ctx, CommonC
  *        but we have a few special rules around edit_line and so on.
  */
 const Bundle *EvalContextResolveBundleExpression(const EvalContext *ctx, const Policy *policy,
-                                               const char *callee_reference, const char *callee_type);
+                                                 const char *callee_reference, const char *callee_type);
 const Body *EvalContextResolveBodyExpression(const EvalContext *ctx, const Policy *policy,
                                              const char *callee_reference, const char *callee_type);
 
 /* - Parsing/evaluating expressions - */
 void ValidateClassSyntax(const char *str);
 bool IsDefinedClass(const EvalContext *ctx, const char *context);
+StringSet *ClassesMatching(const EvalContext *ctx, ClassTableIterator *iter, const char* regex, const Rlist *tags, bool first_only);
 
 bool EvalProcessResult(const char *process_result, StringSet *proc_attr);
 bool EvalFileResult(const char *file_result, StringSet *leaf_attr);
@@ -189,7 +197,6 @@ void EvalContextAddIpAddress(EvalContext *ctx, const char *address);
 void EvalContextDeleteIpAddresses(EvalContext *ctx);
 
 /* - Rest - */
-bool EvalContextPromiseIsActive(const EvalContext *ctx, const Promise *pp);
 void EvalContextSetEvalOption(EvalContext *ctx, EvalContextOption option, bool value);
 bool EvalContextGetEvalOption(EvalContext *ctx, EvalContextOption option);
 
@@ -199,10 +206,20 @@ void EvalContextSetIgnoreLocks(EvalContext *ctx, bool ignore);
 void EvalContextSetLaunchDirectory(EvalContext *ctx, const char *path);
 
 bool Abort(EvalContext *ctx);
-bool VarClassExcluded(const EvalContext *ctx, const Promise *pp, char **classes);
 void NotifyDependantPromises(EvalContext *ctx, const Promise *pp, PromiseResult result);
 bool MissingDependencies(EvalContext *ctx, const Promise *pp);
 void cfPS(EvalContext *ctx, LogLevel level, PromiseResult status, const Promise *pp, Attributes attr, const char *fmt, ...) FUNC_ATTR_PRINTF(6, 7);
+
+PackagePromiseContext *GetPackageDefaultsFromCtx(const EvalContext *ctx);
+
+void AddDefaultPackageModuleToContext(const EvalContext *ctx, char *name);
+void AddDefaultInventoryToContext(const EvalContext *ctx, Rlist *inventory);
+
+void AddPackageModuleToContext(const EvalContext *ctx, PackageModuleBody *pm);
+PackageModuleBody *GetPackageModuleFromContext(const EvalContext *ctx, const char *name);
+PackageModuleBody *GetDefaultPackageModuleFromContext(const EvalContext *ctx);
+Rlist *GetDefaultInventoryFromContext(const EvalContext *ctx);
+PackagePromiseContext *GetPackagePromiseContext(const EvalContext *ctx);
 
 /* This function is temporarily exported. It needs to be made an detail of
  * evaluator again, once variables promises are no longer specially handled */
@@ -214,5 +231,11 @@ ENTERPRISE_VOID_FUNC_3ARG_DECLARE(void, EvalContextLogPromiseIterationOutcome,
                                   EvalContext *, ctx,
                                   const Promise *, pp,
                                   PromiseResult, result);
+
+ENTERPRISE_VOID_FUNC_1ARG_DECLARE(void, EvalContextSetupMissionPortalLogHook,
+                                  EvalContext *, ctx);
+char *MissionPortalLogHook(LoggingPrivContext *pctx, LogLevel level, const char *message);
+
+JsonElement* JsonExpandElement(EvalContext *ctx, const JsonElement *source);
 
 #endif

@@ -18,7 +18,7 @@ my %options = (
                workdir => "/tmp",
               );
 
-GetOptions(\%options,
+die ("Unknown options") unless GetOptions(\%options,
            "help|h!",
            "check|c!",
            "cfagent=s",
@@ -170,6 +170,10 @@ sub equal_outputs
 
     $x =~ s/.*RANDOM.*//mg;
     $y =~ s/.*RANDOM.*//mg;
+
+    # strip leading blanks, for example from "  error:"
+    $x =~ s/^ *//mg;
+    $y =~ s/^ *//mg;
 
     if ($x ne $y)
     {

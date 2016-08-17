@@ -1,3 +1,26 @@
+/*
+   Copyright (C) CFEngine AS
+
+   This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+
+   This program is free software; you can redistribute it and/or modify it
+   under the terms of the GNU General Public License as published by the
+   Free Software Foundation; version 3.
+
+   This program is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+   GNU General Public License for more details.
+
+  You should have received a copy of the GNU General Public License
+  along with this program; if not, write to the Free Software
+  Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+
+  To the extent this program is licensed as part of the Enterprise
+  versions of CFEngine, the applicable Commercial Open Source License
+  (COSL) may apply to this file if you as a licensee so wish it. See
+  included file COSL.txt.
+*/
 #include <platform.h>
 
 #include <openssl/bn.h>                                         /* BN_* */
@@ -122,6 +145,27 @@ static bool ResolveFilename(const char *req_path, char *res_path)
     return true;
 }
 
+static bool PathMatch(const char *stem, const char *request)
+{
+    const size_t stemlen = strlen(stem);
+    if (strcmp(stem, FILE_SEPARATOR_STR) == 0)
+    {
+        /* Matches everything: */
+        return true;
+    }
+
+    if (strcmp(stem, request) == 0)
+    {
+        /* An exact match is a match: */
+        return true;
+    }
+
+    /* Otherwise, match only if stem names a parent directory of request: */
+    return (strlen(request) > stemlen &&
+            request[stemlen] == FILE_SEPARATOR &&
+            strncmp(stem, request, stemlen) == 0);
+}
+
 static int AccessControl(EvalContext *ctx, const char *req_path, ServerConnectionState *conn, int encrypt)
 {
     int access = false;
@@ -170,47 +214,25 @@ static int AccessControl(EvalContext *ctx, const char *req_path, ServerConnectio
 
     for (Auth *ap = SV.admit; ap != NULL; ap = ap->next)
     {
-        int res = false;
-
         Log(LOG_LEVEL_DEBUG, "Examining rule in access list (%s,%s)", transrequest, ap->path);
 
         /* TODO MapName when constructing this list. */
         strlcpy(transpath, ap->path, CF_BUFSIZE);
         MapName(transpath);
 
-        /* If everything is allowed */
-        if ((strcmp(transpath, FILE_SEPARATOR_STR) == 0)
-            ||
-            /* or if transpath is a parent directory of transrequest */
-            (strlen(transrequest) > strlen(transpath)
-            && strncmp(transpath, transrequest, strlen(transpath)) == 0
-            && transrequest[strlen(transpath)] == FILE_SEPARATOR)
-            ||
-            /* or if it's an exact match */
-            (strcmp(transpath, transrequest) == 0))
-        {
-            res = true;
-        }
-
-        /* Exact match means single file to admit */
-        if (strcmp(transpath, transrequest) == 0)
-        {
-            res = true;
-        }
-
-        if (res)
+        if (PathMatch(transpath, transrequest))
         {
             Log(LOG_LEVEL_VERBOSE, "Found a matching rule in access list (%s in %s)", transrequest, transpath);
 
             if (stat(transpath, &statbuf) == -1)
             {
                 Log(LOG_LEVEL_INFO,
-                      "Warning cannot stat file object %s in admit/grant, or access list refers to dangling link",
-                      transpath);
+                    "Warning cannot stat file object %s in admit/grant, or access list refers to dangling link",
+                    transpath);
                 continue;
             }
 
-            if ((!encrypt) && (ap->encrypt == true))
+            if (!encrypt && ap->encrypt)
             {
                 Log(LOG_LEVEL_ERR, "File %s requires encrypt connection...will not serve", transpath);
                 access = false;
@@ -219,15 +241,15 @@ static int AccessControl(EvalContext *ctx, const char *req_path, ServerConnectio
             {
                 Log(LOG_LEVEL_DEBUG, "Checking whether to map root privileges..");
 
-                if ((IsMatchItemIn(ap->maproot, conn->ipaddr)) ||
-                    (IsRegexItemIn(ctx, ap->maproot, conn->hostname)))
+                if (IsMatchItemIn(ap->maproot, conn->ipaddr) ||
+                    IsRegexItemIn(ctx, ap->maproot, conn->hostname))
                 {
                     conn->maproot = true;
                     Log(LOG_LEVEL_VERBOSE, "Mapping root privileges to access non-root files");
                 }
 
-                if ((IsMatchItemIn(ap->accesslist, conn->ipaddr))
-                    || (IsRegexItemIn(ctx, ap->accesslist, conn->hostname)))
+                if (IsMatchItemIn(ap->accesslist, conn->ipaddr) ||
+                    IsRegexItemIn(ctx, ap->accesslist, conn->hostname))
                 {
                     access = true;
                     Log(LOG_LEVEL_DEBUG, "Access granted to host: %s", conn->ipaddr);
@@ -242,23 +264,15 @@ static int AccessControl(EvalContext *ctx, const char *req_path, ServerConnectio
         strlcpy(transpath, dp->path, CF_BUFSIZE);
         MapName(transpath);
 
-        /* If everything is denied */
-        if ((strcmp(transpath, FILE_SEPARATOR_STR) == 0)
-            ||
-            /* or if transpath is a parent directory of transrequest */
-            (strlen(transrequest) > strlen(transpath) &&
-             strncmp(transpath, transrequest, strlen(transpath)) == 0 &&
-             transrequest[strlen(transpath)] == FILE_SEPARATOR)
-            ||
-            /* or if it's an exact match */
-            (strcmp(transpath, transrequest) == 0))
+        if (PathMatch(transpath, transrequest))
         {
             if ((IsMatchItemIn(dp->accesslist, conn->ipaddr)) ||
                 (IsRegexItemIn(ctx, dp->accesslist, conn->hostname)))
             {
                 access = false;
-                Log(LOG_LEVEL_INFO, "Host '%s' in deny list, explicitly denying access to '%s'",
-                    conn->ipaddr, transrequest);
+                Log(LOG_LEVEL_INFO,
+                    "Host '%s' in deny list, explicitly denying access to '%s' in '%s'",
+                    conn->ipaddr, transrequest, transpath);
                 break;
             }
         }
@@ -323,7 +337,7 @@ static int LiteralAccessControl(EvalContext *ctx, char *in, ServerConnectionStat
                 break;
             }
 
-            if ((!encrypt) && (ap->encrypt == true))
+            if (!encrypt && ap->encrypt)
             {
                 Log(LOG_LEVEL_ERR, "Variable %s requires encrypt connection...will not serve", name);
                 access = false;
@@ -415,7 +429,7 @@ static Item *ContextAccessControl(EvalContext *ctx, char *in, ServerConnectionSt
                         "Found a matching rule in access list (%s in %s)",
                         ip->name, ap->path);
 
-                    if (ap->classpattern == false)
+                    if (!ap->classpattern)
                     {
                         Log(LOG_LEVEL_ERR,
                             "Context %s requires a literal server item... "
@@ -425,7 +439,7 @@ static Item *ContextAccessControl(EvalContext *ctx, char *in, ServerConnectionSt
                         continue;
                     }
 
-                    if ((!encrypt) && (ap->encrypt == true))
+                    if (!encrypt && ap->encrypt)
                     {
                         Log(LOG_LEVEL_ERR,
                             "Context %s requires encrypt connection... "
@@ -606,10 +620,10 @@ static int AuthenticationDialogue(ServerConnectionState *conn, char *recvbuffer,
 {
     unsigned char digest[EVP_MAX_MD_SIZE + 1] = { 0 };
 
-    if ((PRIVKEY == NULL) || (PUBKEY == NULL))
+    if (PRIVKEY == NULL || PUBKEY == NULL)
     {
-        Log(LOG_LEVEL_ERR,
-            "No public/private key pair exists, create one with cf-key");
+        Log(LOG_LEVEL_ERR, "No public/private key pair is loaded,"
+            " please create one using cf-key");
         return false;
     }
 
@@ -923,7 +937,8 @@ RSA *newkey = RSA_new();
         else if (recv_len == 0)
         {
             Log(LOG_LEVEL_ERR, "Authentication failure: "
-                "connection was closed while receiving counter-challenge response");
+                "connection was closed while receiving counter-challenge response; "
+                "maybe the client does not trust our key?");
         }
         else                                      /* 0 < recv_len < expected_len */
         {
@@ -1033,6 +1048,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
     long time_no_see = 0;
     unsigned int len = 0;
     int drift, plainlen, received, encrypted = 0;
+    size_t zret;
     ServerFileGetState get_args;
     Item *classes;
 
@@ -1153,7 +1169,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
             return false;
         }
 
-        DoExec(ctx, conn, args);
+        DoExec(conn, args);
         Terminate(conn->conn_info);
         return false;
 
@@ -1170,6 +1186,17 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
         {
             Log(LOG_LEVEL_INFO, "GET buffer out of bounds");
             RefuseAccess(conn, recvbuffer);
+            return false;
+        }
+
+        zret = ShortcutsExpand(filename, sizeof(filename),
+            SV.path_shortcuts,
+            conn->ipaddr, conn->hostname,
+            KeyPrintableHash(ConnectionInfoKey(conn->conn_info)));
+
+        if (zret == (size_t) -1)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Expanding filename (%s) made it too long (>= %zu)", filename, sizeof(filename));
             return false;
         }
 
@@ -1230,6 +1257,17 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
             get_args.buf_size = 2048;
         }
 
+        zret = ShortcutsExpand(filename, sizeof(filename),
+            SV.path_shortcuts,
+            conn->ipaddr, conn->hostname,
+            KeyPrintableHash(ConnectionInfoKey(conn->conn_info)));
+
+        if (zret == (size_t) -1)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Expanding filename (%s) made it too long (>= %zu)", filename, sizeof(filename));
+            return false;
+        }
+
         Log(LOG_LEVEL_DEBUG, "Confirm decryption, and thus validity of caller");
         Log(LOG_LEVEL_DEBUG, "SGET '%s' with blocksize %d", filename, get_args.buf_size);
 
@@ -1275,6 +1313,17 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
         memset(filename, 0, CF_BUFSIZE);
         sscanf(recvbuffer, "OPENDIR %[^\n]", filename);
 
+        zret = ShortcutsExpand(filename, sizeof(filename),
+            SV.path_shortcuts,
+            conn->ipaddr, conn->hostname,
+            KeyPrintableHash(ConnectionInfoKey(conn->conn_info)));
+
+        if (zret == (size_t) -1)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Expanding filename (%s) made it too long (>= %zu)", filename, sizeof(filename));
+            return false;
+        }
+
         if (!AccessControl(ctx, filename, conn, true))        /* opendir don't care about privacy */
         {
             Log(LOG_LEVEL_INFO, "Access error");
@@ -1289,7 +1338,18 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
         memset(filename, 0, CF_BUFSIZE);
         sscanf(recvbuffer, "OPENDIR %[^\n]", filename);
 
-        if (!AccessControl(ctx, filename, conn, true))        /* opendir don't care about privacy */
+        zret = ShortcutsExpand(filename, sizeof(filename),
+            SV.path_shortcuts,
+            conn->ipaddr, conn->hostname,
+            KeyPrintableHash(ConnectionInfoKey(conn->conn_info)));
+
+        if (zret == (size_t) -1)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Expanding filename (%s) made it too long (>= %zu)", filename, sizeof(filename));
+            return false;
+        }
+
+        if (!AccessControl(ctx, filename, conn, false))        /* opendir don't care about privacy */
         {
             Log(LOG_LEVEL_INFO, "DIR access error");
             RefuseAccess(conn, recvbuffer);
@@ -1335,7 +1395,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
 
         trem = (time_t) time_no_see;
 
-        if ((time_no_see == 0) || (filename[0] == '\0'))
+        if (filename[0] == '\0')
         {
             break;
         }
@@ -1348,6 +1408,17 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
         }
 
         drift = (int) (tloc - trem);
+
+        zret = ShortcutsExpand(filename, sizeof(filename),
+            SV.path_shortcuts,
+            conn->ipaddr, conn->hostname,
+            KeyPrintableHash(ConnectionInfoKey(conn->conn_info)));
+
+        if (zret == (size_t) -1)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Expanding filename (%s) made it too long (>= %zu)", filename, sizeof(filename));
+            return false;
+        }
 
         if (!AccessControl(ctx, filename, conn, true))
         {
@@ -1399,6 +1470,17 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
 
         memset(filename, 0, sizeof(filename));
         sscanf(recvbuffer, "MD5 %[^\n]", filename);
+
+        zret = ShortcutsExpand(filename, sizeof(filename),
+            SV.path_shortcuts,
+            conn->ipaddr, conn->hostname,
+            KeyPrintableHash(ConnectionInfoKey(conn->conn_info)));
+
+        if (zret == (size_t) -1)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Expanding filename (%s) made it too long (>= %zu)", filename, sizeof(filename));
+            return false;
+        }
 
         if (!AccessControl(ctx, filename, conn, encrypted))
         {
@@ -1548,8 +1630,8 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
 
         ReceiveCollectCall(conn);
         /* On success that returned true; otherwise, it did all
-         * relevant Log()ging.  Either way, it closed the connection,
-         * so we're no longer busy with it: */
+         * relevant Log()ging.  Either way, we're no longer busy with
+         * it and our caller can close the connection: */
         return false;
 
     case PROTOCOL_COMMAND_AUTH_PLAIN:

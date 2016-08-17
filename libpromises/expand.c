@@ -74,7 +74,7 @@ substituted directly for a LIST is not iterated, but dropped into
 place, i.e. in list-lvals and the promisee (since this would be
 equivalent to a re-concatenation of the expanded separate promises)
 
-Any list variable occuring within a scalar or in place of a scalar
+Any list variable occurring within a scalar or in place of a scalar
 is assumed to be iterated i.e. $(name).
 
 To expand a promise, we build temporary hash tables. There are two
@@ -83,13 +83,13 @@ body templates and translate the parameters. This requires one round
 of expansion with scopeid "body". Then we use this fully assembled promise
 and expand vars and function calls.
 
-To expand the variables in a promise we need to 
+To expand the variables in a promise we need to
 
    -- first get all strings, also parameterized bodies, which
       could also be lists
                                                                      /
-        //  MapIteratorsFromRval("scope",&lol,"ksajd$(one)$(two)...$(three)"); \/ 
-        
+        //  MapIteratorsFromRval("scope",&lol,"ksajd$(one)$(two)...$(three)"); \/
+
    -- compile an ordered list of variables involved , with types -           /
       assume all are lists - these are never inside sub-bodies by design,  \/
       so all expansion data are in the promise itself
@@ -105,33 +105,21 @@ To expand the variables in a promise we need to
 
    -- we've already checked types of lhs rhs, must match so an iterator
       can only be in a non-naked variable?
-   
+
    -- form the outer loops to generate combinations
 
 Note, we map the current context into a fluid context "this" that maps
 every list into a scalar during iteration. Thus "this" never contains
 lists. This presents a problem for absolute references like $(abs.var),
 since these cannot be mapped into "this" without some magic.
-   
+
 **********************************************************************/
 
 PromiseResult ExpandPromise(EvalContext *ctx, const Promise *pp,
                             PromiseActuator *ActOnPromise, void *param)
 {
-    Log(LOG_LEVEL_VERBOSE, "Evaluating promise '%s'", pp->promiser);
     if (!IsDefinedClass(ctx, pp->classes))
     {
-        if (LEGACY_OUTPUT)
-        {
-            Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
-            Log(LOG_LEVEL_VERBOSE, "Skipping whole next promise (%s), as context %s is not relevant", pp->promiser,
-                  pp->classes);
-            Log(LOG_LEVEL_VERBOSE, ". . . . . . . . . . . . . . . . . . . . . . . . . . . . ");
-        }
-        else
-        {
-            Log(LOG_LEVEL_VERBOSE, "Skipping next promise '%s', as context '%s' is not relevant", pp->promiser, pp->classes);
-        }
         return PROMISE_RESULT_SKIPPED;
     }
 
@@ -181,40 +169,58 @@ static PromiseResult ExpandPromiseAndDo(EvalContext *ctx, const Promise *pp,
     size_t i = 0;
     PromiseResult result = PROMISE_RESULT_SKIPPED;
     Buffer *expbuf = BufferNew();
-    for (iter_ctx = PromiseIteratorNew(ctx, pp, lists, containers); PromiseIteratorHasMore(iter_ctx); i++, PromiseIteratorNext(iter_ctx))
+    iter_ctx = PromiseIteratorNew(ctx, pp, lists, containers);
+    /*
+     If any of the lists we iterate is null or contains only cf_null values,
+     then skip the entire promise.
+    */
+    if (!NullIterators(iter_ctx))
     {
-        if (handle)
+        do
         {
-            // This ordering is necessary to get automated canonification
-            BufferClear(expbuf);
-            ExpandScalar(ctx, NULL, "this", handle, expbuf);
-            CanonifyNameInPlace(BufferGet(expbuf));
-            EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_THIS, "handle", BufferData(expbuf), CF_DATA_TYPE_STRING, "source=promise");
-        }
-        else
-        {
-            EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_THIS, "handle", PromiseID(pp), CF_DATA_TYPE_STRING, "source=promise");
-        }
+            if (handle)
+            {
+                // This ordering is necessary to get automated canonification
+                BufferClear(expbuf);
+                ExpandScalar(ctx, NULL, "this", handle, expbuf);
+                CanonifyNameInPlace(BufferGet(expbuf));
+                EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_THIS, "handle", BufferData(expbuf), CF_DATA_TYPE_STRING, "source=promise");
+            }
+            else
+            {
+                EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_THIS, "handle", PromiseID(pp), CF_DATA_TYPE_STRING, "source=promise");
+            }
 
-        const Promise *pexp = EvalContextStackPushPromiseIterationFrame(ctx, i, iter_ctx);
-        if (!pexp)
-        {
-            // excluded
-            result = PromiseResultUpdate(result, PROMISE_RESULT_SKIPPED);
-            continue;
-        }
+            const Promise *pexp = EvalContextStackPushPromiseIterationFrame(ctx, i, iter_ctx);
+            if (!pexp)
+            {
+                // excluded
+                result = PromiseResultUpdate(result, PROMISE_RESULT_SKIPPED);
+                continue;
+            }
 
-        PromiseResult iteration_result = ActOnPromise(ctx, pexp, param);
+            PromiseResult iteration_result = ActOnPromise(ctx, pexp, param);
 
-        NotifyDependantPromises(ctx, pexp, iteration_result);
-        result = PromiseResultUpdate(result, iteration_result);
+            // Redmine#6484
+            // Only during pre-evaluation ActOnPromise is set to be a pointer to
+            // CommonEvalPromise. While doing CommonEvalPromise check all the
+            // handles should be not collected and dependent promises should not
+            // be notified.
+            if (ActOnPromise != &CommonEvalPromise)
+            {
+                NotifyDependantPromises(ctx, pexp, iteration_result);
+            }
 
-        if (strcmp(pp->parent_promise_type->name, "vars") == 0 || strcmp(pp->parent_promise_type->name, "meta") == 0)
-        {
-            VerifyVarPromise(ctx, pexp, true);
-        }
+            result = PromiseResultUpdate(result, iteration_result);
 
-        EvalContextStackPopFrame(ctx);
+            if (strcmp(pp->parent_promise_type->name, "vars") == 0 || strcmp(pp->parent_promise_type->name, "meta") == 0)
+            {
+                VerifyVarPromise(ctx, pexp, true);
+            }
+
+            EvalContextStackPopFrame(ctx);
+            ++i;
+        } while (PromiseIteratorNext(iter_ctx));
     }
 
     BufferDestroy(expbuf);
@@ -227,12 +233,6 @@ static PromiseResult ExpandPromiseAndDo(EvalContext *ctx, const Promise *pp,
 void MapIteratorsFromRval(EvalContext *ctx, const Bundle *bundle, Rval rval,
                           Rlist **scalars, Rlist **lists, Rlist **containers)
 {
-    assert(rval.item);
-    if (rval.item == NULL)
-    {
-        return;
-    }
-
     switch (rval.type)
     {
     case RVAL_TYPE_SCALAR:
@@ -416,21 +416,29 @@ static void ExpandAndMapIteratorsFromScalar(EvalContext *ctx,
                         switch (DataTypeToRvalType(value_type))
                         {
                         case RVAL_TYPE_LIST:
-                            if (level > 0)
                             {
-                                RlistPrependScalarIdemp(lists, mangled_inner_ref);
-                            }
-                            else
-                            {
-                                RlistAppendScalarIdemp(lists, mangled_inner_ref);
-                            }
-
-                            if (full_expansion)
-                            {
+                                bool has_valid_entries = false;
                                 for (const Rlist *rp = value; rp != NULL; rp = rp->next)
                                 {
-                                    // append each slist item to each of full_expansion
-                                    RlistConcatInto(&tmp_list, *full_expansion, RlistScalarValue(rp));
+                                    has_valid_entries |= rp->val.item && (strcmp(rp->val.item, CF_NULL_VALUE) != 0);
+                                    if (full_expansion)
+                                    {
+                                        // append each slist item to each of full_expansion
+                                        RlistConcatInto(&tmp_list, *full_expansion, RlistScalarValue(rp));
+                                    }
+                                }
+                                if (!has_valid_entries)
+                                {
+                                    Log(LOG_LEVEL_DEBUG, "Skipping empty list '%s' in iteration", mangled_inner_ref);
+                                    break;
+                                }
+                                if (level > 0)
+                                {
+                                    RlistPrependScalarIdemp(lists, mangled_inner_ref);
+                                }
+                                else
+                                {
+                                    RlistAppendScalarIdemp(lists, mangled_inner_ref);
                                 }
                             }
                             break;
@@ -685,25 +693,36 @@ bool ExpandScalar(const EvalContext *ctx,
                 VarRefDestroy(ref);
             }
 
-            if (value)
+            switch (DataTypeToRvalType(type))
             {
-                switch (DataTypeToRvalType(type))
+            case RVAL_TYPE_SCALAR:
+                if (value)
                 {
-                case RVAL_TYPE_SCALAR:
-                    BufferAppendString(out, value);
-                    continue;
-
-                case RVAL_TYPE_CONTAINER:
-                    if (JsonGetElementType((JsonElement*)value) == JSON_ELEMENT_TYPE_PRIMITIVE)
-                    {
-                        BufferAppendString(out, JsonPrimitiveGetAsString((JsonElement*)value));
-                        continue;
-                    }
-                    break;
-
-                default:
-                    break;
+                     BufferAppendString(out, value);
+                     continue;
                 }
+                break;
+
+            case RVAL_TYPE_CONTAINER:
+                if (value && JsonGetElementType((JsonElement*)value) == JSON_ELEMENT_TYPE_PRIMITIVE)
+                {
+                    BufferAppendString(out, JsonPrimitiveGetAsString((JsonElement*)value));
+                    continue;
+                }
+                break;
+
+            default:
+                // Discover if we are about to evaluate a promise with a cf_null-list
+                if ((value && strcmp(RlistScalarValue(value), CF_NULL_VALUE) == 0)
+                // or a list from a foreign bundle that can't be expanded because it is a null list there
+                   || (type == CF_DATA_TYPE_NONE && !value && strchr(BufferData(current_item), CF_MAPPEDLIST)))
+                {
+                    BufferClear(out);
+                    BufferAppendString(out, CF_NULL_VALUE); // mark as invalid - see ExpandDeRefPromise
+                    BufferDestroy(current_item);
+                    return false;
+                }
+                break;
             }
         }
 
@@ -885,6 +904,25 @@ static void CopyLocalizedReferencesToBundleScope(EvalContext *ctx,
     }
 }
 
+void BundleResolvePromiseType(EvalContext *ctx, const Bundle *bundle, const char *type, PromiseActuator *actuator)
+{
+    for (size_t j = 0; j < SeqLength(bundle->promise_types); j++)
+    {
+        PromiseType *pt = SeqAt(bundle->promise_types, j);
+
+        if (strcmp(pt->name, type) == 0)
+        {
+            EvalContextStackPushPromiseTypeFrame(ctx, pt);
+            for (size_t i = 0; i < SeqLength(pt->promises); i++)
+            {
+                Promise *pp = SeqAt(pt->promises, i);
+                ExpandPromise(ctx, pp, actuator, NULL);
+            }
+            EvalContextStackPopFrame(ctx);
+        }
+    }
+}
+
 void BundleResolve(EvalContext *ctx, const Bundle *bundle)
 {
     Log(LOG_LEVEL_DEBUG, "Resolving variables in bundle '%s' '%s'",
@@ -892,37 +930,9 @@ void BundleResolve(EvalContext *ctx, const Bundle *bundle)
 
     if (strcmp(bundle->type, "common") == 0)
     {
-        for (size_t j = 0; j < SeqLength(bundle->promise_types); j++)
-        {
-            PromiseType *pt = SeqAt(bundle->promise_types, j);
-            if (strcmp(pt->name, "classes") == 0)
-            {
-                EvalContextStackPushPromiseTypeFrame(ctx, pt);
-                for (size_t i = 0; i < SeqLength(pt->promises); i++)
-                {
-                    Promise *pp = SeqAt(pt->promises, i);
-                    ExpandPromise(ctx, pp, VerifyClassPromise, NULL);
-                }
-                EvalContextStackPopFrame(ctx);
-            }
-        }
+        BundleResolvePromiseType(ctx, bundle, "classes", VerifyClassPromise);
     }
-
-    for (size_t j = 0; j < SeqLength(bundle->promise_types); j++)
-    {
-        PromiseType *pt = SeqAt(bundle->promise_types, j);
-
-        if (strcmp(pt->name, "vars") == 0)
-        {
-            EvalContextStackPushPromiseTypeFrame(ctx, pt);
-            for (size_t i = 0; i < SeqLength(pt->promises); i++)
-            {
-                Promise *pp = SeqAt(pt->promises, i);
-                ExpandPromise(ctx, pp, (PromiseActuator*)VerifyVarPromise, NULL);
-            }
-            EvalContextStackPopFrame(ctx);
-        }
-    }
+    BundleResolvePromiseType(ctx, bundle, "vars", (PromiseActuator*)VerifyVarPromise);
 }
 
 ProtocolVersion ProtocolVersionParse(const char *s)
@@ -952,15 +962,18 @@ ProtocolVersion ProtocolVersionParse(const char *s)
     }
 }
 
-
+/**
+ * Evaluate the relevant control body, and set the
+ * relevant fields in #ctx and #config.
+ */
 static void ResolveControlBody(EvalContext *ctx, GenericAgentConfig *config,
                                const Body *control_body)
 {
+    const char *filename = control_body->source_path;
+
+    assert(CFG_CONTROLBODY[COMMON_CONTROL_MAX].lval == NULL);
+
     const ConstraintSyntax *body_syntax = NULL;
-    Rval returnval;
-
-    assert(strcmp(control_body->name, "control") == 0);
-
     for (int i = 0; CONTROL_BODIES[i].constraints != NULL; i++)
     {
         body_syntax = CONTROL_BODIES[i].constraints;
@@ -970,100 +983,208 @@ static void ResolveControlBody(EvalContext *ctx, GenericAgentConfig *config,
             break;
         }
     }
-
     if (body_syntax == NULL)
     {
-        FatalError(ctx, "Unknown agent");
+        FatalError(ctx, "Unknown control body: %s", control_body->type);
     }
 
-    char scope[CF_BUFSIZE];
-    snprintf(scope, CF_BUFSIZE, "%s_%s", control_body->name, control_body->type);
+    char *scope;
+    assert(strcmp(control_body->name, "control") == 0);
+    xasprintf(&scope, "control_%s", control_body->type);
+
     Log(LOG_LEVEL_DEBUG, "Initiate control variable convergence for scope '%s'", scope);
 
     EvalContextStackPushBodyFrame(ctx, NULL, control_body, NULL);
 
     for (size_t i = 0; i < SeqLength(control_body->conlist); i++)
     {
-        Constraint *cp = SeqAt(control_body->conlist, i);
+        const char *lval;
+        Rval evaluated_rval;
+        size_t lineno;
 
-        if (!IsDefinedClass(ctx, cp->classes))
+        /* Use nested scope to constrain cp. */
         {
+            Constraint *cp = SeqAt(control_body->conlist, i);
+            lval   = cp->lval;
+            lineno = cp->offset.line;
+
+            if (!IsDefinedClass(ctx, cp->classes))
+            {
+                continue;
+            }
+
+            if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_BUNDLESEQUENCE].lval) == 0)
+            {
+                evaluated_rval = ExpandPrivateRval(ctx, NULL, scope,
+                                                   cp->rval.item, cp->rval.type);
+            }
+            else
+            {
+                evaluated_rval = EvaluateFinalRval(ctx, control_body->parent_policy,
+                                                   NULL, scope, cp->rval,
+                                                   true, NULL);
+            }
+
+        } /* Close scope: assert we only use evaluated_rval, not cp->rval. */
+
+        VarRef *ref = VarRefParseFromScope(lval, scope);
+        EvalContextVariableRemove(ctx, ref);
+
+        DataType rval_proper_datatype =
+            ConstraintSyntaxGetDataType(body_syntax, lval);
+        if (evaluated_rval.type != DataTypeToRvalType(rval_proper_datatype))
+        {
+            Log(LOG_LEVEL_ERR,
+                "Attribute '%s' in %s:%zu is of wrong type, skipping",
+                lval, filename, lineno);
+            VarRefDestroy(ref);
+            RvalDestroy(evaluated_rval);
             continue;
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_BUNDLESEQUENCE].lval) == 0)
+        bool success = EvalContextVariablePut(
+            ctx, ref, evaluated_rval.item, rval_proper_datatype,
+            "source=promise");
+        if (!success)
         {
-            returnval = ExpandPrivateRval(ctx, NULL, scope, cp->rval.item, cp->rval.type);
-        }
-        else
-        {
-            returnval = EvaluateFinalRval(ctx, control_body->parent_policy, NULL, scope, cp->rval, true, NULL);
-        }
-
-        VarRef *ref = VarRefParseFromScope(cp->lval, scope);
-        EvalContextVariableRemove(ctx, ref);
-
-        if (!EvalContextVariablePut(ctx, ref, returnval.item, ConstraintSyntaxGetDataType(body_syntax, cp->lval), "source=promise"))
-        {
-            Log(LOG_LEVEL_ERR, "Rule from %s at/before line %zu", control_body->source_path, cp->offset.line);
+            Log(LOG_LEVEL_ERR,
+                "Attribute '%s' in %s:%zu can't be added, skipping",
+                lval, filename, lineno);
+            VarRefDestroy(ref);
+            RvalDestroy(evaluated_rval);
+            continue;
         }
 
         VarRefDestroy(ref);
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_OUTPUT_PREFIX].lval) == 0)
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_OUTPUT_PREFIX].lval) == 0)
         {
-            strlcpy(VPREFIX, returnval.item, CF_MAXVARSIZE);
+            strlcpy(VPREFIX, RvalScalarValue(evaluated_rval),
+                    sizeof(VPREFIX));
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_DOMAIN].lval) == 0)
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_DOMAIN].lval) == 0)
         {
-            strcpy(VDOMAIN, cp->rval.item);
+            strlcpy(VDOMAIN, RvalScalarValue(evaluated_rval),
+                    sizeof(VDOMAIN));
             Log(LOG_LEVEL_VERBOSE, "SET domain = %s", VDOMAIN);
+
             EvalContextVariableRemoveSpecial(ctx, SPECIAL_SCOPE_SYS, "domain");
             EvalContextVariableRemoveSpecial(ctx, SPECIAL_SCOPE_SYS, "fqhost");
             snprintf(VFQNAME, CF_MAXVARSIZE, "%s.%s", VUQNAME, VDOMAIN);
-            EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "fqhost", VFQNAME, CF_DATA_TYPE_STRING, "inventory,source=agent,attribute_name=Host name");
-            EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "domain", VDOMAIN, CF_DATA_TYPE_STRING, "source=agent");
+            EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "fqhost",
+                                          VFQNAME, CF_DATA_TYPE_STRING,
+                                          "inventory,source=agent,attribute_name=Host name");
+            EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "domain",
+                                          VDOMAIN, CF_DATA_TYPE_STRING,
+                                          "source=agent");
             EvalContextClassPutHard(ctx, VDOMAIN, "source=agent");
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_IGNORE_MISSING_INPUTS].lval) == 0)
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_IGNORE_MISSING_INPUTS].lval) == 0)
         {
-            Log(LOG_LEVEL_VERBOSE, "SET ignore_missing_inputs %s", RvalScalarValue(cp->rval));
-            config->ignore_missing_inputs = BooleanFromString(cp->rval.item);
+            Log(LOG_LEVEL_VERBOSE, "SET ignore_missing_inputs %s",
+                RvalScalarValue(evaluated_rval));
+            config->ignore_missing_inputs = BooleanFromString(
+                RvalScalarValue(evaluated_rval));
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_IGNORE_MISSING_BUNDLES].lval) == 0)
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_IGNORE_MISSING_BUNDLES].lval) == 0)
         {
-            Log(LOG_LEVEL_VERBOSE, "SET ignore_missing_bundles %s", RvalScalarValue(cp->rval));
-            config->ignore_missing_bundles = BooleanFromString(cp->rval.item);
+            Log(LOG_LEVEL_VERBOSE, "SET ignore_missing_bundles %s",
+                RvalScalarValue(evaluated_rval));
+            config->ignore_missing_bundles = BooleanFromString(
+                RvalScalarValue(evaluated_rval));
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_CACHE_SYSTEM_FUNCTIONS].lval) == 0)
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_CACHE_SYSTEM_FUNCTIONS].lval) == 0)
         {
-            Log(LOG_LEVEL_VERBOSE, "SET cache_system_functions %s", RvalScalarValue(cp->rval));
-            bool cache_system_functions = BooleanFromString(RvalScalarValue(cp->rval));
+            Log(LOG_LEVEL_VERBOSE, "SET cache_system_functions %s",
+                RvalScalarValue(evaluated_rval));
+            bool cache_system_functions = BooleanFromString(
+                RvalScalarValue(evaluated_rval));
             EvalContextSetEvalOption(ctx, EVAL_OPTION_CACHE_SYSTEM_FUNCTIONS,
                                      cache_system_functions);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_PROTOCOL_VERSION].lval) == 0)
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_PROTOCOL_VERSION].lval) == 0)
         {
-            config->protocol_version = ProtocolVersionParse(RvalScalarValue(cp->rval));
+            config->protocol_version = ProtocolVersionParse(
+                RvalScalarValue(evaluated_rval));
             Log(LOG_LEVEL_VERBOSE, "SET common protocol_version: %s",
                 PROTOCOL_VERSION_STRING[config->protocol_version]);
         }
 
-        if (strcmp(cp->lval, CFG_CONTROLBODY[COMMON_CONTROL_GOALPATTERNS].lval) == 0)
+        /* Those are package_inventory and package_module common control body options */
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_PACKAGE_INVENTORY].lval) == 0)
         {
-            /* Ignored */
-            continue;
+            AddDefaultInventoryToContext(ctx, RvalRlistValue(evaluated_rval));
+            Log(LOG_LEVEL_VERBOSE, "SET common package_inventory list");
+        }
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_PACKAGE_MODULE].lval) == 0)
+        {
+            AddDefaultPackageModuleToContext(ctx, RvalScalarValue(evaluated_rval));
+            Log(LOG_LEVEL_VERBOSE, "SET common package_module: %s",
+                RvalScalarValue(evaluated_rval));
         }
 
-        RvalDestroy(returnval);
+        if (strcmp(lval, CFG_CONTROLBODY[COMMON_CONTROL_GOALPATTERNS].lval) == 0)
+        {
+            /* Ignored */
+        }
+
+        RvalDestroy(evaluated_rval);
     }
 
     EvalContextStackPopFrame(ctx);
+    free(scope);
+}
+
+static void ResolvePackageManagerBody(EvalContext *ctx, const Body *pm_body)
+{
+    PackageModuleBody *new_manager = xcalloc(1, sizeof(PackageModuleBody));
+    new_manager->name = SafeStringDuplicate(pm_body->name);
+
+    for (size_t i = 0; i < SeqLength(pm_body->conlist); i++)
+    {
+        Constraint *cp = SeqAt(pm_body->conlist, i);
+
+        Rval returnval = {0};
+
+        if (IsDefinedClass(ctx, cp->classes))
+        {
+            returnval = ExpandPrivateRval(ctx, NULL, "body",
+                                          cp->rval.item, cp->rval.type);
+        }
+
+        if (returnval.item == NULL || returnval.type == RVAL_TYPE_NOPROMISEE)
+        {
+            Log(LOG_LEVEL_VERBOSE, "have invalid constraint while resolving"
+                    "package promise body: %s", cp->lval);
+            continue;
+        }
+
+        if (strcmp(cp->lval, "query_installed_ifelapsed") == 0)
+        {
+            new_manager->installed_ifelapsed =
+                    (int)IntFromString(RvalScalarValue(returnval));
+        }
+        else if (strcmp(cp->lval, "query_updates_ifelapsed") == 0)
+        {
+            new_manager->updates_ifelapsed =
+                    (int)IntFromString(RvalScalarValue(returnval));
+        }
+        else if (strcmp(cp->lval, "default_options") == 0)
+        {
+            new_manager->options = RlistCopy(RvalRlistValue(returnval));
+        }
+        else
+        {
+            /* This should be handled by the parser. */
+            assert(0);
+        }
+    }
+    AddPackageModuleToContext(ctx, new_manager);
 }
 
 void PolicyResolve(EvalContext *ctx, const Policy *policy,
@@ -1098,6 +1219,12 @@ void PolicyResolve(EvalContext *ctx, const Policy *policy,
         if (strcmp(bdp->name, "control") == 0)
         {
             ResolveControlBody(ctx, config, bdp);
+        }
+        /* Collect all package managers data from policy as we don't know yet
+         * which ones we will use. */
+        else if (strcmp(bdp->type, "package_module") == 0)
+        {
+            ResolvePackageManagerBody(ctx, bdp);
         }
     }
 }

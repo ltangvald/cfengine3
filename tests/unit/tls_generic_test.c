@@ -20,6 +20,7 @@
 #include <server_tls.h>
 #include <tls_client.h>
 #include <connection_info.h>
+#include <known_dirs.h>
 
 
 static SSL_CTX *SSLSERVERCONTEXT = NULL;
@@ -54,7 +55,7 @@ static bool init_test_server()
     int ret;
     RSA *key = RSA_new();
     BIGNUM *bignum = BN_new();
-    BN_set_word(bignum, 17);
+    BN_set_word(bignum, RSA_F4);
     ret = RSA_generate_key_ex(key, 1024, bignum, NULL);
     if (!ret)
     {
@@ -64,7 +65,7 @@ static bool init_test_server()
     char name_template_private[128];
     ret = snprintf(name_template_private, sizeof(name_template_private), "%s/%s",
                    TESTDIR, "name_template_private.XXXXXX");
-    assert(ret > 0 && ret < sizeof(name_template_private));
+    assert_true(ret > 0 && ret < sizeof(name_template_private));
 
     int private_key_file = 0;
     FILE *private_key_stream = NULL;
@@ -121,7 +122,7 @@ static bool init_test_server()
         goto err1;
     }
 
-    TLSSetDefaultOptions(SSLSERVERCONTEXT);
+    TLSSetDefaultOptions(SSLSERVERCONTEXT, NULL);
 
     /* Override one of the default options: always accept peer's certificate,
      * this is a dummy server. */
@@ -133,8 +134,8 @@ static bool init_test_server()
 
     if (PRIVKEY == NULL || PUBKEY == NULL)
     {
-        Log(LOG_LEVEL_ERR,
-            "No public/private key pair is loaded, create one with cf-key");
+        Log(LOG_LEVEL_ERR, "No public/private key pair is loaded,"
+            " please create one using cf-key");
         goto err2;
     }
     assert_true(SSLSERVERCERT == NULL);
@@ -328,7 +329,8 @@ static void child_mainloop(int channel)
         int received = 0;
         int sent = 0;
         char buffer[4096];
-        do {
+        do
+        {
             received = SSL_read(ssl, buffer, 4096);
             if (received < 0)
             {
@@ -450,7 +452,7 @@ static bool init_test_client()
     int ret;
     RSA *key = RSA_new();
     BIGNUM *bignum = BN_new();
-    BN_set_word(bignum, 17);
+    BN_set_word(bignum, RSA_F4);
     ret = RSA_generate_key_ex(key, 1024, bignum, NULL);
     if (!ret)
     {
@@ -464,7 +466,7 @@ static bool init_test_client()
                    sizeof(name_template_private),
                    "%s/%s",
                    TESTDIR, "name_template_private.XXXXXX");
-    assert(ret > 0 && ret < sizeof(name_template_private));
+    assert_true(ret > 0 && ret < sizeof(name_template_private));
 
     int private_key_file = mkstemp(name_template_private);
     if (private_key_file < 0)
@@ -493,7 +495,7 @@ static bool init_test_client()
                    sizeof(name_template_public),
                    "%s/%s",
                    TESTDIR, "name_template_public.XXXXXX");
-    assert(ret > 0 && ret < sizeof(name_template_public));
+    assert_true(ret > 0 && ret < sizeof(name_template_public));
 
     int public_key_file = mkstemp(name_template_public);
     if (public_key_file < 0)
@@ -528,7 +530,7 @@ static bool init_test_client()
         goto err1;
     }
 
-    TLSSetDefaultOptions(SSLCLIENTCONTEXT);
+    TLSSetDefaultOptions(SSLCLIENTCONTEXT, NULL);
 
     /*
      * Create cert into memory and load it into SSL context.
@@ -616,7 +618,7 @@ static bool create_temps()
                    sizeof(server_name_template_public),
                    "%s/%s",
                    TESTDIR, "server_name_template_public.XXXXXX");
-    assert(ret > 0 && ret < sizeof(server_name_template_public));
+    assert_true(ret > 0 && ret < sizeof(server_name_template_public));
 
     server_public_key_file = mkstemp(server_name_template_public);
     if (server_public_key_file < 0)
@@ -629,7 +631,7 @@ static bool create_temps()
                    sizeof(server_certificate_template_public),
                    "%s/%s",
                    TESTDIR, "server_certificate_template_public.XXXXXX");
-    assert(ret > 0 && ret < sizeof(server_certificate_template_public));
+    assert_true(ret > 0 && ret < sizeof(server_certificate_template_public));
 
     certificate_file = mkstemp(server_certificate_template_public);
     if (certificate_file < 0)
@@ -885,13 +887,13 @@ RSA *original_HavePublicKey(const char *username, const char *ipaddress, const c
 
     snprintf(keyname, CF_MAXVARSIZE, "%s-%s", username, digest);
 
-    snprintf(newname, CF_BUFSIZE, "%s/ppkeys/%s.pub", CFWORKDIR, keyname);
+    snprintf(newname, CF_BUFSIZE, "%s/ppkeys/%s.pub", GetWorkDir(), keyname);
     MapName(newname);
 
     if (stat(newname, &statbuf) == -1)
     {
         Log(LOG_LEVEL_VERBOSE, "Did not find new key format '%s'", newname);
-        snprintf(oldname, CF_BUFSIZE, "%s/ppkeys/%s-%s.pub", CFWORKDIR, username, ipaddress);
+        snprintf(oldname, CF_BUFSIZE, "%s/ppkeys/%s-%s.pub", GetWorkDir(), username, ipaddress);
         MapName(oldname);
 
         Log(LOG_LEVEL_VERBOSE, "Trying old style '%s'", oldname);
@@ -1226,7 +1228,8 @@ static void test_TLSVerifyPeer(void)
     /*
      * Shutting down is not as easy as it seems.
      */
-    do {
+    do
+    {
         result = SSL_shutdown(ssl);
         assert_int_not_equal(-1, result);
     } while (result != 1);
@@ -1393,7 +1396,5 @@ int main()
         unit_test(test_TLSBasicIO)
     };
 
-    int result = run_tests(tests);
-
-    return result;
+    return run_tests(tests);
 }

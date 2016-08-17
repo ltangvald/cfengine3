@@ -79,8 +79,8 @@ static const struct option OPTIONS[] =
     {"no-fork", no_argument, 0, 'F'},
     {"ld-library-path", required_argument, 0, 'L'},
     {"generate-avahi-conf", no_argument, 0, 'A'},
-    {"legacy-output", no_argument, 0, 'l'},
     {"color", optional_argument, 0, 'C'},
+    {"timestamp", no_argument, 0, 'l'},
     {NULL, 0, 0, '\0'}
 };
 
@@ -99,8 +99,8 @@ static const char *const HINTS[] =
     "Run as a foreground processes (do not fork)",
     "Set the internal value of LD_LIBRARY_PATH for child processes",
     "Generates avahi configuration file to enable policy server to be discovered in the network",
-    "Use legacy output format",
     "Enable colorized output. Possible values: 'always', 'auto', 'never'. If option is used, the default value is 'auto'",
+    "Log timestamps on each line of log output",
     NULL
 };
 
@@ -141,18 +141,15 @@ static int GenerateAvahiConfig(const char *path)
 GenericAgentConfig *CheckOpts(int argc, char **argv)
 {
     extern char *optarg;
-    int optindex = 0;
     int c;
-    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_SERVER);
+    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_SERVER, GetTTYInteractive());
 
-    while ((c = getopt_long(argc, argv, "dvIKf:D:N:VSxLFMhAlC::", OPTIONS, &optindex)) != EOF)
+    while ((c = getopt_long(argc, argv, "dvIKf:D:N:VSxLFMhAC::l",
+                            OPTIONS, NULL))
+           != -1)
     {
-        switch ((char) c)
+        switch (c)
         {
-        case 'l':
-            LEGACY_OUTPUT = true;
-            break;
-
         case 'f':
             GenericAgentConfigSetInputFile(config, GetInputDir(), optarg);
             MINUSF = true;
@@ -168,11 +165,33 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'D':
-            config->heap_soft = StringSetFromString(optarg, ',');
+            {
+                StringSet *defined_classes = StringSetFromString(optarg, ',');
+                if (! config->heap_soft)
+                {
+                    config->heap_soft = defined_classes;
+                }
+                else
+                {
+                    StringSetJoin(config->heap_soft, defined_classes);
+                    free(defined_classes);
+                }
+            }
             break;
 
         case 'N':
-            config->heap_negated = StringSetFromString(optarg, ',');
+            {
+                StringSet *negated_classes = StringSetFromString(optarg, ',');
+                if (! config->heap_negated)
+                {
+                    config->heap_negated = negated_classes;
+                }
+                else
+                {
+                    StringSetJoin(config->heap_negated, negated_classes);
+                    free(negated_classes);
+                }
+            }
             break;
 
         case 'I':
@@ -237,7 +256,7 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
             cf_popen("/etc/init.d/avahi-daemon restart", "r", true);
-            Log(LOG_LEVEL_NOTICE, "Avahi configuration file generated successfuly.");
+            Log(LOG_LEVEL_NOTICE, "Avahi configuration file generated successfully.");
 #else
             Log(LOG_LEVEL_ERR, "Generating avahi configuration can only be done when avahi-daemon and libavahi are installed on the machine.");
 #endif
@@ -248,6 +267,10 @@ GenericAgentConfig *CheckOpts(int argc, char **argv)
             {
                 exit(EXIT_FAILURE);
             }
+            break;
+
+        case 'l':
+            LoggingEnableTimestamps(true);
             break;
 
         default:
@@ -302,11 +325,11 @@ static void KeepHardClasses(EvalContext *ctx)
     char name[CF_BUFSIZE];
     if (name != NULL)
     {
-        char *existing_policy_server = ReadPolicyServerFile(CFWORKDIR);
+        char *existing_policy_server = ReadPolicyServerFile(GetWorkDir());
         if (existing_policy_server)
         {
             free(existing_policy_server);
-            if (GetAmPolicyHub(CFWORKDIR))
+            if (GetAmPolicyHub())
             {
                 MarkAsPolicyServer(ctx);
             }
@@ -339,8 +362,9 @@ static void ClearAuthAndACLs(void)
     DeleteItemList(SV.allowuserlist);       SV.allowuserlist = NULL;
     DeleteItemList(SV.allowlegacyconnects); SV.allowlegacyconnects = NULL;
 
-    StringMapDestroy(SV.path_shortcuts);    SV.path_shortcuts = NULL;
-    free(SV.allowciphers);                  SV.allowciphers = NULL;
+    StringMapDestroy(SV.path_shortcuts);    SV.path_shortcuts  = NULL;
+    free(SV.allowciphers);                  SV.allowciphers    = NULL;
+    free(SV.allowtlsversion);               SV.allowtlsversion = NULL;
 
     /* New ACLs */
     NEED_REVERSE_LOOKUP = false;
@@ -358,12 +382,25 @@ static void CheckFileChanges(EvalContext *ctx, Policy **policy, GenericAgentConf
 
     time_t validated_at = ReadTimestampFromPolicyValidatedFile(config, NULL);
 
+    bool reload_config = false;
+
     if (config->agent_specific.daemon.last_validated_at < validated_at)
     {
+        Log(LOG_LEVEL_VERBOSE, "New promises detected...");
+        reload_config = true;
+    }
+    if (ReloadConfigRequested())
+    {
+        Log(LOG_LEVEL_VERBOSE, "Force reload of inputs files...");
+        reload_config = true;
+    }
+
+    if (reload_config)
+    {
+        ClearRequestReloadConfig();
+
         /* Rereading policies now, so update timestamp. */
         config->agent_specific.daemon.last_validated_at = validated_at;
-
-        Log(LOG_LEVEL_VERBOSE, "New promises detected...");
 
         if (GenericAgentArePromisesValid(config))
         {
@@ -386,10 +423,22 @@ static void CheckFileChanges(EvalContext *ctx, Policy **policy, GenericAgentConf
              * calling the same steps as in cf-serverd.c:main()? Those are:
              *   GenericAgentConfigApply();     // not here!
              *   GenericAgentDiscoverContext(); // not here!
+             *   EvalContextClassPutHard("server");             // only here!
              *   if (GenericAgentCheckPolicy()) // not here!
-             *     policy=GenericAgentLoadPolicy();
+             *     policy = LoadPolicy();
+             *   ThisAgentInit();               // not here, only calls umask()
+             *   ReloadHAConfig();                              // only here!
              *   KeepPromises();
              *   Summarize();
+             * Plus the following from within StartServer() which is only
+             * called during startup:
+             *   InitSignals();                  // not here
+             *   ServerTLSInitialize();          // not here
+             *   SetServerListenState();         // not here
+             *   InitServer()                    // not here
+             *   PolicyNew()+AcquireServerLock() // not here
+             *   PrepareServer(sd);              // not here
+             *   CollectCallStart();  // both
              */
 
             char *existing_policy_server = ReadPolicyServerFile(GetWorkDir());
@@ -401,10 +450,15 @@ static void CheckFileChanges(EvalContext *ctx, Policy **policy, GenericAgentConf
             DetectEnvironment(ctx);
             KeepHardClasses(ctx);
 
+            /* During startup this is done in GenericAgentDiscoverContext(). */
             EvalContextClassPutHard(ctx, CF_AGENTTYPES[AGENT_TYPE_SERVER], "cfe_internal,source=agent");
 
             time_t t = SetReferenceTime();
             UpdateTimeClasses(ctx, t);
+
+            /* TODO BUG: this modifies config, but previous config has not
+             * been reset/free'd. Ideally we would want LoadPolicy to not
+             * modify config at all, but only modify ctx. */
             *policy = LoadPolicy(ctx, config);
 
             /* Reload HA related configuration */
@@ -463,16 +517,18 @@ static int OpenReceiverChannel(void)
     int sd = -1;
     for (ap = response; ap != NULL; ap = ap->ai_next)
     {
-        if ((sd = socket(ap->ai_family, ap->ai_socktype, ap->ai_protocol)) == -1)
+        sd = socket(ap->ai_family, ap->ai_socktype, ap->ai_protocol);
+        if (sd == -1)
         {
             continue;
         }
 
        #ifdef IPV6_V6ONLY
         /* Properly implemented getaddrinfo(AI_PASSIVE) should return the IPV6
-           loopback address first. Some platforms (Windows) don't listen to
-           both address families when binding to it and need this flag. Some
-           other platforms won't even honour this flag (openbsd). */
+           loopback address first. Some platforms (notably Windows) don't
+           listen to both address families when binding to it and need this
+           flag. Some other platforms won't even honour this flag
+           (openbsd). */
         if (BINDINTERFACE[0] == '\0' && ap->ai_family == AF_INET6)
         {
             int no = 0;
@@ -522,14 +578,11 @@ static int OpenReceiverChannel(void)
             }
             break;
         }
-        else
-        {
-            Log(LOG_LEVEL_INFO,
-                "Could not bind server address. (bind: %s)",
-                GetErrorStr());
-            cf_closesocket(sd);
-            sd = -1;
-        }
+        Log(LOG_LEVEL_INFO,
+            "Could not bind server address. (bind: %s)",
+            GetErrorStr());
+        cf_closesocket(sd);
+        sd = -1;
     }
 
     assert(response != NULL);               /* getaddrinfo() was successful */
@@ -539,22 +592,23 @@ static int OpenReceiverChannel(void)
 
 static int InitServer(size_t queue_size)
 {
-    int sd = -1;
+    int sd = OpenReceiverChannel();
 
-    if ((sd = OpenReceiverChannel()) == -1)
+    if (sd == -1)
     {
         Log(LOG_LEVEL_ERR, "Unable to start server");
-        exit(EXIT_FAILURE);
     }
-
-    if (listen(sd, queue_size) == -1)
+    else if (listen(sd, queue_size) == -1)
     {
         Log(LOG_LEVEL_ERR, "listen failed. (listen: %s)", GetErrorStr());
         cf_closesocket(sd);
-        exit(EXIT_FAILURE);
+    }
+    else
+    {
+        return sd;
     }
 
-    return sd;
+    exit(EXIT_FAILURE);
 }
 
 /* Set up standard signal-handling. */
@@ -564,7 +618,7 @@ static void InitSignals()
 
     signal(SIGINT, HandleSignalsForDaemon);
     signal(SIGTERM, HandleSignalsForDaemon);
-    signal(SIGHUP, SIG_IGN);
+    signal(SIGHUP, HandleSignalsForDaemon);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGUSR1, HandleSignalsForDaemon);
     signal(SIGUSR2, HandleSignalsForDaemon);
@@ -584,7 +638,7 @@ static CfLock AcquireServerLock(EvalContext *ctx,
 
         pp = PromiseTypeAppendPromise(tp, config->input_file,
                                       (Rval) { NULL, RVAL_TYPE_NOPROMISEE },
-                                      NULL);
+                                      NULL, NULL);
     }
     assert(pp);
 
@@ -618,11 +672,11 @@ static void PrepareServer(int sd)
 
         ActAsDaemon();
     }
+#endif
 
     /* Close sd on exec, needed for not passing the socket to cf-runagent
      * spawned commands. */
-    fcntl(sd, F_SETFD, FD_CLOEXEC);
-#endif
+    SetCloseOnExec(sd, true);
 
     Log(LOG_LEVEL_NOTICE, "Server is starting...");
     WritePID("cf-serverd.pid"); /* Arranges for atexit() to tidy it away */
@@ -685,9 +739,10 @@ static void CollectCallIfDue(EvalContext *ctx)
         if (waiting_queue > COLLECT_WINDOW)
         {
             Log(LOG_LEVEL_INFO,
-                "Closing collect call with queue longer than the allocated window [%d > %d]",
+                "Abandoning collect call attempt with queue longer than collect_window [%d > %d]",
                 waiting_queue, COLLECT_WINDOW);
             cf_closesocket(new_client);
+            CollectCallMarkProcessed();
         }
         else
         {
@@ -741,15 +796,13 @@ static int WaitForIncoming(int sd)
     {
         /* skip */
     }
-    /* If we had data on the signal pipe but not the listening socket,
-     * report no in-coming sockets. */
-    if (result > 0 && (sd < 0 || !FD_ISSET(sd, &rset)))
-    {
-        return 0;
-    }
 
-    /* Return 0 in case of timeout, or the valid socket descriptor. */
-    return result;
+    /* We have an incoming connection if select() marked sd as ready: */
+    if (sd != -1 && result > 0 && FD_ISSET(sd, &rset))
+    {
+        return 1;
+    }
+    return 0;
 }
 
 /* Check for new policy just before spawning a thread.
@@ -782,21 +835,19 @@ static void PolicyUpdateIfSafe(EvalContext *ctx, Policy **policy,
 static void AcceptAndHandle(EvalContext *ctx, int sd)
 {
     /* TODO embed ConnectionInfo into ServerConnectionState. */
-    ConnectionInfo *info = ConnectionInfoNew();
-    if (info == NULL)
-    {
-        return;
-    }
+    ConnectionInfo *info = ConnectionInfoNew(); /* Uses xcalloc() */
 
     info->ss_len = sizeof(info->ss);
-    info->sd = accept(sd,
-                      (struct sockaddr *) &info->ss,
-                      &info->ss_len);
+    info->sd = accept(sd, (struct sockaddr *) &info->ss, &info->ss_len);
     if (info->sd == -1)
     {
+        Log(LOG_LEVEL_INFO, "Error accepting connection (%s)", GetErrorStr());
         ConnectionInfoDestroy(&info);
         return;
     }
+
+    Log(LOG_LEVEL_DEBUG, "Socket descriptor returned from accept(): %d",
+        info->sd);
 
     /* Just convert IP address to string, no DNS lookup. */
     char ipaddr[CF_MAX_IP_LEN] = "";
@@ -820,6 +871,10 @@ int StartServer(EvalContext *ctx, Policy **policy, GenericAgentConfig *config)
     ServerTLSInitialize();
     int sd = SetServerListenState(ctx, QUEUESIZE, SERVER_LISTEN, &InitServer);
 
+    /* Necessary for our use of select() to work in WaitForIncoming(): */
+    assert(sd < sizeof(fd_set) * CHAR_BIT &&
+           GetSignalPipe() < sizeof(fd_set) * CHAR_BIT);
+
     Policy *server_cfengine_policy = PolicyNew();
     CfLock thislock = AcquireServerLock(ctx, config, server_cfengine_policy);
     if (thislock.lock == NULL)
@@ -840,6 +895,8 @@ int StartServer(EvalContext *ctx, Policy **policy, GenericAgentConfig *config)
         CollectCallIfDue(ctx);
 
         int selected = WaitForIncoming(sd);
+
+        Log(LOG_LEVEL_DEBUG, "select(): %d", selected);
         if (selected == -1)
         {
             Log(LOG_LEVEL_ERR,

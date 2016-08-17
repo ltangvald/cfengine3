@@ -1,9 +1,48 @@
-cfengine3 (3.6.2-4ubuntu1) xenial; urgency=medium
+cfengine3 (3.7.4-4) unstable; urgency=medium
+
+  * debian/watch: added a line to download masterfiles.
+  * debian/patches/0006-skip_failing_tests.patch:
+    + disabled run_lastseen_threaded_load to build on powerpc.
+
+ --  Antonio Radici <antonio@debian.org>  Wed, 17 Aug 2016 16:39:45 +0100
+
+cfengine3 (3.7.4-3) unstable; urgency=medium
 
   * debian/patches:
-    + fix_rlist_segfault fix test failures
+    + consolidated all failing tests into 0006-skip_failing_tests.patch
+    + added rlist_test to the above patch, it fails in reproducibility test
+    + 0010_disable_date_annotation.patch to disable the date annotation in the
+      manual, otherwise the reproducibility build fails.
 
- -- Lars Tangvald <lars.tangvald@oracle.com>  Tue, 12 Apr 2016 13:37:56 +0200
+ -- Antonio Radici <antonio@debian.org>  Tue, 16 Aug 2016 20:43:40 +0100
+
+cfengine3 (3.7.4-2) unstable; urgency=medium
+
+  * debian/patches:
+    + 0007-fix_kfreebsd_build.patch updated to remove process_test which fails
+      in kfreebsd builds
+
+ -- Antonio Radici <antonio@debian.org>  Tue, 16 Aug 2016 09:38:03 +0100
+
+cfengine3 (3.7.4-1) unstable; urgency=medium
+
+  * Upgraded to the latest upstream LTS.
+    + the above upgrade solves the build problem (Closes: 831028)
+  * debian/rules:
+    + setting EXPLICIT_VERSION due to a new requirement in upstream's
+      configure.ac
+    + enabled all hardening options using the exported build flags 
+  * debian/patches:
+    + dropped 0001-redmine_6316.patch which was already included upstream
+    + added 0009_disable_spelling_errors.patch to fix spelling error
+    + patches refreshed
+  * debian/control:
+    + Standards-Version upgrade to 3.9.8, no change required
+    + VCS url moved to canonical and secure links
+    + Added python as recommended dependency due to some modules provided
+      with 3.7.4
+
+ -- Antonio Radici <antonio@debian.org>  Mon, 15 Aug 2016 09:56:05 +0100
 
 cfengine3 (3.6.2-4) unstable; urgency=medium
 

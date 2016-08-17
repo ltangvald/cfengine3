@@ -4,7 +4,9 @@
 #include "item_lib.h"
 #include "mon.h"
 #include <misc_lib.h>                                          /* xsnprintf */
+#include <known_dirs.h>
 
+char CFWORKDIR[CF_BUFSIZE];
 
 static void tests_setup(void)
 {
@@ -12,7 +14,7 @@ static void tests_setup(void)
     mkdtemp(CFWORKDIR);
 
     char buf[CF_BUFSIZE];
-    xsnprintf(buf, CF_BUFSIZE, "%s/state", CFWORKDIR);
+    xsnprintf(buf, CF_BUFSIZE, "%s", GetStateDir());
     mkdir(buf, 0755);
 }
 
@@ -109,10 +111,13 @@ int main()
 
 #if defined(__sun)
     VSYSTEMHARDCLASS = PLATFORM_CONTEXT_SOLARIS;
+    VPSHARDCLASS = PLATFORM_CONTEXT_SOLARIS;
 #elif defined(_AIX)
     VSYSTEMHARDCLASS = PLATFORM_CONTEXT_AIX;
+    VPSHARDCLASS = PLATFORM_CONTEXT_AIX;
 #elif defined(__linux__)
     VSYSTEMHARDCLASS = PLATFORM_CONTEXT_LINUX;
+    VPSHARDCLASS = PLATFORM_CONTEXT_LINUX;
 #endif
 
     PRINT_TEST_BANNER();

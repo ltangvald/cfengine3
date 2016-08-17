@@ -71,10 +71,10 @@ static const char *const CF_EXECD_SHORT_DESCRIPTION =
     "scheduling daemon for cf-agent";
 
 static const char *const CF_EXECD_MANPAGE_LONG_DESCRIPTION =
-        "cf-execd is the scheduling daemon for cf-agent. It runs cf-agent locally according to a schedule specified in "
-        "policy code (executor control body). After a cf-agent run is completed, cf-execd gathers output from cf-agent, "
-        "and may be configured to email the output to a specified address. It may also be configured to splay (randomize) the "
-        "execution schedule to prevent synchronized cf-agent runs across a network.";
+    "cf-execd is the scheduling daemon for cf-agent. It runs cf-agent locally according to a schedule specified in "
+    "policy code (executor control body). After a cf-agent run is completed, cf-execd gathers output from cf-agent, "
+    "and may be configured to email the output to a specified address. It may also be configured to splay (randomize) the "
+    "execution schedule to prevent synchronized cf-agent runs across a network.";
 
 static const struct option OPTIONS[] =
 {
@@ -93,8 +93,8 @@ static const struct option OPTIONS[] =
     {"once", no_argument, 0, 'O'},
     {"no-winsrv", no_argument, 0, 'W'},
     {"ld-library-path", required_argument, 0, 'L'},
-    {"legacy-output", no_argument, 0, 'l'},
     {"color", optional_argument, 0, 'C'},
+    {"timestamp", no_argument, 0, 'l'},
     {NULL, 0, 0, '\0'}
 };
 
@@ -115,8 +115,8 @@ static const char *const HINTS[] =
     "Run once and then exit (implies no-fork)",
     "Do not run as a service on windows - use this when running from a command shell (CFEngine Nova only)",
     "Set the internal value of LD_LIBRARY_PATH for child processes",
-    "Use legacy output format",
     "Enable colorized output. Possible values: 'always', 'auto', 'never'. If option is used, the default value is 'auto'",
+    "Log timestamps on each line of log output",
     NULL
 };
 
@@ -130,23 +130,15 @@ int main(int argc, char *argv[])
 
     GenericAgentDiscoverContext(ctx, config);
 
-    Policy *policy = NULL;
-    if (GenericAgentCheckPolicy(config, false, false))
+    Policy *policy = SelectAndLoadPolicy(config, ctx, false, false);
+    
+    if (!policy)
     {
-        policy = LoadPolicy(ctx, config);
-    }
-    else if (config->tty_interactive)
-    {
+        Log(LOG_LEVEL_ERR, "Error reading CFEngine policy. Exiting...");
         exit(EXIT_FAILURE);
     }
-    else
-    {
-        Log(LOG_LEVEL_ERR, "CFEngine was not able to get confirmation of promises from cf-promises, so going to failsafe");
-        EvalContextClassPutHard(ctx, "failsafe_fallback", "attribute_name=Errors,source=agent");
-        GenericAgentConfigSetInputFile(config, GetInputDir(), "failsafe.cf");
-        policy = LoadPolicy(ctx, config);
-    }
 
+    GenericAgentPostLoadInit(ctx);
     ThisAgentInit();
 
     ExecConfig *exec_config = ExecConfigNew(!ONCE, ctx, policy);
@@ -178,19 +170,18 @@ int main(int argc, char *argv[])
 static GenericAgentConfig *CheckOpts(int argc, char **argv)
 {
     extern char *optarg;
-    int optindex = 0;
     int c;
     char ld_library_path[CF_BUFSIZE];
-    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_EXECUTOR);
+    
+    GenericAgentConfig *config = GenericAgentConfigNewDefault(AGENT_TYPE_EXECUTOR, GetTTYInteractive());
 
-    while ((c = getopt_long(argc, argv, "dvnKIf:D:N:VxL:hFOV1gMWlC::", OPTIONS, &optindex)) != EOF)
+
+    while ((c = getopt_long(argc, argv, "dvnKIf:D:N:VxL:hFOV1gMWC::l",
+                            OPTIONS, NULL))
+           != -1)
     {
-        switch ((char) c)
+        switch (c)
         {
-        case 'l':
-            LEGACY_OUTPUT = true;
-            break;
-
         case 'f':
             GenericAgentConfigSetInputFile(config, GetInputDir(), optarg);
             MINUSF = true;
@@ -205,11 +196,33 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'D':
-            config->heap_soft = StringSetFromString(optarg, ',');
+            {
+                StringSet *defined_classes = StringSetFromString(optarg, ',');
+                if (! config->heap_soft)
+                {
+                    config->heap_soft = defined_classes;
+                }
+                else
+                {
+                    StringSetJoin(config->heap_soft, defined_classes);
+                    free(defined_classes);
+                }
+            }
             break;
 
         case 'N':
-            config->heap_negated = StringSetFromString(optarg, ',');
+            {
+                StringSet *negated_classes = StringSetFromString(optarg, ',');
+                if (! config->heap_negated)
+                {
+                    config->heap_negated = negated_classes;
+                }
+                else
+                {
+                    StringSetJoin(config->heap_negated, negated_classes);
+                    free(negated_classes);
+                }
+            }
             break;
 
         case 'I':
@@ -245,32 +258,32 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             break;
 
         case 'V':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteVersion(w);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteVersion(w);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'h':
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-execd", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_SUCCESS);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-execd", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_SUCCESS);
 
         case 'M':
-            {
-                Writer *out = FileWriter(stdout);
-                ManPageWrite(out, "cf-execd", time(NULL),
-                             CF_EXECD_SHORT_DESCRIPTION,
-                             CF_EXECD_MANPAGE_LONG_DESCRIPTION,
-                             OPTIONS, HINTS,
-                             true);
-                FileWriterDetach(out);
-                exit(EXIT_SUCCESS);
-            }
+        {
+            Writer *out = FileWriter(stdout);
+            ManPageWrite(out, "cf-execd", time(NULL),
+                         CF_EXECD_SHORT_DESCRIPTION,
+                         CF_EXECD_MANPAGE_LONG_DESCRIPTION,
+                         OPTIONS, HINTS,
+                         true);
+            FileWriterDetach(out);
+            exit(EXIT_SUCCESS);
+        }
 
         case 'x':
             Log(LOG_LEVEL_ERR, "Self-diagnostic functionality is retired.");
@@ -283,13 +296,17 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
             }
             break;
 
+        case 'l':
+            LoggingEnableTimestamps(true);
+            break;
+
         default:
-            {
-                Writer *w = FileWriter(stdout);
-                GenericAgentWriteHelp(w, "cf-execd", OPTIONS, HINTS, true);
-                FileWriterDetach(w);
-            }
-            exit(EXIT_FAILURE);
+        {
+            Writer *w = FileWriter(stdout);
+            GenericAgentWriteHelp(w, "cf-execd", OPTIONS, HINTS, true);
+            FileWriterDetach(w);
+        }
+        exit(EXIT_FAILURE);
 
         }
     }
@@ -308,6 +325,21 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
 void ThisAgentInit(void)
 {
     umask(077);
+}
+
+/*****************************************************************************/
+
+// msg should include exactly one reference to unsigned int.
+static unsigned int MaybeSleepLog(LogLevel level, const char *msg, unsigned int seconds)
+{
+    if (IsPendingTermination())
+    {
+        return seconds;
+    }
+
+    Log(level, msg, seconds);
+
+    return sleep(seconds);
 }
 
 /*****************************************************************************/
@@ -352,7 +384,7 @@ void StartServer(EvalContext *ctx, Policy *policy, GenericAgentConfig *config, E
     WritePID("cf-execd.pid");
     signal(SIGINT, HandleSignalsForDaemon);
     signal(SIGTERM, HandleSignalsForDaemon);
-    signal(SIGHUP, SIG_IGN);
+    signal(SIGHUP, HandleSignalsForDaemon);
     signal(SIGPIPE, SIG_IGN);
     signal(SIGUSR1, HandleSignalsForDaemon);
     signal(SIGUSR2, HandleSignalsForDaemon);
@@ -370,8 +402,14 @@ void StartServer(EvalContext *ctx, Policy *policy, GenericAgentConfig *config, E
         {
             if (ScheduleRun(ctx, &policy, config, execd_config, exec_config))
             {
-                Log(LOG_LEVEL_VERBOSE, "Sleeping for splaytime %d seconds", (*execd_config)->splay_time);
-                sleep((*execd_config)->splay_time);
+                MaybeSleepLog(LOG_LEVEL_VERBOSE, "Sleeping for splaytime %u seconds", (*execd_config)->splay_time);
+
+                // We are sleeping both above and inside ScheduleRun(), so make
+                // sure a terminating signal did not arrive during that time.
+                if (IsPendingTermination())
+                {
+                    break;
+                }
 
                 if (!LocalExecInThread(*exec_config))
                 {
@@ -418,7 +456,8 @@ static bool LocalExecInThread(const ExecConfig *config)
 static void Apoptosis(void)
 {
     char promiser_buf[CF_SMALLBUF];
-    snprintf(promiser_buf, sizeof(promiser_buf), "%s/bin/cf-execd", CFWORKDIR);
+    snprintf(promiser_buf, sizeof(promiser_buf), "%s%cbin%ccf-execd",
+             GetWorkDir(), FILE_SEPARATOR, FILE_SEPARATOR);
 
     if (LoadProcessTable(&PROCESSTABLE))
     {
@@ -474,12 +513,25 @@ static Reload CheckNewPromises(GenericAgentConfig *config)
 
     time_t validated_at = ReadTimestampFromPolicyValidatedFile(config, NULL);
 
+    bool reload_config = false;
+
     if (config->agent_specific.daemon.last_validated_at < validated_at)
     {
+        Log(LOG_LEVEL_VERBOSE, "New promises detected...");
+        reload_config = true;
+    }
+    if (ReloadConfigRequested())
+    {
+        Log(LOG_LEVEL_VERBOSE, "Force reload of inputs files...");
+        reload_config = true;
+    }
+
+    if (reload_config)
+    {
+        ClearRequestReloadConfig();
+
         /* Rereading policies now, so update timestamp. */
         config->agent_specific.daemon.last_validated_at = validated_at;
-
-        Log(LOG_LEVEL_VERBOSE, "New promises detected...");
 
         if (GenericAgentArePromisesValid(config))
         {
@@ -501,8 +553,8 @@ static Reload CheckNewPromises(GenericAgentConfig *config)
 static bool ScheduleRun(EvalContext *ctx, Policy **policy, GenericAgentConfig *config,
                         ExecdConfig **execd_config, ExecConfig **exec_config)
 {
-    Log(LOG_LEVEL_VERBOSE, "Sleeping for pulse time %d seconds...", CFPULSETIME);
-    sleep(CFPULSETIME);         /* 1 Minute resolution is enough */
+    /* 1 Minute resolution is enough */
+    MaybeSleepLog(LOG_LEVEL_VERBOSE, "Sleeping for pulse time %u seconds...", CFPULSETIME);
 
     /*
      * FIXME: this logic duplicates the one from cf-serverd.c. Unify ASAP.

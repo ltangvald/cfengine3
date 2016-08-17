@@ -22,6 +22,7 @@
   included file COSL.txt.
 */
 
+
 #include <generic_agent.h>
 
 #include <bootstrap.h>
@@ -60,8 +61,10 @@
 #include <time_classes.h>
 #include <unix_iface.h>
 #include <constants.h>
-
+#include <ornaments.h>
 #include <cf-windows-functions.h>
+#include <loading.h>
+#include <iteration.h>
 
 static pthread_once_t pid_cleanup_once = PTHREAD_ONCE_INIT; /* GLOBAL_T */
 
@@ -83,6 +86,28 @@ static bool MissingInputFile(const char *input_file);
 #if !defined(__MINGW32__)
 static void OpenLog(int facility);
 #endif
+
+static JsonElement *ReadJsonFile(const char *filename, LogLevel log_level)
+{
+    struct stat sb;
+    if (stat(filename, &sb) == -1)
+    {
+        Log(log_level, "Could not open JSON file %s", filename);
+        return NULL;
+    }
+
+    JsonElement *doc = NULL;
+    // 5 MB should be enough for most reasonable def.json data
+    JsonParseError err = JsonParseFile(filename, 5 * 1024 * 1024, &doc);
+
+    if (err != JSON_PARSE_OK
+        || NULL == doc)
+    {
+        Log(log_level, "Could not parse JSON file %s: %s", filename, JsonParseErrorToString(err));
+    }
+
+    return doc;
+}
 
 /*****************************************************************************/
 
@@ -107,16 +132,291 @@ ENTERPRISE_VOID_FUNC_2ARG_DEFINE_STUB(void, GenericAgentSetDefaultDigest, HashMe
 
 void MarkAsPolicyServer(EvalContext *ctx)
 {
-    EvalContextClassPutHard(ctx, "am_policy_hub", "source=bootstrap,deprecated,alias=policy_server");
+    EvalContextClassPutHard(ctx, "am_policy_hub",
+                            "source=bootstrap,deprecated,alias=policy_server");
     Log(LOG_LEVEL_VERBOSE, "Additional class defined: am_policy_hub");
-    EvalContextClassPutHard(ctx, "policy_server", "inventory,attribute_name=CFEngine roles,source=bootstrap");
+    EvalContextClassPutHard(ctx, "policy_server",
+                            "inventory,attribute_name=CFEngine roles,source=bootstrap");
     Log(LOG_LEVEL_VERBOSE, "Additional class defined: policy_server");
+}
+
+Policy *SelectAndLoadPolicy(GenericAgentConfig *config, EvalContext *ctx, bool validate_policy, bool write_validated_file)
+{
+    Policy *policy = NULL;
+    
+    if (GenericAgentCheckPolicy(config, validate_policy, write_validated_file))
+    {
+        policy = LoadPolicy(ctx, config);
+    }
+    else if (config->tty_interactive)
+    {
+        Log(LOG_LEVEL_ERR,
+               "Failsafe condition triggered. Interactive session detected, skipping failsafe.cf execution.");
+    }
+    else
+    {
+        Log(LOG_LEVEL_ERR, "CFEngine was not able to get confirmation of promises from cf-promises, so going to failsafe");
+        EvalContextClassPutHard(ctx, "failsafe_fallback", "attribute_name=Errors,source=agent");
+        
+        if (CheckAndGenerateFailsafe(GetInputDir(), "failsafe.cf"))
+        {
+            GenericAgentConfigSetInputFile(config, GetInputDir(), "failsafe.cf");
+            Log(LOG_LEVEL_ERR, "CFEngine failsafe.cf: %s %s", config->input_dir, config->input_file);
+            policy = LoadPolicy(ctx, config);
+        }
+    }
+    return policy;
+}
+
+bool CheckContextOrClassmatch(EvalContext *ctx, const char* c)
+{
+    ClassTableIterator *iter = EvalContextClassTableIteratorNewGlobal(ctx, NULL, true, true);
+    StringSet *global_matches = ClassesMatching(ctx, iter, c, NULL, true); // returns early
+
+    bool found = (StringSetSize(global_matches) > 0);
+
+    StringSetDestroy(global_matches);
+    ClassTableIteratorDestroy(iter);
+
+    if (found)
+    {
+        return found;
+    }
+
+    // does it look like a regex? It's not a class expression then
+    // (these characters are invalid in class expressions and will
+    // give errors)
+    if (strchr(c, '*') ||
+        strchr(c, '+') ||
+        strchr(c, '['))
+    {
+        return false;
+    }
+
+    return IsDefinedClass(ctx, c);
+}
+
+void LoadAugmentsData(EvalContext *ctx, const Buffer* filename_buffer, const JsonElement* augment)
+{
+    if (JsonGetElementType(augment) != JSON_ELEMENT_TYPE_CONTAINER ||
+        JsonGetContainerType(augment) != JSON_CONTAINER_TYPE_OBJECT)
+    {
+        Log(LOG_LEVEL_ERR, "Invalid augments file contents in '%s', must be a JSON object", BufferData(filename_buffer));
+    }
+    else
+    {
+        Log(LOG_LEVEL_VERBOSE, "Loaded augments file '%s', installing contents", BufferData(filename_buffer));
+
+        JsonIterator iter = JsonIteratorInit(augment);
+        const char *key;
+        while ((key = JsonIteratorNextKey(&iter)))
+        {
+            if (0 == strcmp("vars", key))
+            {
+                // load variables
+                JsonElement* vars = JsonExpandElement(ctx, JsonObjectGet(augment, key));
+
+                if (NULL == vars ||
+                    JsonGetElementType(vars) != JSON_ELEMENT_TYPE_CONTAINER ||
+                    JsonGetContainerType(vars) != JSON_CONTAINER_TYPE_OBJECT)
+                {
+                    Log(LOG_LEVEL_ERR, "Invalid augments vars in '%s', must be a JSON object", BufferData(filename_buffer));
+                    goto vars_cleanup;
+                }
+
+                JsonIterator iter = JsonIteratorInit(vars);
+                const char *vkey;
+                while ((vkey = JsonIteratorNextKey(&iter)))
+                {
+                    JsonElement *data = JsonObjectGet(vars, vkey);
+                    if (JsonGetElementType(data) == JSON_ELEMENT_TYPE_PRIMITIVE)
+                    {
+                        char *value = JsonPrimitiveToString(data);
+                        Log(LOG_LEVEL_VERBOSE, "Installing augments variable '%s.%s=%s' from file '%s'",
+                            SpecialScopeToString(SPECIAL_SCOPE_DEF), vkey, value, BufferData(filename_buffer));
+                        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_DEF, vkey, value, CF_DATA_TYPE_STRING, "source=augments_file");
+                        free(value);
+                    }
+                    else if (JsonGetElementType(data) == JSON_ELEMENT_TYPE_CONTAINER &&
+                             JsonGetContainerType(data) == JSON_CONTAINER_TYPE_ARRAY &&
+                             JsonArrayContainsOnlyPrimitives(data))
+                    {
+                        // map to slist if the data only has primitives
+                        Log(LOG_LEVEL_VERBOSE, "Installing augments slist variable '%s.%s' from file '%s'",
+                            SpecialScopeToString(SPECIAL_SCOPE_DEF), vkey, BufferData(filename_buffer));
+                        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_DEF,
+                                                      vkey, ContainerToRlist(data),
+                                                      CF_DATA_TYPE_STRING_LIST,
+                                                      "source=augments_file");
+                    }
+                    else // install as a data container
+                    {
+                        Log(LOG_LEVEL_VERBOSE, "Installing augments data container variable '%s.%s' from file '%s'",
+                            SpecialScopeToString(SPECIAL_SCOPE_DEF), vkey, BufferData(filename_buffer));
+                        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_DEF,
+                                                      vkey, data,
+                                                      CF_DATA_TYPE_CONTAINER,
+                                                      "source=augments_file");
+                    }
+                }
+
+              vars_cleanup:
+                JsonDestroy(vars);
+            }
+            else if (0 == strcmp("classes", key))
+            {
+                // load classes
+                JsonElement* classes = JsonExpandElement(ctx, JsonObjectGet(augment, key));
+
+                if (JsonGetElementType(classes) != JSON_ELEMENT_TYPE_CONTAINER ||
+                    JsonGetContainerType(classes) != JSON_CONTAINER_TYPE_OBJECT)
+                {
+                    Log(LOG_LEVEL_ERR, "Invalid augments classes in '%s', must be a JSON object", BufferData(filename_buffer));
+                    goto classes_cleanup;
+                }
+
+                const char tags[] = "source=augments_file";
+                JsonIterator iter = JsonIteratorInit(classes);
+                const char *ckey;
+                while ((ckey = JsonIteratorNextKey(&iter)))
+                {
+                    JsonElement *data = JsonObjectGet(classes, ckey);
+                    if (JsonGetElementType(data) == JSON_ELEMENT_TYPE_PRIMITIVE)
+                    {
+                        char *check = JsonPrimitiveToString(data);
+                        // check if class is true
+                        if (CheckContextOrClassmatch(ctx, check))
+                        {
+                            Log(LOG_LEVEL_VERBOSE, "Installing augments class '%s' (checked '%s') from file '%s'",
+                                ckey, check, BufferData(filename_buffer));
+                            EvalContextClassPutHard(ctx, ckey, tags);
+                        }
+                        free(check);
+                    }
+                    else if (JsonGetElementType(data) == JSON_ELEMENT_TYPE_CONTAINER &&
+                             JsonGetContainerType(data) == JSON_CONTAINER_TYPE_ARRAY &&
+                             JsonArrayContainsOnlyPrimitives(data))
+                    {
+                        // check if each class is true
+                        JsonIterator iter = JsonIteratorInit(data);
+                        const JsonElement *el;
+                        while ((el = JsonIteratorNextValueByType(&iter, JSON_ELEMENT_TYPE_PRIMITIVE, true)))
+                        {
+                            char *check = JsonPrimitiveToString(el);
+                            if (CheckContextOrClassmatch(ctx, check))
+                            {
+                                Log(LOG_LEVEL_VERBOSE, "Installing augments class '%s' (checked array entry '%s') from file '%s'",
+                                    ckey, check, BufferData(filename_buffer));
+                                EvalContextClassPutHard(ctx, ckey, tags);
+                                free(check);
+                                break;
+                            }
+
+                            free(check);
+                        }
+                    }
+                    else
+                    {
+                        Log(LOG_LEVEL_ERR, "Invalid augments class data for class '%s' in '%s', must be a JSON object",
+                            ckey, BufferData(filename_buffer));
+                    }
+                }
+
+              classes_cleanup:
+                JsonDestroy(classes);
+            }
+            else if (0 == strcmp("inputs", key))
+            {
+                // load inputs
+                JsonElement* inputs = JsonExpandElement(ctx, JsonObjectGet(augment, key));
+
+                if (JsonGetElementType(inputs) == JSON_ELEMENT_TYPE_CONTAINER &&
+                    JsonGetContainerType(inputs) == JSON_CONTAINER_TYPE_ARRAY &&
+                    JsonArrayContainsOnlyPrimitives(inputs))
+                {
+                    Log(LOG_LEVEL_VERBOSE, "Installing augments def.augments_inputs from file '%s'",
+                        BufferData(filename_buffer));
+                    Rlist *rlist = ContainerToRlist(inputs);
+                    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_DEF,
+                                                  "augments_inputs", rlist,
+                                                  CF_DATA_TYPE_STRING_LIST,
+                                                  "source=augments_file");
+                    RlistDestroy(rlist);
+                }
+                else
+                {
+                    Log(LOG_LEVEL_ERR, "Trying to augment inputs in '%s' but the value was not a list of strings",
+                        BufferData(filename_buffer));
+                }
+
+                JsonDestroy(inputs);
+            }
+            else
+            {
+                Log(LOG_LEVEL_VERBOSE, "Unknown augments key '%s' in file '%s', skipping it",
+                    key, BufferData(filename_buffer));
+            }
+        }
+    }
+}
+
+void LoadAugmentsFiles(EvalContext *ctx, const char* filename)
+{
+    Buffer *filebuf = BufferNewFrom(filename, strlen(filename));
+    Buffer *expbuf = BufferNew();
+    ExpandScalar(ctx, NULL, "this", BufferData(filebuf), expbuf);
+    if (strstr(BufferData(expbuf), "/.json"))
+    {
+        Log(LOG_LEVEL_DEBUG, "Skipping augments file '%s' because it failed to expand the base filename, resulting in '%s'",
+            BufferData(filebuf),
+            BufferData(expbuf));
+    }
+    else
+    {
+        Log(LOG_LEVEL_DEBUG, "Searching for augments file '%s'", BufferData(expbuf));
+        if (FileCanOpen(BufferData(expbuf), "r"))
+        {
+            JsonElement* augment = ReadJsonFile(BufferData(expbuf), LOG_LEVEL_ERR);
+            if (NULL != augment )
+            {
+                LoadAugmentsData(ctx, expbuf, augment);
+                JsonDestroy(augment);
+            }
+        }
+        else
+        {
+            Log(LOG_LEVEL_VERBOSE, "could not load JSON augments from '%s'", BufferData(expbuf));
+        }
+    }
+    BufferDestroy(filebuf);
+    BufferDestroy(expbuf);
+}
+
+void LoadAugments(EvalContext *ctx, GenericAgentConfig *config)
+{
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def/$(sys.flavor).json");
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def/$(sys.ostype).json");
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def/$(sys.domain).json");
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def/$(sys.uqhost).json");
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def/$(sys.fqhost).json");
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def/$(sys.key_digest).json");
+    // LoadAugmentsFiles(ctx, "$(sys.workdir)/def.json");
+    // LoadAugmentsFiles(ctx, "$(sys.inputdir)/def.json");
+
+    char* def_json = StringFormat("%s%c%s", config->input_dir, FILE_SEPARATOR, "def.json");
+    Log(LOG_LEVEL_VERBOSE, "Loading JSON augments from '%s' (input dir '%s', input file '%s'", def_json, config->input_dir, config->input_file);
+    LoadAugmentsFiles(ctx, def_json);
+    free(def_json);
 }
 
 void GenericAgentDiscoverContext(EvalContext *ctx, GenericAgentConfig *config)
 {
-    GenericAgentSetDefaultDigest(&CF_DEFAULT_DIGEST, &CF_DEFAULT_DIGEST_LEN);
+    strcpy(VPREFIX, "");
 
+    Log(LOG_LEVEL_VERBOSE, " %s", NameVersion());
+    Banner("Initialization preamble");
+
+    GenericAgentSetDefaultDigest(&CF_DEFAULT_DIGEST, &CF_DEFAULT_DIGEST_LEN);
     GenericAgentInitialize(ctx, config);
 
     time_t t = SetReferenceTime();
@@ -124,85 +424,102 @@ void GenericAgentDiscoverContext(EvalContext *ctx, GenericAgentConfig *config)
     SanitizeEnvironment();
 
     THIS_AGENT_TYPE = config->agent_type;
-    EvalContextClassPutHard(ctx, CF_AGENTTYPES[config->agent_type], "cfe_internal,source=agent");
+    LoggingSetAgentType(CF_AGENTTYPES[config->agent_type]);
+    EvalContextClassPutHard(ctx, CF_AGENTTYPES[config->agent_type],
+                            "cfe_internal,source=agent");
 
     DetectEnvironment(ctx);
 
     EvalContextHeapPersistentLoadAll(ctx);
     LoadSystemConstants(ctx);
 
-    if (config->agent_type == AGENT_TYPE_AGENT && config->agent_specific.agent.bootstrap_policy_server)
+    LoadAugments(ctx, config);
+
+    const char *bootstrap_arg =
+        config->agent_specific.agent.bootstrap_policy_server;
+
+    /* Are we bootstrapping the agent? */
+    if (config->agent_type == AGENT_TYPE_AGENT && bootstrap_arg != NULL)
     {
+        EvalContextClassPutHard(ctx, "bootstrap_mode", "source=environment");
+
         if (!RemoveAllExistingPolicyInInputs(GetInputDir()))
         {
-            Log(LOG_LEVEL_ERR, "Error removing existing input files prior to bootstrap");
+            Log(LOG_LEVEL_ERR,
+                "Error removing existing input files prior to bootstrap");
             exit(EXIT_FAILURE);
         }
 
         if (!WriteBuiltinFailsafePolicy(GetInputDir()))
         {
-            Log(LOG_LEVEL_ERR, "Error writing builtin failsafe to inputs prior to bootstrap");
+            Log(LOG_LEVEL_ERR,
+                "Error writing builtin failsafe to inputs prior to bootstrap");
             exit(EXIT_FAILURE);
         }
+        GenericAgentConfigSetInputFile(config, GetInputDir(), "failsafe.cf");
 
-        bool am_policy_server = false;
+        char canonified_ipaddr[strlen(bootstrap_arg) + 1];
+        StringCanonify(canonified_ipaddr, bootstrap_arg);
+
+        bool am_policy_server =
+            EvalContextClassGet(ctx, NULL, canonified_ipaddr) != NULL;
+
+        if (am_policy_server)
         {
-            const char *canonified_bootstrap_policy_server = CanonifyName(config->agent_specific.agent.bootstrap_policy_server);
-            am_policy_server = NULL != EvalContextClassGet(ctx, NULL, canonified_bootstrap_policy_server);
+            Log(LOG_LEVEL_INFO, "Assuming role as policy server,"
+                " with policy distribution point at: %s", GetMasterDir());
+            MarkAsPolicyServer(ctx);
+
+            if (!MasterfileExists(GetMasterDir()))
             {
-                char policy_server_ipv4_class[CF_BUFSIZE];
-                snprintf(policy_server_ipv4_class, CF_MAXVARSIZE, "ipv4_%s", canonified_bootstrap_policy_server);
-                am_policy_server |= NULL != EvalContextClassGet(ctx, NULL, policy_server_ipv4_class);
+                Log(LOG_LEVEL_ERR, "In order to bootstrap as a policy server,"
+                    " the file '%s/promises.cf' must exist.", GetMasterDir());
+                exit(EXIT_FAILURE);
             }
 
-            if (am_policy_server)
-            {
-                Log(LOG_LEVEL_INFO, "Assuming role as policy server, with policy distribution point at %s", GetMasterDir());
-                MarkAsPolicyServer(ctx);
-
-                if (!MasterfileExists(GetMasterDir()))
-                {
-                    Log(LOG_LEVEL_ERR, "In order to bootstrap as a policy server, the file '%s/promises.cf' must exist.", GetMasterDir());
-                    exit(EXIT_FAILURE);
-                }
-            }
-            else
-            {
-                Log(LOG_LEVEL_INFO, "Not assuming role as policy server");
-            }
-
-            WriteAmPolicyHubFile(CFWORKDIR, am_policy_server);
-        }
-
-        WritePolicyServerFile(GetWorkDir(), config->agent_specific.agent.bootstrap_policy_server);
-        SetPolicyServer(ctx, config->agent_specific.agent.bootstrap_policy_server);
-
-        if (am_policy_server) //It makes sense to check HA status only on policy hub.
-        {
             CheckAndSetHAState(GetWorkDir(), ctx);
         }
+        else
+        {
+            Log(LOG_LEVEL_INFO, "Assuming role as regular client,"
+                " bootstrapping to policy server: %s", bootstrap_arg);
+
+            if (config->agent_specific.agent.bootstrap_trust_server)
+            {
+                EvalContextClassPutHard(ctx, "trust_server", "source=agent");
+                Log(LOG_LEVEL_NOTICE,
+                    "Bootstrap mode: implicitly trusting server, "
+                    "use --trust-server=no if server trust is already established");
+            }
+        }
+
+        WriteAmPolicyHubFile(am_policy_server);
+
+        WritePolicyServerFile(GetWorkDir(), bootstrap_arg);
+        SetPolicyServer(ctx, bootstrap_arg);
 
         /* FIXME: Why it is called here? Can't we move both invocations to before if? */
         UpdateLastPolicyUpdateTime(ctx);
-        Log(LOG_LEVEL_INFO, "Bootstrapping to '%s'", POLICY_SERVER);
     }
     else
     {
         char *existing_policy_server = ReadPolicyServerFile(GetWorkDir());
         if (existing_policy_server)
         {
-            Log(LOG_LEVEL_VERBOSE, "This agent is bootstrapped to '%s'", existing_policy_server);
+            Log(LOG_LEVEL_VERBOSE, "This agent is bootstrapped to: %s",
+                existing_policy_server);
             SetPolicyServer(ctx, existing_policy_server);
             free(existing_policy_server);
             UpdateLastPolicyUpdateTime(ctx);
         }
         else
         {
-            Log(LOG_LEVEL_VERBOSE, "This agent is not bootstrapped");
+            Log(LOG_LEVEL_VERBOSE, "This agent is not bootstrapped -"
+                " can't find policy_server.dat in: %s", GetWorkDir());
             return;
         }
 
-        if (GetAmPolicyHub(GetWorkDir()))
+        if (GetAmPolicyHub())
         {
             MarkAsPolicyServer(ctx);
 
@@ -257,7 +574,7 @@ bool GenericAgentCheckPolicy(GenericAgentConfig *config, bool force_validation, 
                 GenericAgentTagReleaseDirectory(config,
                                                 NULL, // use GetAutotagDir
                                                 write_validated_file, // true
-                                                GetAmPolicyHub(GetWorkDir())); // write release ID?
+                                                GetAmPolicyHub()); // write release ID?
             }
 
             if (config->agent_specific.agent.bootstrap_policy_server && !policy_check_ok)
@@ -277,27 +594,6 @@ bool GenericAgentCheckPolicy(GenericAgentConfig *config, bool force_validation, 
     return false;
 }
 
-static JsonElement *ReadJsonFile(const char *filename)
-{
-    struct stat sb;
-    if (stat(filename, &sb) == -1)
-    {
-        Log(LOG_LEVEL_DEBUG, "Could not open JSON file %s", filename);
-        return NULL;
-    }
-
-    JsonElement *doc = NULL;
-    JsonParseError err = JsonParseFile(filename, 4096, &doc);
-
-    if (err != JSON_PARSE_OK
-        || NULL == doc)
-    {
-        Log(LOG_LEVEL_DEBUG, "Could not parse JSON file %s", filename);
-    }
-
-    return doc;
-}
-
 static JsonElement *ReadPolicyValidatedFile(const char *filename)
 {
     bool missing = true;
@@ -307,7 +603,7 @@ static JsonElement *ReadPolicyValidatedFile(const char *filename)
         missing = false;
     }
 
-    JsonElement *validated_doc = ReadJsonFile(filename);
+    JsonElement *validated_doc = ReadJsonFile(filename, LOG_LEVEL_DEBUG);
     if (NULL == validated_doc)
     {
         Log(missing ? LOG_LEVEL_DEBUG : LOG_LEVEL_VERBOSE, "Could not parse policy_validated JSON file '%s', using dummy data", filename);
@@ -343,7 +639,8 @@ static bool WritePolicyValidatedFile(ARG_UNUSED const GenericAgentConfig *config
 {
     if (!MakeParentDirectory(filename, true))
     {
-        Log(LOG_LEVEL_ERR, "While writing policy validated marker file '%s', could not create directory (MakeParentDirectory: %s)", filename, GetErrorStr());
+        Log(LOG_LEVEL_ERR,
+            "Could not write policy validated marker file: %s", filename);
         return false;
     }
 
@@ -486,18 +783,22 @@ static bool WriteReleaseIdFile(const char *filename, const char *dirname)
 bool GenericAgentArePromisesValid(const GenericAgentConfig *config)
 {
     char cmd[CF_BUFSIZE];
+    const char* const workdir = GetWorkDir();
 
     Log(LOG_LEVEL_VERBOSE, "Verifying the syntax of the inputs...");
     {
         char cfpromises[CF_MAXVARSIZE];
-        snprintf(cfpromises, sizeof(cfpromises), "%s%cbin%ccf-promises%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR,
-                 EXEC_SUFFIX);
+
+        snprintf(cfpromises, sizeof(cfpromises), "%s%cbin%ccf-promises%s",
+                 workdir, FILE_SEPARATOR, FILE_SEPARATOR, EXEC_SUFFIX);
 
         struct stat sb;
         if (stat(cfpromises, &sb) == -1)
         {
-            Log(LOG_LEVEL_ERR, "cf-promises%s needs to be installed in %s%cbin for pre-validation of full configuration",
-                  EXEC_SUFFIX, CFWORKDIR, FILE_SEPARATOR);
+            Log(LOG_LEVEL_ERR,
+                "cf-promises%s needs to be installed in %s%cbin for pre-validation of full configuration",
+                EXEC_SUFFIX, workdir, FILE_SEPARATOR);
+
             return false;
         }
 
@@ -579,42 +880,51 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
     InitializeWindows();
 #endif
 
+    /* Bug on HP-UX: Buffered output is discarded if you switch buffering mode
+       without flushing the buffered output first. This will happen anyway when
+       switching modes, so no performance is lost. */
+    fflush(stdout);
+    setlinebuf(stdout);
+
     DetermineCfenginePort();
 
     EvalContextClassPutHard(ctx, "any", "source=agent");
 
     GenericAgentAddEditionClasses(ctx);
 
-    strcpy(VPREFIX, GetConsolePrefix());
-
 /* Define trusted directories */
 
-    {
-        const char *workdir = GetWorkDir();
-        if (!workdir)
-        {
-            FatalError(ctx, "Error determining working directory");
-        }
+    const char *workdir = GetWorkDir();
 
-        strcpy(CFWORKDIR, workdir);
-        MapName(CFWORKDIR);
+    if (!workdir)
+    {
+        FatalError(ctx, "Error determining working directory");
     }
 
     OpenLog(LOG_USER);
     SetSyslogFacility(LOG_USER);
 
-    Log(LOG_LEVEL_VERBOSE, "Work directory is %s", CFWORKDIR);
+    Log(LOG_LEVEL_VERBOSE, "Work directory is %s", workdir);
 
     snprintf(vbuff, CF_BUFSIZE, "%s%cupdate.conf", GetInputDir(), FILE_SEPARATOR);
     MakeParentDirectory(vbuff, force);
-    snprintf(vbuff, CF_BUFSIZE, "%s%cbin%ccf-agent -D from_cfexecd", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%cbin%ccf-agent -D from_cfexecd", workdir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(vbuff, force);
-    snprintf(vbuff, CF_BUFSIZE, "%s%coutputs%cspooled_reports", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%coutputs%cspooled_reports", workdir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(vbuff, force);
-    snprintf(vbuff, CF_BUFSIZE, "%s%clastseen%cintermittencies", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%clastseen%cintermittencies", workdir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(vbuff, force);
-    snprintf(vbuff, CF_BUFSIZE, "%s%creports%cvarious", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%creports%cvarious", workdir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(vbuff, force);
+
+    snprintf(vbuff, CF_BUFSIZE, "%s%c.", GetLogDir(), FILE_SEPARATOR);
+    MakeParentDirectory(vbuff, force);
+    snprintf(vbuff, CF_BUFSIZE, "%s%c.", GetPidDir(), FILE_SEPARATOR);
+    MakeParentDirectory(vbuff, force);
+    snprintf(vbuff, CF_BUFSIZE, "%s%c.", GetStateDir(), FILE_SEPARATOR);
+    MakeParentDirectory(vbuff, force);
+
+    MakeParentDirectory(GetLogDir(), force);
 
     snprintf(vbuff, CF_BUFSIZE, "%s", GetInputDir());
 
@@ -622,24 +932,30 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
     {
         FatalError(ctx, " No access to WORKSPACE/inputs dir");
     }
-    else
+
+    /* ensure WORKSPACE/inputs directory has all user bits set (u+rwx) */
+    if ((sb.st_mode & 0700) != 0700)
     {
         chmod(vbuff, sb.st_mode | 0700);
     }
 
-    snprintf(vbuff, CF_BUFSIZE, "%s%coutputs", CFWORKDIR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%coutputs", workdir, FILE_SEPARATOR);
 
     if (stat(vbuff, &sb) == -1)
     {
         FatalError(ctx, " No access to WORKSPACE/outputs dir");
     }
-    else
+
+    /* ensure WORKSPACE/outputs directory has all user bits set (u+rwx) */
+    if ((sb.st_mode & 0700) != 0700)
     {
         chmod(vbuff, sb.st_mode | 0700);
     }
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cstate%ccf_procs",
-             CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    const char* const statedir = GetStateDir();
+
+    snprintf(ebuff, sizeof(ebuff), "%s%ccf_procs",
+             statedir, FILE_SEPARATOR);
     MakeParentDirectory(ebuff, force);
 
     if (stat(ebuff, &statbuf) == -1)
@@ -647,32 +963,36 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
         CreateEmptyFile(ebuff);
     }
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cstate%ccf_rootprocs",
-             CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(ebuff, sizeof(ebuff), "%s%ccf_rootprocs",
+             statedir, FILE_SEPARATOR);
 
     if (stat(ebuff, &statbuf) == -1)
     {
         CreateEmptyFile(ebuff);
     }
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cstate%ccf_otherprocs",
-             CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(ebuff, sizeof(ebuff), "%s%ccf_otherprocs",
+             statedir, FILE_SEPARATOR);
 
     if (stat(ebuff, &statbuf) == -1)
     {
         CreateEmptyFile(ebuff);
     }
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cstate%cprevious_state%c",
-             CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(ebuff, sizeof(ebuff), "%s%cprevious_state%c",
+             statedir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(ebuff, force);
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cstate%cdiff%c",
-             CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(ebuff, sizeof(ebuff), "%s%cdiff%c",
+             statedir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(ebuff, force);
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cstate%cuntracked%c",
-            CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, FILE_SEPARATOR);
+    snprintf(ebuff, sizeof(ebuff), "%s%cuntracked%c",
+             statedir, FILE_SEPARATOR, FILE_SEPARATOR);
+    MakeParentDirectory(ebuff, force);
+
+    snprintf(ebuff, sizeof(ebuff), "%s%cpromise_log%c",
+            statedir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(ebuff, force);
 
     OpenNetwork();
@@ -685,10 +1005,9 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
     if (config->agent_type != AGENT_TYPE_KEYGEN)
     {
         LoadSecretKeys();
-        char *bootstrapped_policy_server = ReadPolicyServerFile(CFWORKDIR);
+        char *bootstrapped_policy_server = ReadPolicyServerFile(workdir);
         PolicyHubUpdateKeys(bootstrapped_policy_server);
         free(bootstrapped_policy_server);
-        cfnet_init();
     }
 
     size_t cwd_size = PATH_MAX;
@@ -702,9 +1021,15 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
                 cwd_size *= 2;
                 continue;
             }
-            Log(LOG_LEVEL_WARNING, "Could not determine current directory. (getcwd: '%s')", GetErrorStr());
-            break;
+            else
+            {
+                Log(LOG_LEVEL_WARNING,
+                    "Could not determine current directory (getcwd: %s)",
+                    GetErrorStr());
+                break;
+            }
         }
+
         EvalContextSetLaunchDirectory(ctx, cwd);
         break;
     }
@@ -712,25 +1037,6 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
     if (!MINUSF)
     {
         GenericAgentConfigSetInputFile(config, GetInputDir(), "promises.cf");
-    }
-
-    VIFELAPSED = 1;
-    VEXPIREAFTER = 1;
-
-    setlinebuf(stdout);
-
-    if (config->agent_specific.agent.bootstrap_policy_server)
-    {
-        snprintf(vbuff, CF_BUFSIZE, "%s%cfailsafe.cf", GetInputDir(), FILE_SEPARATOR);
-
-        if (stat(vbuff, &statbuf) == -1)
-        {
-            GenericAgentConfigSetInputFile(config, GetInputDir(), "failsafe.cf");
-        }
-        else
-        {
-            GenericAgentConfigSetInputFile(config, GetInputDir(), vbuff);
-        }
     }
 }
 
@@ -760,28 +1066,64 @@ static bool MissingInputFile(const char *input_file)
 }
 
 // Git only.
-static bool GeneratePolicyReleaseIDFromGit(char *release_id_out, ARG_UNUSED size_t out_size,
+static bool GeneratePolicyReleaseIDFromGit(char *release_id_out,
+#ifdef NDEBUG /* out_size is only used in an assertion */
+                                           ARG_UNUSED
+#endif
+                                           size_t out_size,
                                            const char *policy_dir)
 {
     char git_filename[PATH_MAX + 1];
     snprintf(git_filename, PATH_MAX, "%s/.git/HEAD", policy_dir);
     MapName(git_filename);
 
+    // Note: Probably we should not be reading all of these filenames directly,
+    // and should instead use git plumbing commands to retrieve the data.
     FILE *git_file = fopen(git_filename, "r");
     if (git_file)
     {
         char git_head[128];
-        fscanf(git_file, "ref: %127s", git_head);
-        fclose(git_file);
+        int scanned = fscanf(git_file, "ref: %127s", git_head);
 
-        snprintf(git_filename, PATH_MAX, "%s/.git/%s", policy_dir, git_head);
-        git_file = fopen(git_filename, "r");
+        if (scanned == 1)
+        // Found HEAD Reference which means we are on a checked out branch
+        {
+            fclose(git_file);
+            snprintf(git_filename, PATH_MAX, "%s/.git/%s",
+                     policy_dir, git_head);
+            git_file = fopen(git_filename, "r");
+            Log(LOG_LEVEL_DEBUG, "Found a git HEAD ref");
+        }
+        else
+        {
+            Log(LOG_LEVEL_DEBUG,
+                "Unable to find HEAD ref in '%s', looking for commit instead",
+                git_filename);
+            assert(out_size > 40);
+            fseek(git_file, 0, SEEK_SET);
+            scanned = fscanf(git_file, "%40s", release_id_out);
+            fclose(git_file);
+
+            if (scanned == 1)
+            {
+                Log(LOG_LEVEL_DEBUG,
+                    "Found current git checkout pointing to: %s",
+                    release_id_out);
+                return true;
+            }
+            else
+            {
+                /* We didnt find a commit sha in .git/HEAD, so we assume the
+                 * git information is invalid. */
+                git_file = NULL;
+            }
+        }
         if (git_file)
         {
             assert(out_size > 40);
-            fscanf(git_file, "%40s", release_id_out);
+            scanned = fscanf(git_file, "%40s", release_id_out);
             fclose(git_file);
-            return true;
+            return scanned == 1;
         }
         else
         {
@@ -812,7 +1154,7 @@ static bool GeneratePolicyReleaseIDFromTree(char *release_id_out, size_t out_siz
     EVP_DigestInit(&crypto_ctx, EVP_get_digestbyname(HashNameFromId(GENERIC_AGENT_CHECKSUM_METHOD)));
 
     bool success = HashDirectoryTree(policy_dir,
-                                     (const char *[]) { ".cf", ".dat", ".txt", ".conf", NULL},
+                                     (const char *[]) { ".cf", ".dat", ".txt", ".conf", ".mustache", ".json", ".yaml", NULL},
                                      &crypto_ctx);
 
     int md_len;
@@ -841,7 +1183,9 @@ static bool GeneratePolicyReleaseID(char *release_id_out, size_t out_size,
  */
 static void GetPromisesValidatedFile(char *filename, size_t max_size, const GenericAgentConfig *config, const char *maybe_dirname)
 {
-    char dirname[PATH_MAX + 1];
+    char dirname[max_size];
+
+    /* TODO overflow error checking! */
     GetAutotagDir(dirname, max_size, maybe_dirname);
 
     if (NULL == maybe_dirname && MINUSF)
@@ -867,7 +1211,7 @@ static void GetAutotagDir(char *dirname, size_t max_size, const char *maybe_dirn
     }
     else if (MINUSF)
     {
-        snprintf(dirname, max_size, "%s/state", CFWORKDIR);
+        strlcpy(dirname, GetStateDir(), max_size);
     }
     else
     {
@@ -893,7 +1237,7 @@ static JsonElement *ReadReleaseIdFileFromMasterfiles(const char *maybe_dirname)
     GetReleaseIdFile(NULL == maybe_dirname ? GetMasterDir() : maybe_dirname,
                      filename, sizeof(filename));
 
-    JsonElement *doc = ReadJsonFile(filename);
+    JsonElement *doc = ReadJsonFile(filename, LOG_LEVEL_DEBUG);
     if (NULL == doc)
     {
         Log(LOG_LEVEL_VERBOSE, "Could not parse release_id JSON file %s", filename);
@@ -991,7 +1335,7 @@ bool GenericAgentIsPolicyReloadNeeded(const GenericAgentConfig *config)
         }
         else if (sb.st_mtime > validated_at)
         {
-            Log(LOG_LEVEL_VERBOSE, "Input file '%s' has changed since the last policy read attempt", config->input_file);
+            Log(LOG_LEVEL_VERBOSE, "Input file '%s' has changed since the last policy read attempt (file is newer than previous)", config->input_file);
             return true;
         }
     }
@@ -1007,7 +1351,7 @@ bool GenericAgentIsPolicyReloadNeeded(const GenericAgentConfig *config)
 
     {
         char filename[MAX_FILENAME];
-        snprintf(filename, MAX_FILENAME, "%s/policy_server.dat", CFWORKDIR);
+        snprintf(filename, MAX_FILENAME, "%s/policy_server.dat", GetWorkDir());
         MapName(filename);
 
         struct stat sb;
@@ -1102,38 +1446,59 @@ static void CheckWorkingDirectories(EvalContext *ctx)
     struct stat statbuf;
     char vbuff[CF_BUFSIZE];
 
+    const char* const workdir = GetWorkDir();
+    const char* const statedir = GetStateDir();
+
     if (uname(&VSYSNAME) == -1)
     {
         Log(LOG_LEVEL_ERR, "Couldn't get kernel name info. (uname: %s)", GetErrorStr());
         memset(&VSYSNAME, 0, sizeof(VSYSNAME));
     }
 
-    snprintf(vbuff, CF_BUFSIZE, "%s%c.", CFWORKDIR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%c.", workdir, FILE_SEPARATOR);
     MakeParentDirectory(vbuff, false);
 
-    Log(LOG_LEVEL_VERBOSE, "Making sure that locks are private...");
-
-    if (chown(CFWORKDIR, getuid(), getgid()) == -1)
+    /* check that GetWorkDir() exists */
+    if (stat(GetWorkDir(), &statbuf) == -1)
     {
-        Log(LOG_LEVEL_ERR, "Unable to set owner on '%s'' to '%ju.%ju'. (chown: %s)", CFWORKDIR, (uintmax_t)getuid(),
-            (uintmax_t)getgid(), GetErrorStr());
+        FatalError(ctx,"Unable to stat working directory '%s'! (stat: %s)\n",
+                   GetWorkDir(), GetErrorStr());
     }
 
-    if (stat(CFWORKDIR, &statbuf) != -1)
+    Log(LOG_LEVEL_VERBOSE, "Making sure that internal directories are private...");
+
+    Log(LOG_LEVEL_VERBOSE, "Checking integrity of the trusted workdir");
+
+    /* fix any improper uid/gid ownership on workdir */
+    if (statbuf.st_uid != getuid() || statbuf.st_gid != getgid())
     {
-        /* change permissions go-w */
-        chmod(CFWORKDIR, (mode_t) (statbuf.st_mode & ~022));
+        if (chown(workdir, getuid(), getgid()) == -1)
+        {
+            const char* error_reason = GetErrorStr();
+
+            Log(LOG_LEVEL_ERR, "Unable to set ownership on '%s' to '%ju.%ju'. (chown: %s)",
+                workdir, (uintmax_t)getuid(), (uintmax_t)getgid(), error_reason);
+        }
     }
 
-    snprintf(vbuff, CF_BUFSIZE, "%s%cstate%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
-    MakeParentDirectory(vbuff, false);
+    /* ensure workdir permissions are go-w */
+    if ((statbuf.st_mode & 022) != 0)
+    {
+        if (chmod(workdir, (mode_t) (statbuf.st_mode & ~022)) == -1)
+        {
+            Log(LOG_LEVEL_ERR, "Unable to set permissions on '%s' to go-w. (chmod: %s)",
+                workdir, GetErrorStr());
+        }
+    }
 
+    MakeParentDirectory(GetStateDir(), false);
     Log(LOG_LEVEL_VERBOSE, "Checking integrity of the state database");
-    snprintf(vbuff, CF_BUFSIZE, "%s%cstate", CFWORKDIR, FILE_SEPARATOR);
+
+    snprintf(vbuff, CF_BUFSIZE, "%s", statedir);
 
     if (stat(vbuff, &statbuf) == -1)
     {
-        snprintf(vbuff, CF_BUFSIZE, "%s%cstate%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+        snprintf(vbuff, CF_BUFSIZE, "%s%c", statedir, FILE_SEPARATOR);
         MakeParentDirectory(vbuff, false);
 
         if (chown(vbuff, getuid(), getgid()) == -1)
@@ -1149,7 +1514,7 @@ static void CheckWorkingDirectories(EvalContext *ctx)
 #ifndef __MINGW32__
         if (statbuf.st_mode & 022)
         {
-            Log(LOG_LEVEL_ERR, "UNTRUSTED: State directory %s (mode %jo) was not private!", CFWORKDIR,
+            Log(LOG_LEVEL_ERR, "UNTRUSTED: State directory %s (mode %jo) was not private!", workdir,
                   (uintmax_t)(statbuf.st_mode & 0777));
         }
 #endif /* !__MINGW32__ */
@@ -1157,11 +1522,11 @@ static void CheckWorkingDirectories(EvalContext *ctx)
 
     Log(LOG_LEVEL_VERBOSE, "Checking integrity of the module directory");
 
-    snprintf(vbuff, CF_BUFSIZE, "%s%cmodules", CFWORKDIR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%cmodules", workdir, FILE_SEPARATOR);
 
     if (stat(vbuff, &statbuf) == -1)
     {
-        snprintf(vbuff, CF_BUFSIZE, "%s%cmodules%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+        snprintf(vbuff, CF_BUFSIZE, "%s%cmodules%c.", workdir, FILE_SEPARATOR, FILE_SEPARATOR);
         MakeParentDirectory(vbuff, false);
 
         if (chown(vbuff, getuid(), getgid()) == -1)
@@ -1185,11 +1550,11 @@ static void CheckWorkingDirectories(EvalContext *ctx)
 
     Log(LOG_LEVEL_VERBOSE, "Checking integrity of the PKI directory");
 
-    snprintf(vbuff, CF_BUFSIZE, "%s%cppkeys", CFWORKDIR, FILE_SEPARATOR);
+    snprintf(vbuff, CF_BUFSIZE, "%s%cppkeys", workdir, FILE_SEPARATOR);
 
     if (stat(vbuff, &statbuf) == -1)
     {
-        snprintf(vbuff, CF_BUFSIZE, "%s%cppkeys%c.", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR);
+        snprintf(vbuff, CF_BUFSIZE, "%s%cppkeys%c", workdir, FILE_SEPARATOR, FILE_SEPARATOR);
         MakeParentDirectory(vbuff, false);
 
         chmod(vbuff, (mode_t) 0700); /* Keys must be immutable to others */
@@ -1199,7 +1564,7 @@ static void CheckWorkingDirectories(EvalContext *ctx)
 #ifndef __MINGW32__
         if (statbuf.st_mode & 077)
         {
-            FatalError(ctx, "UNTRUSTED: Private key directory %s%cppkeys (mode %jo) was not private!\n", CFWORKDIR,
+            FatalError(ctx, "UNTRUSTED: Private key directory %s%cppkeys (mode %jo) was not private!\n", workdir,
                        FILE_SEPARATOR, (uintmax_t)(statbuf.st_mode & 0777));
         }
 #endif /* !__MINGW32__ */
@@ -1234,13 +1599,24 @@ void GenericAgentWriteHelp(Writer *w, const char *component, const struct option
 
     for (int i = 0; options[i].name != NULL; i++)
     {
-        if (options[i].has_arg)
+        char short_option[] = ", -*";
+        if (options[i].val < 128)
         {
-            WriterWriteF(w, "  --%-12s, -%c value - %s\n", options[i].name, (char) options[i].val, hints[i]);
+            // Within ASCII range, means there is a short option.
+            short_option[3] = options[i].val;
         }
         else
         {
-            WriterWriteF(w, "  --%-12s, -%-7c - %s\n", options[i].name, (char) options[i].val, hints[i]);
+            // No short option.
+            short_option[0] = '\0';
+        }
+        if (options[i].has_arg)
+        {
+            WriterWriteF(w, "  --%-12s%s value - %s\n", options[i].name, short_option, hints[i]);
+        }
+        else
+        {
+            WriterWriteF(w, "  --%-12s%-10s - %s\n", options[i].name, short_option, hints[i]);
         }
     }
 
@@ -1398,14 +1774,18 @@ bool GenericAgentConfigParseColor(GenericAgentConfig *config, const char *mode)
     }
 }
 
-GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type)
+bool GetTTYInteractive(void)
+{
+    return isatty(0) || isatty(1) || isatty(2);
+}
+
+GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type, bool tty_interactive)
 {
     GenericAgentConfig *config = xmalloc(sizeof(GenericAgentConfig));
 
+    LoggingSetAgentType(CF_AGENTTYPES[agent_type]);
     config->agent_type = agent_type;
-
-    // TODO: system state, perhaps pull out as param
-    config->tty_interactive = isatty(0) && isatty(1);
+    config->tty_interactive = tty_interactive;
 
     const char *color_env = getenv("CFENGINE_COLOR");
     config->color = (color_env && 0 == strcmp(color_env, "1"));
@@ -1416,7 +1796,7 @@ GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type)
     config->input_file = NULL;
     config->input_dir = NULL;
 
-    config->check_not_writable_by_others = agent_type != AGENT_TYPE_COMMON && !config->tty_interactive;
+    config->check_not_writable_by_others = agent_type != AGENT_TYPE_COMMON;
     config->check_runnable = agent_type != AGENT_TYPE_COMMON;
     config->ignore_missing_bundles = false;
     config->ignore_missing_inputs = false;
@@ -1425,7 +1805,12 @@ GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type)
     config->heap_negated = NULL;
     config->ignore_locks = false;
 
+    config->protocol_version = CF_PROTOCOL_UNDEFINED;
+
     config->agent_specific.agent.bootstrap_policy_server = NULL;
+
+    /* By default we trust the network when bootstrapping. */
+    config->agent_specific.agent.bootstrap_trust_server = true;
 
     switch (agent_type)
     {
@@ -1494,11 +1879,6 @@ void GenericAgentConfigApply(EvalContext *ctx, const GenericAgentConfig *config)
         break;
     }
 
-    if (config->agent_specific.agent.bootstrap_policy_server)
-    {
-        EvalContextClassPutHard(ctx, "bootstrap_mode", "source=environment");
-    }
-
     if (config->color)
     {
         LoggingSetColor(config->color);
@@ -1522,6 +1902,30 @@ void GenericAgentConfigApply(EvalContext *ctx, const GenericAgentConfig *config)
     {
         EvalContextClassPutHard(ctx, "opt_dry_run", "cfe_internal,source=environment");
     }
+}
+
+bool CheckAndGenerateFailsafe(const char *inputdir, const char *input_file)
+{
+    char failsafe_path[CF_BUFSIZE];
+    
+    if (strlen(inputdir) + strlen(input_file) > sizeof(failsafe_path) - 2)
+    {
+        Log(LOG_LEVEL_ERR,
+            "Unable to generate path for %s/%s file. Path too long.",
+            inputdir, input_file);
+        /* We could create dynamically allocated buffer able to hold the 
+           whole content of the path but this should be unlikely that we
+           will end up here. */
+        return false;
+    }
+    snprintf(failsafe_path, CF_BUFSIZE - 1, "%s/%s", inputdir, input_file);
+    MapName(failsafe_path);
+    
+    if (access(failsafe_path, R_OK) != 0)
+    {
+        return WriteBuiltinFailsafePolicyToPath(failsafe_path);
+    }
+    return true;
 }
 
 void GenericAgentConfigSetInputFile(GenericAgentConfig *config, const char *inputdir, const char *input_file)
@@ -1553,4 +1957,14 @@ void GenericAgentConfigSetBundleSequence(GenericAgentConfig *config, const Rlist
 {
     RlistDestroy(config->bundlesequence);
     config->bundlesequence = RlistCopy(bundlesequence);
+}
+
+bool GenericAgentPostLoadInit(const EvalContext *ctx)
+{
+    const char *tls_ciphers =
+        EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_TLS_CIPHERS);
+    const char *tls_min_version =
+        EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_TLS_MIN_VERSION);
+
+    return cfnet_init(tls_min_version, tls_ciphers);
 }

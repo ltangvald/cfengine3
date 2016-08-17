@@ -35,6 +35,8 @@ const char *DBPrivGetFileExtension(void);
 
 #define DB_PRIV_DATABASE_BROKEN ((DBPriv *)-1)
 
+void DBPrivSetMaximumConcurrentTransactions(int max_txn);
+
 /*
  * These two functions will always be called with a per-database lock held.
  */
@@ -49,6 +51,7 @@ const char *DBPrivGetFileExtension(void);
 DBPriv *DBPrivOpenDB(const char *dbpath, dbid id);
 void DBPrivCloseDB(DBPriv *hdbp);
 void DBPrivCommit(DBPriv *hdbp);
+bool DBPrivClean(DBPriv *hdbp);
 
 bool DBPrivHasKey(DBPriv *db, const void *key, int key_size);
 int DBPrivGetValueSize(DBPriv *db, const void *key, int key_size);

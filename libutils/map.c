@@ -72,6 +72,7 @@ static void NopDestroyFn(ARG_UNUSED void *p1)
  */
 static bool IsArrayMap(const Map *map)
 {
+    assert(map != NULL);
     return map->hash_fn != NULL;
 }
 
@@ -108,6 +109,8 @@ Map *MapNew(MapHashFn hash_fn,
 
 size_t MapSize(const Map *map)
 {
+    assert(map != NULL);
+
     if (IsArrayMap(map))
     {
         return map->arraymap->size;
@@ -128,6 +131,8 @@ size_t MapSize(const Map *map)
 
 static void ConvertToHashMap(Map *map)
 {
+    assert(map != NULL);
+
     HashMap *hashmap = HashMapNew(map->hash_fn,
                                   map->arraymap->equal_fn,
                                   map->arraymap->destroy_key_fn,
@@ -150,21 +155,25 @@ static void ConvertToHashMap(Map *map)
     map->hash_fn = NULL;
 }
 
-void MapInsert(Map *map, void *key, void *value)
+bool MapInsert(Map *map, void *key, void *value)
 {
+    assert(map != NULL);
+
     if (IsArrayMap(map))
     {
-        if (ArrayMapInsert(map->arraymap, key, value))
+        int ret = ArrayMapInsert(map->arraymap, key, value);
+        if (ret != 0)
         {
-            return;
+            /* Return true if value was replaced, false if key-value was
+             * inserted as new. */
+            return (ret == 1);
         }
-        else
-        {
-            ConvertToHashMap(map);
-        }
+
+        /* Does not fit in ArrayMap, must convert to HashMap. */
+        ConvertToHashMap(map);
     }
 
-    HashMapInsert(map->hashmap, key, value);
+    return HashMapInsert(map->hashmap, key, value);
 }
 
 /*
@@ -173,6 +182,8 @@ void MapInsert(Map *map, void *key, void *value)
  */
 static MapKeyValue *MapGetRaw(const Map *map, const void *key)
 {
+    assert(map != NULL);
+
     if (IsArrayMap(map))
     {
         return ArrayMapGet((ArrayMap *)map->arraymap, key);
@@ -185,17 +196,21 @@ static MapKeyValue *MapGetRaw(const Map *map, const void *key)
 
 bool MapHasKey(const Map *map, const void *key)
 {
+    assert(map != NULL);
     return MapGetRaw(map, key) != NULL;
 }
 
 void *MapGet(Map *map, const void *key)
 {
+    assert(map != NULL);
     MapKeyValue *kv = MapGetRaw(map, key);
     return kv ? kv->value : NULL;
 }
 
 bool MapRemove(Map *map, const void *key)
 {
+    assert(map != NULL);
+
     if (IsArrayMap(map))
     {
         return ArrayMapRemove(map->arraymap, key);
@@ -208,6 +223,8 @@ bool MapRemove(Map *map, const void *key)
 
 void MapClear(Map *map)
 {
+    assert(map != NULL);
+
     if (IsArrayMap(map))
     {
         ArrayMapClear(map->arraymap);
@@ -252,6 +269,9 @@ void MapDestroy(Map *map)
 
 bool MapContainsSameKeys(const Map *map1, const Map *map2)
 {
+    assert(map1 != NULL);
+    assert(map2 != NULL);
+
     MapIterator i = MapIteratorInit((Map *)map1);
     MapKeyValue *item;
     size_t count = 0;
@@ -268,6 +288,8 @@ bool MapContainsSameKeys(const Map *map1, const Map *map2)
 
 void MapPrintStats(const Map *map, FILE *f)
 {
+    assert(map != NULL);
+
     fprintf(f, "================ Map statistics ================\n");
 
     if (IsArrayMap(map))
@@ -286,6 +308,8 @@ void MapPrintStats(const Map *map, FILE *f)
 
 MapIterator MapIteratorInit(Map *map)
 {
+    assert(map != NULL);
+
     MapIterator i;
     if (IsArrayMap(map))
     {

@@ -29,15 +29,18 @@
 #include <cfnet.h>
 
 
-bool TLSClientInitialize(void);
+bool TLSClientInitialize(const char *tls_min_version,
+                         const char *ciphers);
 void TLSDeInitialize(void);
+bool TLSClientIsInitialized(void);
 
 int TLSClientIdentificationDialog(ConnectionInfo *conn_info,
                                   const char *username);
+int TLSTry(ConnectionInfo *conn_info);
 
+/* Exported for enterprise. */
 int TLSConnect(ConnectionInfo *conn_info, bool trust_server,
                const char *ipaddr, const char *username);
-int TLSTry(ConnectionInfo *conn_info);
 
 
 #endif

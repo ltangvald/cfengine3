@@ -82,6 +82,7 @@ char *BufferClose(Buffer *buffer)
 
 Buffer *BufferCopy(const Buffer *source)
 {
+    assert(source);
     return BufferNewFrom(source->buffer, source->used);
 }
 
@@ -292,6 +293,55 @@ void BufferAppendChar(Buffer *buffer, char byte)
     }
 }
 
+void BufferAppendPromiseStr(Buffer *buf, const char *promiser)
+{
+    for (const char *ch = promiser; *ch != '\0'; ch++)
+    {
+        switch (*ch)
+        {
+        case '*':
+            BufferAppendChar(buf, ':');
+            break;
+
+        case '#':
+            BufferAppendChar(buf, '.');
+            break;
+
+        default:
+            BufferAppendChar(buf, *ch);
+            break;
+        }
+    }
+}
+
+void BufferAppendAbbreviatedStr(Buffer *buf, const char *promiser, const int N)
+{
+    /* check if `promiser` contains a new line (may happen for "insert_lines") */
+    const char *const nl = strchr(promiser, '\n');
+    if (NULL == nl)
+    {
+        BufferAppendPromiseStr(buf, promiser);
+    }
+    else
+    {
+        /* `promiser` contains a newline: abbreviate it by taking the first and last few characters */
+        static const char sep[] = "...";
+        char abbr[sizeof(sep) + 2 * N];
+        const int head = (nl > promiser + N) ? N : (nl - promiser);
+        const char * last_line = strrchr(promiser, '\n') + 1;
+        assert(last_line); /* not NULL, we know we have at least one '\n' */
+        const int tail = strlen(last_line);
+        if (tail > N)
+        {
+            last_line += tail - N;
+        }
+        memcpy(abbr, promiser, head);
+        strcpy(abbr + head, sep);
+        strcat(abbr, last_line);
+        BufferAppendPromiseStr(buf, abbr);
+    }
+}
+
 void BufferAppendF(Buffer *buffer, const char *format, ...)
 {
     assert(buffer);
@@ -311,7 +361,6 @@ void BufferAppendF(Buffer *buffer, const char *format, ...)
          */
         ExpandIfNeeded(buffer, buffer->used + printed);
 
-        buffer->used = 0;
         printed = vsnprintf(buffer->buffer + buffer->used, buffer->capacity - buffer->used, format, ap);
         buffer->used += printed;
     }
@@ -327,7 +376,6 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
 {
     assert(buffer);
     assert(format);
-
     /*
      * We declare two lists, in case we need to reiterate over the list because the buffer was
      * too small.
@@ -369,6 +417,8 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
 
 int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
 {
+    assert(buffer);
+    assert(format);
     va_list aq;
     va_copy(aq, ap);
 
@@ -393,34 +443,39 @@ int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
     {
         buffer->used = printed;
     }
+    va_end(aq);
     return printed;
 }
 
 void BufferClear(Buffer *buffer)
 {
+    assert(buffer);
     buffer->used = 0;
-	buffer->buffer[0] = '\0';
+    buffer->buffer[0] = '\0';
 }
 
-unsigned int BufferSize(Buffer *buffer)
+unsigned int BufferSize(const Buffer *buffer)
 {
-    return buffer->used;
+    assert(buffer);
+    return buffer ? buffer->used : 0;
 }
 
-const char *BufferData(Buffer *buffer)
+const char *BufferData(const Buffer *buffer)
 {
-    return buffer->buffer;
+    assert(buffer);
+    return buffer ? buffer->buffer : NULL;
 }
 
-BufferBehavior BufferMode(Buffer *buffer)
+BufferBehavior BufferMode(const Buffer *buffer)
 {
-    return buffer->mode;
+    assert(buffer);
+    return buffer ? buffer->mode : BUFFER_BEHAVIOR_BYTEARRAY;
 }
 
 void BufferSetMode(Buffer *buffer, BufferBehavior mode)
 {
+    assert(buffer);
     assert(mode == BUFFER_BEHAVIOR_CSTRING || mode == BUFFER_BEHAVIOR_BYTEARRAY);
-
     /*
      * If we switch from BYTEARRAY mode to CSTRING then we need to adjust the
      * length to the first '\0'. This makes our life easier in the long run.
@@ -437,4 +492,10 @@ void BufferSetMode(Buffer *buffer, BufferBehavior mode)
         }
     }
     buffer->mode = mode;
+}
+
+unsigned BufferCapacity(const Buffer *buffer)
+{
+    assert(buffer);
+    return buffer ? buffer->capacity : 0;
 }

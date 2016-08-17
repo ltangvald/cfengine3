@@ -1,0 +1,68 @@
+Fix some spelling errors in various log messages.
+
+--- a/cf-agent/verify_methods.c
++++ b/cf-agent/verify_methods.c
+@@ -101,7 +101,7 @@
+            ++arg_index;
+            if (strcmp(args->val.item, CF_NULL_VALUE) == 0)
+            {
+-               Log(LOG_LEVEL_DEBUG, "Skipping invokation of method '%s' due to null-values in argument '%d'",
++               Log(LOG_LEVEL_DEBUG, "Skipping invocation of method '%s' due to null-values in argument '%d'",
+                    fp->name, arg_index);
+                BufferDestroy(method_name);
+                return PROMISE_RESULT_SKIPPED;
+--- a/libcfnet/tls_generic.c
++++ b/libcfnet/tls_generic.c
+@@ -460,7 +460,7 @@
+     const EVP_MD *md = EVP_get_digestbyname("sha384");
+     if (md == NULL)
+     {
+-        Log(LOG_LEVEL_ERR, "OpenSSL: Uknown digest algorithm %s",
++        Log(LOG_LEVEL_ERR, "OpenSSL: Unknown digest algorithm %s",
+             "sha384");
+         goto err3;
+     }
+--- a/tests/unit/tls_generic_test.c
++++ b/tests/unit/tls_generic_test.c
+@@ -156,7 +156,7 @@
+         const EVP_MD *md = EVP_get_digestbyname("sha384");
+         if (md == NULL)
+         {
+-            Log(LOG_LEVEL_ERR, "Uknown digest algorithm %s",
++            Log(LOG_LEVEL_ERR, "Unknown digest algorithm %s",
+                 "sha384");
+             return false;
+         }
+--- a/cf-key/cf-key-functions.c
++++ b/cf-key/cf-key-functions.c
+@@ -290,7 +290,7 @@
+     }
+     else if (removed_input + removed_equivalent == 0)
+     {
+-        Log(LOG_LEVEL_ERR, "No key file(s) for entry '%s' were found on the filesytem", input);
++        Log(LOG_LEVEL_ERR, "No key file(s) for entry '%s' were found on the filesystem", input);
+         return 1;
+     }
+     else
+--- a/cf-runagent/cf-runagent.c
++++ b/cf-runagent/cf-runagent.c
+@@ -599,7 +599,7 @@
+                 if (IsAbsPath(value))
+                 {
+                     strlcpy(OUTPUT_DIRECTORY, value, CF_BUFSIZE);
+-                    Log(LOG_LEVEL_VERBOSE, "Setting output direcory to '%s'", OUTPUT_DIRECTORY);
++                    Log(LOG_LEVEL_VERBOSE, "Setting output directory to '%s'", OUTPUT_DIRECTORY);
+                 }
+                 continue;
+             }
+--- a/cf-agent/verify_environments.c
++++ b/cf-agent/verify_environments.c
+@@ -419,7 +419,7 @@
+         break;
+ 
+     default:
+-        Log(LOG_LEVEL_INFO, "No recogized state specified for this network environment");
++        Log(LOG_LEVEL_INFO, "No recognized state specified for this network environment");
+         break;
+     }
+ 

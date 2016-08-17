@@ -23,6 +23,8 @@
 */
 
 #include <verify_packages.h>
+#include <verify_new_packages.h>
+#include <package_module.h>
 
 #include <actuator.h>
 #include <promises.h>
@@ -93,6 +95,15 @@
 #define PromiseResultUpdate_HELPER(__pp, __prior, __evidence) \
     REPORT_THIS_PROMISE(__pp) ? PromiseResultUpdate(__prior, __evidence) : __evidence
 
+typedef enum
+{
+    PACKAGE_PROMISE_TYPE_OLD = 0,
+    PACKAGE_PROMISE_TYPE_NEW,
+    PACKAGE_PROMISE_TYPE_MIXED,
+    PACKAGE_PROMISE_TYPE_OLD_ERROR,
+    PACKAGE_PROMISE_TYPE_NEW_ERROR
+} PackagePromiseType;
+
 static int PackageSanityCheck(EvalContext *ctx, Attributes a, const Promise *pp);
 
 static int VerifyInstalledPackages(EvalContext *ctx, PackageManager **alllists, const char *default_arch, Attributes a, const Promise *pp, PromiseResult *result);
@@ -115,6 +126,8 @@ static void DeletePackageManagers(PackageManager *morituri);
 
 static const char *PrefixLocalRepository(const Rlist *repositories, const char *package);
 
+PromiseResult HandleOldPackagePromiseType(EvalContext *ctx, const Promise *pp, Attributes a);
+
 ENTERPRISE_VOID_FUNC_1ARG_DEFINE_STUB(void, ReportPatches, ARG_UNUSED PackageManager *, list)
 {
     Log(LOG_LEVEL_VERBOSE, "Patch reporting feature is only available in the enterprise version");
@@ -131,8 +144,101 @@ PackageManager *INSTALLED_PACKAGE_LISTS = NULL; /* GLOBAL_X */
 
 #define PACKAGE_IGNORED_CFE_INTERNAL "cfe_internal_non_existing_package"
 
+/* Returns the old or new package promise type depending on promise 
+   constraints. */
+static PackagePromiseType GetPackagePromiseVersion(const Packages *packages,
+        const NewPackages *new_packages)
+{
+    /* We have mixed packages promise constraints. */
+    if (!packages->is_empty && !new_packages->is_empty)
+    {
+        return PACKAGE_PROMISE_TYPE_MIXED;
+    }
+    else if (!new_packages->is_empty) /* new packages promise */
+    {
+        if (new_packages->package_policy == NEW_PACKAGE_ACTION_NONE)
+        {
+            return PACKAGE_PROMISE_TYPE_NEW_ERROR;
+        }
+        return PACKAGE_PROMISE_TYPE_NEW;
+    }
+    else /* old packages promise */
+    {
+        //TODO:
+        if (!packages->has_package_method)
+        {
+            return PACKAGE_PROMISE_TYPE_OLD_ERROR;
+        }
+        return PACKAGE_PROMISE_TYPE_OLD;
+    }
+}
+
+PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
+{
+    PromiseResult result = PROMISE_RESULT_FAIL;
+    char *promise_log_message = NULL;
+    LogLevel level;
+    
+    Attributes a = GetPackageAttributes(ctx, pp);
+    PackagePromiseType package_promise_type =
+            GetPackagePromiseVersion(&a.packages, &a.new_packages);
+    
+    switch (package_promise_type)
+    {
+        case PACKAGE_PROMISE_TYPE_NEW:
+            Log(LOG_LEVEL_VERBOSE, "Using new package promise.");
+
+            result = HandleNewPackagePromiseType(ctx, pp, a, &promise_log_message,
+                    &level);
+            
+            assert(promise_log_message != NULL);
+            
+            if (result != PROMISE_RESULT_SKIPPED)
+            {
+                cfPS(ctx, level, result, pp, a, "%s", promise_log_message);
+            }
+            free(promise_log_message);
+            break;
+        case PACKAGE_PROMISE_TYPE_OLD:
+            Log(LOG_LEVEL_VERBOSE,
+                "Using old package promise. Please note that this old "
+                "implementation is being phased out. The old "
+                "implementation will continue to work, but forward development "
+                "will be directed toward the new implementation.");
+
+            result = HandleOldPackagePromiseType(ctx, pp, a);
+        
+            /* Update new package promise cache in case we have mixed old and new 
+             * package promises in policy. */
+            if (result == PROMISE_RESULT_CHANGE || result == PROMISE_RESULT_FAIL)
+            {
+                UpdatePackagesCache(ctx, false);
+            }
+            break;
+        case PACKAGE_PROMISE_TYPE_NEW_ERROR:
+            cfPS_HELPER_0ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, 
+                         "New package promise failed sanity check.");
+            break;
+        case PACKAGE_PROMISE_TYPE_OLD_ERROR:
+            cfPS_HELPER_0ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, 
+                         "Old package promise failed sanity check.");
+            break;
+        case PACKAGE_PROMISE_TYPE_MIXED:
+            cfPS_HELPER_0ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, 
+                         "Mixed old and new package promise attributes inside "
+                         "one package promise.");
+            break;
+        default:
+            assert(0); //Shouldn't happen
+    }
+    return result;
+}
+
+
+/******************************************************************************/
+
 /**
-   @brief Verifies a single packages promise
+   @brief Executes single packages promise
 
    Called by cf-agent.
 
@@ -151,12 +257,12 @@ PackageManager *INSTALLED_PACKAGE_LISTS = NULL; /* GLOBAL_X */
    @param pp [in] the Promise for this operation
    @returns the promise result
 */
-PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
+PromiseResult HandleOldPackagePromiseType(EvalContext *ctx, const Promise *pp, Attributes a)
 {
     CfLock thislock;
     char lockname[CF_BUFSIZE];
     PromiseResult result = PROMISE_RESULT_NOOP;
-
+    
     const char *reserved_vars[] = { "name", "version", "arch", "firstrepo", NULL };
     for (int c = 0; reserved_vars[c]; c++)
     {
@@ -169,9 +275,7 @@ PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
         }
         VarRefDestroy(var_ref);
     }
-
-    Attributes a = GetPackageAttributes(ctx, pp);
-
+    
 #ifdef __MINGW32__
 
     if(!a.packages.package_list_command)
@@ -188,15 +292,26 @@ PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
         goto end;
     }
 
-    PromiseBanner(pp);
+    PromiseBanner(ctx, pp);
 
 // Now verify the package itself
+    
+    PackagePromiseGlobalLock package_lock = AcquireGlobalPackagePromiseLock(ctx);
+    if (package_lock.g_lock.lock == NULL)
+    {
+        Log(LOG_LEVEL_VERBOSE, 
+            "Can not acquire global lock for package promise. Skipping promise "
+            "evaluation");
+        result = PROMISE_RESULT_SKIPPED;
+        goto end;
+    }
 
     snprintf(lockname, CF_BUFSIZE - 1, "package-%s-%s", pp->promiser, a.packages.package_list_command);
 
     thislock = AcquireLock(ctx, lockname, VUQNAME, CFSTARTTIME, a.transaction, pp, false);
     if (thislock.lock == NULL)
     {
+        YieldGlobalPackagePromiseLock(package_lock);
         result = PROMISE_RESULT_SKIPPED;
         goto end;
     }
@@ -214,6 +329,7 @@ PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
     {
         cfPS_HELPER_0ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Unable to obtain default architecture for package manager - aborting");
         YieldCurrentLock(thislock);
+        YieldGlobalPackagePromiseLock(package_lock);
         result = PROMISE_RESULT_FAIL;
         goto end;
     }
@@ -224,6 +340,7 @@ PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
         cfPS_HELPER_0ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Unable to obtain a list of installed packages - aborting");
         free(default_arch);
         YieldCurrentLock(thislock);
+        YieldGlobalPackagePromiseLock(package_lock);
         result = PROMISE_RESULT_FAIL;
         goto end;
     }
@@ -244,6 +361,7 @@ PromiseResult VerifyPackagesPromise(EvalContext *ctx, const Promise *pp)
     }
 
     YieldCurrentLock(thislock);
+    YieldGlobalPackagePromiseLock(package_lock);
 
 end:
     if (!REPORT_THIS_PROMISE(pp))
@@ -479,7 +597,7 @@ static int PackageSanityCheck(EvalContext *ctx, Attributes a, const Promise *pp)
 
    Called by VerifyInstalledPackages
 
-   * calls a.packages.package_list_update_command if $(sys.workdir)/state/software_update_timestamp_<manager>
+   * calls a.packages.package_list_update_command if $(sys.statedir)/software_update_timestamp_<manager>
      is older than the interval specified in package_list_update_ifelapsed.
    * assembles the package list from a.packages.package_list_command
    * respects a.packages.package_commands_useshell (boolean)
@@ -502,13 +620,20 @@ static bool PackageListInstalledFromCommand(EvalContext *ctx,
 {
     if (a.packages.package_list_update_command != NULL)
     {
+        if (!a.packages.package_add_command)
+        {
+            Log(LOG_LEVEL_ERR, "package_add_command missing while trying to "
+                               "generate list of installed packages");
+            return false;
+        }
+
         time_t horizon = 24 * 60, now = time(NULL);
         bool call_update = true;
         struct stat sb;
         char update_timestamp_file[PATH_MAX];
 
-        snprintf(update_timestamp_file, sizeof(update_timestamp_file), "%s%cstate%csoftware_update_timestamp_%s",
-                 GetWorkDir(), FILE_SEPARATOR, FILE_SEPARATOR,
+        snprintf(update_timestamp_file, sizeof(update_timestamp_file), "%s%csoftware_update_timestamp_%s",
+                 GetStateDir(), FILE_SEPARATOR,
                  ReadLastNode(RealPackageManager(a.packages.package_add_command)));
 
         if (stat(update_timestamp_file, &sb) != -1)
@@ -569,16 +694,7 @@ static bool PackageListInstalledFromCommand(EvalContext *ctx,
         }
     }
 
-    if (LEGACY_OUTPUT)
-    {
-        Log(LOG_LEVEL_VERBOSE, " ???????????????????????????????????????????????????????????????");
-        Log(LOG_LEVEL_VERBOSE, "   Reading package list from %s", a.packages.package_list_command);
-        Log(LOG_LEVEL_VERBOSE, " ???????????????????????????????????????????????????????????????");
-    }
-    else
-    {
-        Log(LOG_LEVEL_VERBOSE, "Reading package list from '%s'", a.packages.package_list_command);
-    }
+    Log(LOG_LEVEL_VERBOSE, "Reading package list from '%s'", a.packages.package_list_command);
 
     FILE *fin;
 
@@ -793,7 +909,7 @@ static PackageItem *GetCachedPackageList(EvalContext *ctx, PackageManager *manag
 
     if ((fin = fopen(name, "r")) == NULL)
     {
-        Log(LOG_LEVEL_INFO, "Cannot open the source log '%s' - you need to run a package discovery promise to create it in cf-agent. (fopen: %s)",
+        Log(LOG_LEVEL_ERR, "Cannot open the source log '%s' - you need to run a package discovery promise to create it in cf-agent. (fopen: %s)",
               name, GetErrorStr());
         return NULL;
     }
@@ -922,16 +1038,7 @@ static int VerifyInstalledPackages(EvalContext *ctx, PackageManager **all_mgrs, 
 
     if (a.packages.package_patch_list_command != NULL)
     {
-        if (LEGACY_OUTPUT)
-        {
-            Log(LOG_LEVEL_VERBOSE, " ???????????????????????????????????????????????????????????????");
-            Log(LOG_LEVEL_VERBOSE, "   Reading patches from %s", CommandArg0(a.packages.package_patch_list_command));
-            Log(LOG_LEVEL_VERBOSE, " ???????????????????????????????????????????????????????????????");
-        }
-        else
-        {
             Log(LOG_LEVEL_VERBOSE, "Reading patches from '%s'", CommandArg0(a.packages.package_patch_list_command));
-        }
 
         if ((!a.packages.package_commands_useshell) && (!IsExecutable(CommandArg0(a.packages.package_patch_list_command))))
         {
@@ -1003,16 +1110,7 @@ static int VerifyInstalledPackages(EvalContext *ctx, PackageManager **all_mgrs, 
         ReportPatches(INSTALLED_PACKAGE_LISTS); // Enterprise only
     }
 
-    if (LEGACY_OUTPUT)
-    {
-        Log(LOG_LEVEL_VERBOSE, " ???????????????????????????????????????????????????????????????");
-        Log(LOG_LEVEL_VERBOSE, "  Done checking packages and patches ");
-        Log(LOG_LEVEL_VERBOSE, " ???????????????????????????????????????????????????????????????");
-    }
-    else
-    {
         Log(LOG_LEVEL_VERBOSE, "Done checking packages and patches");
-    }
 
     return true;
 }
@@ -1221,7 +1319,7 @@ static PromiseResult AddPackageToSchedule(EvalContext *ctx, const Attributes *a,
     {
     case cfa_warn:
 
-        cfPS_HELPER_3ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, *a, "Need to repair promise '%s' by '%s' package '%s'",
+        cfPS_HELPER_3ARG(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, *a, "Need to repair promise '%s' by '%s' package '%s'",
              pp->promiser, PackageAction2String(pa), name);
         return PROMISE_RESULT_WARN;
 
@@ -1269,7 +1367,7 @@ static PromiseResult AddPatchToSchedule(EvalContext *ctx, const Attributes *a, c
     {
     case cfa_warn:
 
-        cfPS_HELPER_3ARG(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, *a, "Need to repair promise '%s' by '%s' package '%s'",
+        cfPS_HELPER_3ARG(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, *a, "Need to repair promise '%s' by '%s' package '%s'",
              pp->promiser, PackageAction2String(pa), name);
         return PROMISE_RESULT_WARN;
 
@@ -1685,7 +1783,8 @@ static PromiseResult SchedulePackageOp(EvalContext *ctx, const char *name, const
             }
             else
             {
-                Log(LOG_LEVEL_VERBOSE, "Installed package is up to date, not updating");
+                cfPS_HELPER_1ARG(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_NOOP, pp, a,
+                    "Installed packaged '%s' is up to date, not updating", pp->promiser);
                 break;
             }
         }
@@ -2589,7 +2688,7 @@ static bool ExecuteSchedule(EvalContext *ctx, const PackageManager *schedule, Pa
                     }
 
                     PromiseResult result = PROMISE_RESULT_NOOP;
-                    EvalContextStackPushPromiseFrame(ctx, pp, false);
+                    EvalContextStackPushPromiseFrame(ctx, ppi, false);
                     if (EvalContextStackPushPromiseIterationFrame(ctx, 0, NULL))
                     {
                         if (ExecPackageCommand(ctx, command_string, verify, true, a, ppi, &result))
@@ -2943,17 +3042,7 @@ static bool ExecutePatch(EvalContext *ctx, const PackageManager *schedule, Packa
 */
 static void ExecutePackageSchedule(EvalContext *ctx, PackageManager *schedule)
 {
-    if (LEGACY_OUTPUT)
-    {
-        Log(LOG_LEVEL_VERBOSE, " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-        Log(LOG_LEVEL_VERBOSE, "   Offering these package-promise suggestions to the managers");
-        Log(LOG_LEVEL_VERBOSE, " >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>");
-    }
-    else
-    {
         Log(LOG_LEVEL_VERBOSE, "Offering the following package-promise suggestions to the managers");
-    }
-
 
     /* Normal ordering */
 
@@ -3156,7 +3245,7 @@ bool ExecPackageCommand(EvalContext *ctx, char *command, int verify, int setCmdC
     {
     }
 
-    while ((*(cmd - 1) != FILE_SEPARATOR) && (cmd >= command))
+    while (cmd > command && cmd[-1] != FILE_SEPARATOR)
     {
         cmd--;
     }

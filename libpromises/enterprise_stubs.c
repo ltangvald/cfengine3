@@ -85,11 +85,6 @@ ENTERPRISE_FUNC_1ARG_DEFINE_STUB(const char *, PromiseID, ARG_UNUSED const Promi
 /* all agents: logging.c */
 
 
-ENTERPRISE_VOID_FUNC_3ARG_DEFINE_STUB(void, NotePromiseCompliance, ARG_UNUSED const Promise *, pp,
-                                      ARG_UNUSED PromiseState, state, ARG_UNUSED const char *, reason)
-{
-}
-
 ENTERPRISE_VOID_FUNC_4ARG_DEFINE_STUB(void, TrackValue, char *, date, double, kept, double, repaired, double, notkept)
 {
 }
@@ -240,4 +235,9 @@ ENTERPRISE_VOID_FUNC_2ARG_DEFINE_STUB(void, CheckAndSetHAState, ARG_UNUSED const
 
 ENTERPRISE_VOID_FUNC_0ARG_DEFINE_STUB(void, ReloadHAConfig)
 {
+}
+
+ENTERPRISE_FUNC_0ARG_DEFINE_STUB(size_t, EnterpriseGetMaxCfHubProcesses)
+{
+    return 0;
 }

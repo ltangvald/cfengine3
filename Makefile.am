@@ -1,27 +1,55 @@
+#
+#  Copyright (C) CFEngine AS
+#
+#  This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+#
+#  This program is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU General Public License as published by the
+#  Free Software Foundation; version 3.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+#
+# To the extent this program is licensed as part of the Enterprise
+# versions of CFEngine, the applicable Commercial Open Source License
+# (COSL) may apply to this file if you as a licensee so wish it. See
+# included file COSL.txt.
+#
 AUTOMAKE_OPTIONS = foreign
 
 MAKEFLAGS = $(if $(filter-out 0,$(V)),,--no-print-directory --quiet)
 
 LCOV_FLAGS = $(if $(filter-out 0,$(V)),,-q)
 
-SUBDIRS = libcompat libutils libcfnet libenv libpromises \
-	cf-agent cf-execd cf-key cf-monitord \
-	cf-promises cf-runagent cf-serverd cf-upgrade ext examples \
+SUBDIRS = libcompat \
+	libutils \
+	libcfnet \
+	libenv \
+	libpromises \
+	cf-agent \
+	cf-execd \
+	cf-key \
+	cf-monitord \
+	cf-promises \
+	cf-runagent \
+	cf-serverd \
+	cf-upgrade \
+	misc \
+	ext \
+	examples \
 	tests
 
-DIST_SUBDIRS = libcompat libutils libcfnet libenv libpromises cf-agent cf-execd	\
-	cf-key cf-monitord cf-promises cf-runagent cf-serverd cf-upgrade ext	        \
-	examples tests
 
-# Set explicitly to avoid picking up {nova}/*.m4
+# Hide the buildsystem's username, at least with GNU tar.
+TAR_OPTIONS = --owner=0 --group=0
+export TAR_OPTIONS
 
-DIST_COMMON = README.md Makefile.am Makefile.in configure AUTHORS aclocal.m4 \
-	ChangeLog INSTALL config.guess config.sub depcomp install-sh \
-	ltmain.sh missing ylwrap m4/acinclude.m4 m4/libtool.m4 m4/ltoptions.m4 \
-	m4/ltsugar.m4 m4/ltversion.m4 m4/lt~obsolete.m4 m4/cf3_with_library.m4 \
-	m4/snprintf.m4 m4/old-autoconf.m4 m4/adl_recursive_eval.m4 m4/strndup.m4 \
-	m4/cf3_check_proper_func.m4 m4/cf3_platforms.m4 m4/cf3_gcc_flags.m4 \
-	m4/cf3_path_root_prog.m4 configure.ac autogen.sh configure_flags.env.in
 
 EXTRA_DIST = ChangeLog INSTALL README.md LICENSE
 
@@ -89,15 +117,20 @@ coverage: clean-coverage run-coverage collect-coverage
 # so we need to generate it before everything else.
 ################################################################################
 BUILT_SOURCES = \
-	$(srcdir)/libpromises/enterprise_extension.c \
-	$(srcdir)/libpromises/enterprise_extension.h
-
-ENTERPRISE_EXTENSION_GENERATE = $(SED) -f $(srcdir)/libpromises/enterprise_extension.sed $< > $@
-ENTERPRISE_EXTENSION_MAKE = @if test -z "$(V)"; then echo "  SED   " $@; else echo "$(ENTERPRISE_EXTENSION_GENERATE)"; fi; $(ENTERPRISE_EXTENSION_GENERATE)
-$(srcdir)/libpromises/enterprise_extension.c: libpromises/extensions_template.c libpromises/enterprise_extension.sed
-	$(ENTERPRISE_EXTENSION_MAKE)
-$(srcdir)/libpromises/enterprise_extension.h: libpromises/extensions_template.h libpromises/enterprise_extension.sed
-	$(ENTERPRISE_EXTENSION_MAKE)
+       $(srcdir)/libpromises/enterprise_extension.c \
+       $(srcdir)/libpromises/enterprise_extension.h
+libpromises/enterprise_extension.c: libpromises/extensions_template.c.pre libpromises/enterprise_extension.sed
+	$(V_SED) $(SED) -f $(srcdir)/libpromises/enterprise_extension.sed $< > $@
+libpromises/enterprise_extension.h: libpromises/extensions_template.h.pre libpromises/enterprise_extension.sed
+	$(V_SED) $(SED) -f $(srcdir)/libpromises/enterprise_extension.sed $< > $@
+V_PERL = $(cf__v_PERL_$(V))
+cf__v_PERL_ = $(cf__v_PERL_$(AM_DEFAULT_VERBOSITY))
+cf__v_PERL_0 = @echo "  PERL    " "$@";
+cf__v_PERL_1 =
+V_SED = $(cf__v_SED_$(V))
+cf__v_SED_ = $(cf__v_SED_$(AM_DEFAULT_VERBOSITY))
+cf__v_SED_0 = @echo "  SED     " "$@";
+cf__v_SED_1 =
 
 
 #

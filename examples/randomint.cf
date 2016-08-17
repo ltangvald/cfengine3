@@ -21,12 +21,7 @@
 # included file COSL.txt.
 
 #+begin_src cfengine3
-body common control
-{
-      bundlesequence => { "randomint_example" };
-}
-
-bundle agent randomint_example
+bundle agent main
 {
   vars:
       "low"    string => "4";
@@ -39,9 +34,20 @@ bundle agent randomint_example
   reports:
     isabove::
       "The generated random number was above 3";
+
+    show_random::
+      "Randomly generated '$(random)'";
 }
 #+end_src
 ###############################################################################
+#+begin_src show_random_example_output
+#@ ```
+#@ R: The generated random number was above 3
+#@ R: Randomly generated '9'
+#@ R: Randomly generated '52'
+#@ R: Randomly generated '26'
+#@ ```
+#+end_src
 #+begin_src example_output
 #@ ```
 #@ R: The generated random number was above 3

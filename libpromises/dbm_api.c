@@ -31,6 +31,8 @@
 #include <atexit.h>
 #include <logging.h>
 #include <misc_lib.h>
+#include <known_dirs.h>
+#include <string_lib.h>
 
 
 static int DBPathLock(const char *filename);
@@ -41,6 +43,9 @@ struct DBHandle_
 {
     /* Filename of database file */
     char *filename;
+    
+    /* Name of specific sub-db */
+    char *subname;
 
     /* Actual database-specific data */
     DBPriv *priv;
@@ -56,6 +61,12 @@ struct DBCursor_
     DBCursorPriv *cursor;
 };
 
+typedef struct dynamic_db_handles_
+{
+    DBHandle *handle;
+    struct dynamic_db_handles_ *next;
+} DynamicDBHandles;
+
 /******************************************************************************/
 
 /*
@@ -65,27 +76,59 @@ struct DBCursor_
 static pthread_mutex_t db_handles_lock = PTHREAD_ERRORCHECK_MUTEX_INITIALIZER_NP; /* GLOBAL_T */
 
 static DBHandle db_handles[dbid_max] = { { 0 } }; /* GLOBAL_X */
+static DynamicDBHandles *db_dynamic_handles;
 
 static pthread_once_t db_shutdown_once = PTHREAD_ONCE_INIT; /* GLOBAL_T */
 
 /******************************************************************************/
 
-static const char *const DB_PATHS[] = {
+static const char *const DB_PATHS_STATEDIR[] = {
     [dbid_classes] = "cf_classes",
-    [dbid_variables] = "state/cf_variables",
+    [dbid_variables] = "cf_variables",
     [dbid_performance] = "performance",
     [dbid_checksums] = "checksum_digests",
     [dbid_filestats] = "stats",
-    [dbid_changes] = "state/cf_changes",
-    [dbid_observations] = "state/cf_observations",
-    [dbid_state] = "state/cf_state",
+    [dbid_changes] = "cf_changes",
+    [dbid_observations] = "cf_observations",
+    [dbid_state] = "cf_state",
     [dbid_lastseen] = "cf_lastseen",
     [dbid_audit] = "cf_audit",
-    [dbid_locks] = "state/cf_lock",
-    [dbid_history] = "state/history",
-    [dbid_measure] = "state/nova_measures",
-    [dbid_static] = "state/nova_static",
-    [dbid_scalars] = "state/nova_pscalar",
+    [dbid_locks] = "cf_lock",
+    [dbid_history] = "history",
+    [dbid_measure] = "nova_measures",
+    [dbid_static] = "nova_static",
+    [dbid_scalars] = "nova_pscalar",
+    [dbid_windows_registry] = "mswin",
+    [dbid_cache] = "nova_cache",
+    [dbid_license] = "nova_track",
+    [dbid_value] = "nova_value",
+    [dbid_agent_execution] = "nova_agent_execution",
+    [dbid_bundles] = "bundles",
+    [dbid_packages_installed] = "packages_installed",
+    [dbid_packages_updates] = "packages_updates"
+};
+
+/*
+  These are the old (pre 3.7) paths in workdir, supported for installations that
+  still have them. We will never create a database here. NULL means that the
+  database was always in the state directory.
+*/
+static const char *const DB_PATHS_WORKDIR[sizeof(DB_PATHS_STATEDIR) / sizeof(const char * const)] = {
+    [dbid_classes] = "cf_classes",
+    [dbid_variables] = NULL,
+    [dbid_performance] = "performance",
+    [dbid_checksums] = "checksum_digests",
+    [dbid_filestats] = "stats",
+    [dbid_changes] = NULL,
+    [dbid_observations] = NULL,
+    [dbid_state] = NULL,
+    [dbid_lastseen] = "cf_lastseen",
+    [dbid_audit] = "cf_audit",
+    [dbid_locks] = NULL,
+    [dbid_history] = NULL,
+    [dbid_measure] = NULL,
+    [dbid_static] = NULL,
+    [dbid_scalars] = NULL,
     [dbid_windows_registry] = "mswin",
     [dbid_cache] = "nova_cache",
     [dbid_license] = "nova_track",
@@ -96,21 +139,95 @@ static const char *const DB_PATHS[] = {
 
 /******************************************************************************/
 
-char *DBIdToPath(const char *workdir, dbid id)
+char *DBIdToSubPath(dbid id, const char *subdb_name)
 {
-    assert(DB_PATHS[id] != NULL);
-
     char *filename;
-    if (xasprintf(&filename, "%s/%s.%s",
-                  workdir, DB_PATHS[id], DBPrivGetFileExtension()) == -1)
+    if (xasprintf(&filename, "%s/%s_%s.%s", GetStateDir(), DB_PATHS_STATEDIR[id],
+            subdb_name, DBPrivGetFileExtension()) == -1)
     {
-        ProgrammingError("Unable to construct database filename for file %s", DB_PATHS[id]);
+        ProgrammingError("Unable to construct sub database filename for file"
+                "%s_%s", DB_PATHS_STATEDIR[id], subdb_name);
+    }
+    
+    char *native_filename = MapNameCopy(filename);
+    free(filename);
+
+    return native_filename;
+}
+
+char *DBIdToPath(dbid id)
+{
+    assert(DB_PATHS_STATEDIR[id] != NULL);
+
+    char *filename = NULL;
+
+    if (DB_PATHS_WORKDIR[id])
+    {
+        xasprintf(&filename, "%s/%s.%s", GetWorkDir(), DB_PATHS_WORKDIR[id],
+                  DBPrivGetFileExtension());
+        struct stat statbuf;
+        if (stat(filename, &statbuf) == -1)
+        {
+            // Old database in workdir is not there. Use new database in statedir.
+            free(filename);
+            filename = NULL;
+        }
+    }
+
+    if (!filename)
+    {
+        xasprintf(&filename, "%s/%s.%s", GetStateDir(), DB_PATHS_STATEDIR[id],
+                  DBPrivGetFileExtension());
     }
 
     char *native_filename = MapNameCopy(filename);
     free(filename);
 
     return native_filename;
+}
+
+static
+bool IsSubHandle(DBHandle *handle, dbid id, const char *name)
+{
+    return StringSafeEqual(handle->filename, DBIdToSubPath(id, name));
+}
+
+static DBHandle *DBHandleGetSubDB(dbid id, const char *name)
+{
+    ThreadLock(&db_handles_lock);
+    
+    DynamicDBHandles *handles_list = db_dynamic_handles;
+    
+    while (handles_list)
+    {
+        if (IsSubHandle(handles_list->handle, id, name))
+        {
+            ThreadUnlock(&db_handles_lock);
+            return handles_list->handle;
+        }
+        handles_list = handles_list->next;
+    }
+    
+    DBHandle *handle = xcalloc(1, sizeof(DBHandle));
+    handle->filename = DBIdToSubPath(id, name);
+    handle->subname = SafeStringDuplicate(name);
+    
+    /* Initialize mutexes as error-checking ones. */
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);
+    pthread_mutex_init(&handle->lock, &attr);
+    pthread_mutexattr_destroy(&attr);
+    
+    /* Prepend handle to global list. */
+    handles_list = xcalloc(1, sizeof(DynamicDBHandles));
+    handles_list->handle = handle;
+    handles_list->next = db_dynamic_handles;
+    db_dynamic_handles = handles_list;
+    
+    ThreadUnlock(&db_handles_lock);
+    
+    return handle;
 }
 
 static DBHandle *DBHandleGet(int id)
@@ -121,7 +238,7 @@ static DBHandle *DBHandleGet(int id)
 
     if (db_handles[id].filename == NULL)
     {
-        db_handles[id].filename = DBIdToPath(CFWORKDIR, id);
+        db_handles[id].filename = DBIdToPath(id);
 
         /* Initialize mutexes as error-checking ones. */
         pthread_mutexattr_t attr;
@@ -135,6 +252,44 @@ static DBHandle *DBHandleGet(int id)
 
     return &db_handles[id];
 }
+
+static inline
+void CloseDBInstance(DBHandle *handle)
+{
+    /* Wait until all DB users are served, or a threshold is reached */
+    int count = 0;
+    ThreadLock(&handle->lock);
+    while (handle->refcount > 0 && count < 1000)
+    {
+        ThreadUnlock(&handle->lock);
+
+        struct timespec sleeptime = {
+            .tv_sec = 0,
+            .tv_nsec = 10000000 /* 10 ms */
+        };
+        nanosleep(&sleeptime, NULL);
+        count++;
+
+        ThreadLock(&handle->lock);
+    }
+    /* Keep mutex locked. */
+
+    /* If we exited because of timeout make sure we Log() it. */
+    if (handle->refcount != 0)
+    {
+        Log(LOG_LEVEL_ERR,
+                "Database %s refcount is still not zero (%d), forcing CloseDB()!",
+                handle->filename, handle->refcount);
+        DBPrivCloseDB(handle->priv);
+    }
+    else /* TODO: can we clean this up unconditionally ? */
+    {
+        free(handle->filename);
+        free(handle->subname);
+        handle->filename = NULL;
+    }
+}
+
 
 /**
  * @brief Wait for all users of all databases to close the DBs. Then acquire
@@ -153,39 +308,19 @@ void CloseAllDBExit()
     {
         if (db_handles[i].filename)
         {
-            /* Wait until all DB users are served, or a threshold is reached */
-            int count = 0;
-            ThreadLock(&db_handles[i].lock);
-            while (db_handles[i].refcount > 0 && count < 1000)
-            {
-                ThreadUnlock(&db_handles[i].lock);
-
-                struct timespec sleeptime = {
-                    .tv_sec = 0,
-                    .tv_nsec = 10000000                         /* 10 ms */
-                };
-                nanosleep(&sleeptime, NULL);
-                count++;
-
-                ThreadLock(&db_handles[i].lock);
-            }
-            /* Keep mutex locked. */
-
-            /* If we exited because of timeout make sure we Log() it. */
-            if (db_handles[i].refcount != 0)
-            {
-                Log(LOG_LEVEL_ERR,
-                    "Database %s refcount is still not zero (%d), forcing CloseDB()!",
-                    db_handles[i].filename, db_handles[i].refcount);
-                DBPrivCloseDB(db_handles[i].priv);
-            }
-            else /* TODO: can we clean this up unconditionally ? */
-            {
-                free(db_handles[i].filename);
-                db_handles[i].filename = NULL;
-            }
+            CloseDBInstance(&db_handles[i]);
         }
     }
+    
+    DynamicDBHandles *db_dynamic_handles_list = db_dynamic_handles;
+    while (db_dynamic_handles_list)
+    {
+        DBHandle *handle = db_dynamic_handles_list->handle;
+        CloseDBInstance(handle);
+        db_dynamic_handles_list = db_dynamic_handles_list->next;
+        free(handle);
+    }
+    db_dynamic_handles = NULL;
 }
 
 static void RegisterShutdownHandler(void)
@@ -193,10 +328,22 @@ static void RegisterShutdownHandler(void)
     RegisterAtExitFunction(&CloseAllDBExit);
 }
 
-bool OpenDB(DBHandle **dbp, dbid id)
+/**
+ * Keeps track of the maximum number of concurrent transactions, which is
+ * expected to be set by agents as they start up. If it is not set it will use
+ * the existing value. If it is set, but the database cannot honor it, CFEngine
+ * will warn.
+ * @param max_txn Maximum number of concurrent transactions for a single
+ *                database.
+ */
+void DBSetMaximumConcurrentTransactions(int max_txn)
 {
-    DBHandle *handle = DBHandleGet(id);
+    DBPrivSetMaximumConcurrentTransactions(max_txn);
+}
 
+static inline
+bool OpenDBInstance(DBHandle **dbp, dbid id, DBHandle *handle)
+{
     ThreadLock(&handle->lock);
 
     if (handle->refcount == 0)
@@ -252,6 +399,18 @@ bool OpenDB(DBHandle **dbp, dbid id)
     return *dbp != NULL;
 }
 
+bool OpenSubDB(DBHandle **dbp, dbid id, const char *sub_name)
+{
+    DBHandle *handle = DBHandleGetSubDB(id, sub_name);
+    return OpenDBInstance(dbp, id, handle);
+}
+
+bool OpenDB(DBHandle **dbp, dbid id)
+{
+    DBHandle *handle = DBHandleGet(id);
+    return OpenDBInstance(dbp, id, handle);
+}
+
 void CloseDB(DBHandle *handle)
 {
     ThreadLock(&handle->lock);
@@ -268,6 +427,17 @@ void CloseDB(DBHandle *handle)
     }
 
     ThreadUnlock(&handle->lock);
+}
+
+bool CleanDB(DBHandle *handle)
+{
+    ThreadLock(&handle->lock);
+    
+    bool ret = DBPrivClean(handle->priv);
+    
+    ThreadUnlock(&handle->lock);
+    
+    return ret;
 }
 
 /*****************************************************************************/
@@ -398,7 +568,7 @@ static void DBPathMoveBroken(const char *filename)
 
     if(rename(filename, filename_broken) != 0)
     {
-        Log(LOG_LEVEL_ERR, "Failed moving broken db out of the way");
+        Log(LOG_LEVEL_ERR, "Failed moving broken db out of the way '%s'", filename);
     }
 
     free(filename_broken);

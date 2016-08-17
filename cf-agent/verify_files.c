@@ -57,8 +57,6 @@
 #include <known_dirs.h>
 #include <evalfunction.h>
 
-static void LoadSetuid(void);
-static void SaveSetuid(void);
 static PromiseResult FindFilePromiserObjects(EvalContext *ctx, const Promise *pp);
 static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promise *pp);
 
@@ -266,6 +264,7 @@ static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promi
     struct stat osb, oslb, dsb;
     CfLock thislock;
     int exists;
+    bool link = false;
 
     Attributes attr = GetFilesAttributes(ctx, pp);
 
@@ -285,7 +284,6 @@ static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promi
     EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_THIS, "promiser", path, CF_DATA_TYPE_STRING, "source=promise");
     Attributes a = GetExpandedAttributes(ctx, pp, &attr);
 
-    LoadSetuid();
     PromiseResult result = PROMISE_RESULT_NOOP;
     if (lstat(path, &oslb) == -1)       /* Careful if the object is a link */
     {
@@ -310,6 +308,7 @@ static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promi
             cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_NOOP, pp, a, "File '%s' exists as promised", path);
         }
         exists = true;
+        link = true;
     }
 
     if ((a.havedelete) && (!exists))
@@ -335,7 +334,18 @@ static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promi
         ChopLastNode(basedir);
         if (safe_chdir(basedir))
         {
-            Log(LOG_LEVEL_ERR, "Failed to chdir into '%s'. (chdir: '%s')", basedir, GetErrorStr());
+            char msg[CF_BUFSIZE];
+            snprintf(msg, sizeof(msg), "Failed to chdir into '%s'. (chdir: '%s')",
+                     basedir, GetErrorStr());
+            if (errno == ENOLINK)
+            {
+                Log(LOG_LEVEL_ERR, "%s. There may be a symlink in the path that has a different "
+                    "owner from the owner of its target (security risk).", msg);
+            }
+            else
+            {
+                Log(LOG_LEVEL_ERR, "%s", msg);
+            }
         }
     }
 
@@ -398,7 +408,8 @@ static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promi
 
 /* Phase 1 - */
 
-    if (exists && ((a.havedelete) || (a.haverename) || (a.haveperms) || (a.havechange) || (a.transformer)))
+    if ((exists && ((a.haverename) || (a.haveperms) || (a.havechange) || (a.transformer))) ||
+        ((exists || link) && a.havedelete))
     {
         lstat(path, &oslb);     /* if doesn't exist have to stat again anyway */
 
@@ -419,7 +430,7 @@ static PromiseResult VerifyFilePromise(EvalContext *ctx, char *path, const Promi
         else
         {
             /* unless child nodes were repaired, set a promise kept class */
-            if (!IsDefinedClass(ctx, "repaired"))
+            if (result == PROMISE_RESULT_NOOP)
             {
                 cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_NOOP, pp, a, "Basedir '%s' not promising anything", path);
             }
@@ -483,7 +494,6 @@ exit:
             "No action was requested for file '%s'. Maybe a typo in the policy?", path);
     }
 
-    SaveSetuid();
     YieldCurrentLock(thislock);
 
     ClearExpandedAttributes(&a);
@@ -504,7 +514,6 @@ static PromiseResult RenderTemplateCFEngine(EvalContext *ctx, const Promise *pp,
     Bundle *bp = NULL;
     if ((bp = MakeTemporaryBundleFromTemplate(ctx, tmp_policy, a, pp, &result)))
     {
-        BannerSubBundle(bp, bundle_args);
         a.haveeditline = true;
 
         EvalContextStackPushBundleFrame(ctx, bp, bundle_args, a.edits.inherit);
@@ -589,7 +598,7 @@ static PromiseResult RenderTemplateMustache(EvalContext *ctx, const Promise *pp,
     JsonElement *default_template_data = NULL;
     if (!a.template_data)
     {
-        a.template_data = default_template_data = DefaultTemplateData(ctx);
+        a.template_data = default_template_data = DefaultTemplateData(ctx, NULL);
     }
 
     Buffer *output_buffer = BufferNew();
@@ -599,17 +608,25 @@ static PromiseResult RenderTemplateMustache(EvalContext *ctx, const Promise *pp,
         HashString(BufferData(output_buffer), BufferSize(output_buffer), rendered_output_digest, CF_DEFAULT_DIGEST);
         if (!HashesMatch(existing_output_digest, rendered_output_digest, CF_DEFAULT_DIGEST))
         {
-            if (SaveAsFile(SaveBufferCallback, output_buffer, edcontext->filename, a, edcontext->new_line_mode))
+            if (a.transaction.action == cfa_warn || DONTDO)
             {
-                cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Updated rendering of '%s' from template mustache template '%s'",
-                     pp->promiser, a.edit_template);
-                result = PromiseResultUpdate(result, PROMISE_RESULT_CHANGE);
+                Log(LOG_LEVEL_WARNING, "Need to render '%s' from mustache template '%s' but policy is dry-run", pp->promiser, a.edit_template);
+                result = PromiseResultUpdate(result, PROMISE_RESULT_WARN);
             }
             else
             {
-                cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_FAIL, pp, a, "Updated rendering of '%s' from template mustache template '%s'",
-                     pp->promiser, a.edit_template);
-                result = PromiseResultUpdate(result, PROMISE_RESULT_FAIL);
+                if (SaveAsFile(SaveBufferCallback, output_buffer, edcontext->filename, a, edcontext->new_line_mode))
+                {
+                    cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Updated rendering of '%s' from mustache template '%s'",
+                         pp->promiser, a.edit_template);
+                    result = PromiseResultUpdate(result, PROMISE_RESULT_CHANGE);
+                }
+                else
+                {
+                    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a, "Failed to update rendering of '%s' from mustache template '%s'",
+                         pp->promiser, a.edit_template);
+                    result = PromiseResultUpdate(result, PROMISE_RESULT_FAIL);
+                }
             }
         }
 
@@ -681,8 +698,6 @@ PromiseResult ScheduleEditOperation(EvalContext *ctx, char *filename, Attributes
         const Bundle *bp = EvalContextResolveBundleExpression(ctx, policy, edit_bundle_name, "edit_line");
         if (bp)
         {
-            BannerSubBundle(bp, args);
-
             EvalContextStackPushBundleFrame(ctx, bp, args, a.edits.inherit);
 
             BundleResolve(ctx, bp);
@@ -721,8 +736,6 @@ PromiseResult ScheduleEditOperation(EvalContext *ctx, char *filename, Attributes
         const Bundle *bp = EvalContextResolveBundleExpression(ctx, policy, edit_bundle_name, "edit_xml");
         if (bp)
         {
-            BannerSubBundle(bp, args);
-
             EvalContextStackPushBundleFrame(ctx, bp, args, a.edits.inherit);
             BundleResolve(ctx, bp);
 
@@ -759,7 +772,7 @@ exit:
 
 PromiseResult FindAndVerifyFilesPromises(EvalContext *ctx, const Promise *pp)
 {
-    PromiseBanner(pp);
+    PromiseBanner(ctx, pp);
     return FindFilePromiserObjects(ctx, pp);
 }
 
@@ -784,33 +797,4 @@ static PromiseResult FindFilePromiserObjects(EvalContext *ctx, const Promise *pp
     }
 
     return result;
-}
-
-static void LoadSetuid(void)
-{
-    char filename[CF_BUFSIZE];
-    snprintf(filename, CF_BUFSIZE, "%s/cfagent.%s.log", GetLogDir(), VSYSNAME.nodename);
-    MapName(filename);
-
-    VSETUIDLIST = RawLoadItemList(filename);
-}
-
-/*********************************************************************/
-
-static void SaveSetuid(void)
-{
-    char filename[CF_BUFSIZE];
-    snprintf(filename, CF_BUFSIZE, "%s/cfagent.%s.log", GetLogDir(), VSYSNAME.nodename);
-    MapName(filename);
-
-    PurgeItemList(&VSETUIDLIST, "SETUID/SETGID");
-
-    Item *current = RawLoadItemList(filename);
-    if (!ListsCompare(VSETUIDLIST, current))
-    {
-        RawSaveItemList(VSETUIDLIST, filename, NewLineMode_Unix);
-    }
-
-    DeleteItemList(VSETUIDLIST);
-    VSETUIDLIST = NULL;
 }

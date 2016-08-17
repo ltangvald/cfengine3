@@ -23,23 +23,14 @@
 */
 
 #include <logging.h>
-#include <logging_priv.h>
-
 #include <alloc.h>
 #include <string_lib.h>
 #include <misc_lib.h>
 
 char VPREFIX[1024] = ""; /* GLOBAL_C */
-bool LEGACY_OUTPUT = false; /* GLOBAL_A */
 
-typedef struct
-{
-    LogLevel log_level;
-    LogLevel report_level;
-    bool color;
-
-    LoggingPrivContext *pctx;
-} LoggingContext;
+static char AgentType[80] = "generic";
+static bool TIMESTAMPS = false;
 
 static LogLevel global_level = LOG_LEVEL_NOTICE; /* GLOBAL_X */
 
@@ -59,7 +50,7 @@ static void LoggingInitializeOnce(void)
     }
 }
 
-static LoggingContext *GetCurrentThreadContext(void)
+LoggingContext *GetCurrentThreadContext(void)
 {
     pthread_once(&log_context_init_once, &LoggingInitializeOnce);
     LoggingContext *lctx = pthread_getspecific(log_context_key);
@@ -71,6 +62,16 @@ static LoggingContext *GetCurrentThreadContext(void)
         pthread_setspecific(log_context_key, lctx);
     }
     return lctx;
+}
+
+void LoggingSetAgentType(const char *type)
+{
+    strlcpy(AgentType, type, sizeof(AgentType));
+}
+
+void LoggingEnableTimestamps(bool enable)
+{
+    TIMESTAMPS = enable;
 }
 
 void LoggingPrivSetContext(LoggingPrivContext *pctx)
@@ -97,7 +98,7 @@ const char *LogLevelToString(LogLevel level)
     switch (level)
     {
     case LOG_LEVEL_CRIT:
-        return "critical";
+        return "CRITICAL";
     case LOG_LEVEL_ERR:
         return "error";
     case LOG_LEVEL_WARNING:
@@ -152,39 +153,32 @@ bool LoggingFormatTimestamp(char dest[64], size_t n, struct tm *timestamp)
 
 static void LogToConsole(const char *msg, LogLevel level, bool color)
 {
-    FILE *output_file = (level <= LOG_LEVEL_WARNING) ? stderr : stdout;
+    FILE *output_file = stdout; // Messages should ALL go to stdout else they are disordered
+    struct tm now;
+    time_t now_seconds = time(NULL);
+    localtime_r(&now_seconds, &now);
 
-    if (LEGACY_OUTPUT)
+    if (color)
     {
-        if (level >= LOG_LEVEL_VERBOSE)
-        {
-            fprintf(stdout, "%s> %s\n", VPREFIX, msg);
-        }
-        else
-        {
-            fprintf(stdout, "%s\n", msg);
-        }
+        fprintf(output_file, "%s", LogLevelToColor(level));
     }
-    else
+    if (level >= LOG_LEVEL_INFO && VPREFIX[0])
     {
-        struct tm now;
-        time_t now_seconds = time(NULL);
-        localtime_r(&now_seconds, &now);
-
+        fprintf(stdout, "%s ", VPREFIX);
+    }
+    if (TIMESTAMPS)
+    {
         char formatted_timestamp[64];
         LoggingFormatTimestamp(formatted_timestamp, 64, &now);
+        fprintf(stdout, "%s ", formatted_timestamp);
+    }
 
-        const char *string_level = LogLevelToString(level);
+    fprintf(stdout, "%8s: %s\n", LogLevelToString(level), msg);
 
-        if (color)
-        {
-            fprintf(output_file, "%s%s %8s: %s\x1b[0m\n", LogLevelToColor(level),
-                    formatted_timestamp, string_level, msg);
-        }
-        else
-        {
-            fprintf(output_file, "%s %8s: %s\n", formatted_timestamp, string_level, msg);
-        }
+    if (color)
+    {
+        // Turn off the color again.
+        fprintf(output_file, "\x1b[0m");
     }
 }
 
@@ -209,7 +203,9 @@ static int LogLevelToSyslogPriority(LogLevel level)
 
 void LogToSystemLog(const char *msg, LogLevel level)
 {
-    syslog(LogLevelToSyslogPriority(level), "%s", msg);
+    char logmsg[4096];
+    snprintf(logmsg, sizeof(logmsg), "CFEngine(%s) %s %s\n", AgentType, VPREFIX, msg);
+    syslog(LogLevelToSyslogPriority(level), "%s", logmsg);
 }
 
 const char *GetErrorStrFromCode(int error_code)
@@ -227,8 +223,30 @@ void VLog(LogLevel level, const char *fmt, va_list ap)
 {
     LoggingContext *lctx = GetCurrentThreadContext();
 
+    bool log_to_console = ( level <= lctx->report_level );
+    bool log_to_syslog  = ( level <= lctx->log_level &&
+                            level < LOG_LEVEL_VERBOSE );
+    bool force_hook     = ( lctx->pctx &&
+                            lctx->pctx->log_hook &&
+                            lctx->pctx->force_hook_level >= level );
+
+    if (!log_to_console && !log_to_syslog && !force_hook)
+    {
+        return;                            /* early return - save resources */
+    }
+
     char *msg = StringVFormat(fmt, ap);
     char *hooked_msg = NULL;
+
+    /* Remove ending EOLN. */
+    for (char *sp = msg; *sp != '\0'; sp++)
+    {
+        if (*sp == '\n' && *(sp+1) == '\0')
+        {
+            *sp = '\0';
+            break;
+        }
+    }
 
     if (lctx->pctx && lctx->pctx->log_hook)
     {
@@ -236,41 +254,52 @@ void VLog(LogLevel level, const char *fmt, va_list ap)
     }
     else
     {
-        hooked_msg = xstrdup(msg);
+        hooked_msg = msg;
     }
 
-    if (level <= lctx->report_level)
+    if (log_to_console)
     {
         LogToConsole(hooked_msg, level, lctx->color);
     }
-
-    if (level <= lctx->log_level)
+    if (log_to_syslog)
     {
         LogToSystemLog(hooked_msg, level);
     }
+
+    if (hooked_msg != msg)
+    {
+        free(hooked_msg);
+    }
     free(msg);
-    free(hooked_msg);
 }
 
+/* TODO create libutils/defs.h. */
+#define CF_MAX_BUFSIZE 16384
+
 /**
- * @brief Logs binary data in #buf, with each byte translated to '.' if not
- *        printable. Message is prefixed with #prefix.
+ * @brief Logs binary data in #buf, with unprintable bytes translated to '.'.
+ *        Message is prefixed with #prefix.
+ * @param #buflen must be no more than CF_MAX_BUFSIZE
  */
 void LogRaw(LogLevel level, const char *prefix, const void *buf, size_t buflen)
 {
-    /* Translate non printable characters to printable ones. */
-    const unsigned char *src = (const unsigned char *) buf;
+    const unsigned char *src = buf;
     unsigned char dst[buflen+1];
-    size_t i;
+    assert(sizeof(dst) <= CF_MAX_BUFSIZE);
 
-    for (i = 0; i < buflen; i++)
+    LoggingContext *lctx = GetCurrentThreadContext();
+    if (level <= lctx->report_level || level <= lctx->log_level)
     {
-        dst[i] = isprint(src[i]) ? src[i] : '.';
-    }
-    dst[i] = '\0';
+        size_t i;
+        for (i = 0; i < buflen; i++)
+        {
+            dst[i] = isprint(src[i]) ? src[i] : '.';
+        }
+        dst[i] = '\0';
 
-    /* And Log the translated buffer, which is now a valid string. */
-    Log(level, "%s%s", prefix, dst);
+        /* And Log the translated buffer, which is now a valid string. */
+        Log(level, "%s%s", prefix, dst);
+    }
 }
 
 void Log(LogLevel level, const char *fmt, ...)

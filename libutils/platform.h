@@ -28,7 +28,7 @@
 /*
  * Platform-specific definitions and declarations.
  *
- * INCLUDE THIS HEADER ALWAYS FIRST in order to define apropriate macros for
+ * INCLUDE THIS HEADER ALWAYS FIRST in order to define appropriate macros for
  * including system headers (such as _FILE_OFFSET_BITS).
  */
 
@@ -63,6 +63,9 @@
 # include <iphlpapi.h>
 # include <ws2tcpip.h>
 # include <objbase.h>           // for disphelper
+# ifndef SHUT_RDWR              // for shutdown()
+#  define SHUT_RDWR SD_BOTH
+# endif
 #endif
 
 /* Standard C. */
@@ -341,6 +344,17 @@ void globfree(glob_t *pglob);
 # include <sys/sockio.h>
 #endif
 
+/*
+  Work around bug in HPUX system headers:
+  "/usr/include/machine/sys/getppdp.h:65: error: array type has incomplete element type"
+*/
+#ifdef __hpux
+union mpinfou
+{
+    int dummy;
+};
+#endif
+
 #ifndef __MINGW32__
 # include <sys/socket.h>
 # include <sys/ioctl.h>
@@ -359,13 +373,21 @@ void globfree(glob_t *pglob);
 #endif
 
 #ifdef __linux__
-# if defined(__GLIBC__) || defined(__BIONIC__)
+# ifdef HAVE_NET_ROUTE_H
 #  include <net/route.h>
-#  include <netinet/in.h>
-#  include <netinet/ip.h>
 # else
 #  include <linux/route.h>
+# endif
+
+# ifdef HAVE_NETINET_IN_H
+#  include <netinet/in.h>
+# else
 #  include <linux/in.h>
+# endif
+
+# ifdef HAVE_NETINET_IP_H
+#  include <netinet/ip.h>
+# else
 #  include <linux/ip.h>
 # endif
 #endif
@@ -418,6 +440,10 @@ static inline uint32_t ByteSwap32(uint32_t le32uint)
 #  define htole32(x) (x)
 # endif
 #endif // !HAVE_DECL_LE32TOH
+
+#if !HAVE_DECL_CLOSEFROM
+int closefrom(int fd);
+#endif
 
 #if !HAVE_DECL_PTHREAD_ATTR_SETSTACKSIZE
 int pthread_attr_setstacksize(pthread_attr_t *attr, size_t stacksize);
@@ -491,6 +517,9 @@ int lstat(const char *file_name, struct stat *buf);
 #endif
 #if !HAVE_DECL_SLEEP
 unsigned int sleep(unsigned int seconds);
+#endif
+#if !HAVE_DECL_ROUND
+double round(double x);
 #endif
 #if !HAVE_DECL_NANOSLEEP
 int nanosleep(const struct timespec *req, struct timespec *rem);
@@ -599,6 +628,9 @@ int rpl_asprintf(char **, const char *, ...);
 #if !HAVE_DECL_GETLINE
 ssize_t getline(char **lineptr, size_t *n, FILE *stream);
 #endif
+#if !HAVE_DECL_STRCHRNUL
+char *strchrnul(const char *s, int c);
+#endif
 #if !HAVE_DECL_GMTIME_R
 struct tm *gmtime_r(const time_t *timep, struct tm *result);
 #endif
@@ -672,14 +704,24 @@ char *rpl_ctime(const time_t *t);
 
 #if !HAVE_DECL_OPENAT
 int openat(int dirfd, const char *pathname, int flags, ...);
+#endif
+#if !HAVE_DECL_FSTATAT
 int fstatat(int dirfd, const char *pathname, struct stat *buf, int flags);
+#endif
+#if !HAVE_DECL_FCHOWNAT
 int fchownat(int dirfd, const char *pathname, uid_t owner, gid_t group, int flags);
+#endif
+#if !HAVE_DECL_FCHMODAT
+int fchmodat(int dirfd, const char *pathname, mode_t mode, int flags);
+#endif
+#if !HAVE_DECL_READLINKAT
+int readlinkat(int dirfd, const char *pathname, char *buf, size_t bufsiz);
+#endif
 #ifndef AT_SYMLINK_NOFOLLOW
 #define AT_SYMLINK_NOFOLLOW 0x1000
 #endif
 #ifndef AT_FDCWD
 #define AT_FDCWD (-2)
-#endif
 #endif
 
 #if !HAVE_DECL_LOG2
@@ -740,6 +782,12 @@ struct timespec
 
 #ifndef ENOTSUPP
 # define ENOTSUPP EINVAL
+#endif
+
+#ifndef ENOLINK
+// Should be well outside the range of any errno value.
+// Will never actually be returned by any function on a platform that doesn't support it.
+# define ENOLINK 123456
 #endif
 
 /*******************************************************************/
@@ -864,11 +912,6 @@ struct timespec
 # define S_IROTH 00004
 # define S_IWOTH 00002
 # define S_IXOTH 00001
-#endif
-
-/* Too bad we don't have FD_CLOEXEC -- but we can fake it */
-#ifndef FD_CLOEXEC
-# define FD_CLOEXEC 0
 #endif
 
 /* kill(2) on OS X returns ETIMEDOUT instead of ESRCH */

@@ -31,6 +31,9 @@
 #include <communication.h>
 #include <string_lib.h>
 #include <regex.h>                                       /* StringMatchFull */
+#include <files_interfaces.h>
+#include <files_names.h>
+#include <known_dirs.h>
 
 #ifdef HAVE_SYS_JAIL_H
 # include <sys/jail.h>
@@ -43,12 +46,16 @@
 # endif
 #endif
 
+#ifdef HAVE_NET_IF_ARP_H
+# include <net/if_arp.h>
+#endif
+
 #define CF_IFREQ 2048           /* Reportedly the largest size that does not segfault 32/64 bit */
 #define CF_IGNORE_INTERFACES "ignore_interfaces.rx"
 
 #ifndef __MINGW32__
 
-# ifdef HAVE_STRUCT_SOCKADDR_SA_LEN
+# if defined(HAVE_STRUCT_SOCKADDR_SA_LEN) && !defined(__NetBSD__)
 #  ifdef _SIZEOF_ADDR_IFREQ
 #   define SIZEOF_IFREQ(x) _SIZEOF_ADDR_IFREQ(x)
 #  else
@@ -65,10 +72,6 @@
 #include <sys/ndd_var.h>
 #include <sys/kinfo.h>
 static int aix_get_mac_addr(const char *device_name, uint8_t mac[6]);
-#endif
-
-#if defined (__sun) && !defined(HAVE_GETIFADDRS)
-#include <solaris_ifaddrs.h>
 #endif
 
 static void FindV6InterfacesInfo(EvalContext *ctx);
@@ -160,7 +163,7 @@ static void GetMacAddress(EvalContext *ctx, int fd, struct ifreq *ifr, struct if
     snprintf(name, sizeof(name), "mac_%s", CanonifyName(hw_mac));
     EvalContextClassPutHard(ctx, name, "inventory,attribute_name=none,source=agent");
 
-# elif defined(HAVE_GETIFADDRS)
+# elif defined(HAVE_GETIFADDRS) && !defined(__sun)
     char hw_mac[CF_MAXVARSIZE];
     char *m;
     struct ifaddrs *ifaddr, *ifa;
@@ -225,43 +228,54 @@ static void GetMacAddress(EvalContext *ctx, int fd, struct ifreq *ifr, struct if
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name, "mac_unknown", CF_DATA_TYPE_STRING, "source=agent");
         EvalContextClassPutHard(ctx, "mac_unknown", "source=agent");
     }
-# elif defined(__sun) && !defined(HAVE_GETIFADDRS)
 
-    char hw_mac[CF_MAXVARSIZE];
-    
-    struct ifaddrs *ifaddr, *ifa;
-    struct sockaddr_dl *sdl;
+# elif defined(SIOCGARP)
 
-    if (solaris_getifaddrs(&ifaddr) == -1)
+    struct arpreq arpreq;
+
+    ((struct sockaddr_in *) &arpreq.arp_pa)->sin_addr.s_addr =
+        ((struct sockaddr_in *) &ifp->ifr_addr)->sin_addr.s_addr;
+
+    if (ioctl(fd, SIOCGARP, &arpreq) == -1)
     {
-        Log(LOG_LEVEL_ERR, "!! Could not get interface %s addresses (getifaddrs)",
-          ifp->ifr_name);
-
-        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name, "mac_unknown", CF_DATA_TYPE_STRING, "source=agent");
+        // ENXIO happens if there is no MAC address assigned, which is not that
+        // uncommon.
+        LogLevel log_level =
+            (errno == ENXIO) ? LOG_LEVEL_VERBOSE : LOG_LEVEL_ERR;
+        Log(log_level,
+            "Could not get interface '%s' addresses (ioctl(SIOCGARP): %s)",
+            ifp->ifr_name, GetErrorStr());
+        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name,
+                                      "mac_unknown", CF_DATA_TYPE_STRING,
+                                      "source=agent");
         EvalContextClassPutHard(ctx, "mac_unknown", "source=agent");
         return;
     }
-    for (ifa = ifaddr; ifa != NULL; ifa=ifa->ifa_next)
-    {      
-        struct sockaddr * saddr = ifaddr->ifa_addr;
-        snprintf(hw_mac, sizeof(hw_mac), "%.2x:%.2x:%.2x:%.2x:%.2x:%.2x",
-        (unsigned char) saddr->sa_data[0],
-        (unsigned char) saddr->sa_data[1],
-        (unsigned char) saddr->sa_data[2],
-        (unsigned char) saddr->sa_data[3],
-        (unsigned char) saddr->sa_data[4],
-        (unsigned char) saddr->sa_data[5]);
 
-        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name, hw_mac, CF_DATA_TYPE_STRING, "source=agent");
-        RlistAppend(hardware, hw_mac, RVAL_TYPE_SCALAR);
-        RlistAppend(interfaces, ifa->ifa_name, RVAL_TYPE_SCALAR);
+    char hw_mac[CF_MAXVARSIZE];
 
-        snprintf(name, sizeof(name), "mac_%s", CanonifyName(hw_mac));
-        EvalContextClassPutHard(ctx, name, "inventory,attribute_name=none,source=agent");
-    }
-    solaris_freeifaddrs(ifaddr);
+    snprintf(hw_mac, sizeof(hw_mac), "%.2x:%.2x:%.2x:%.2x:%.2x:%.2x",
+             (unsigned char) arpreq.arp_ha.sa_data[0],
+             (unsigned char) arpreq.arp_ha.sa_data[1],
+             (unsigned char) arpreq.arp_ha.sa_data[2],
+             (unsigned char) arpreq.arp_ha.sa_data[3],
+             (unsigned char) arpreq.arp_ha.sa_data[4],
+             (unsigned char) arpreq.arp_ha.sa_data[5]);
+
+    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name,
+                                  hw_mac, CF_DATA_TYPE_STRING,
+                                  "source=agent");
+    RlistAppend(hardware, hw_mac, RVAL_TYPE_SCALAR);
+    RlistAppend(interfaces, ifp->ifr_name, RVAL_TYPE_SCALAR);
+
+    snprintf(name, sizeof(name), "mac_%s", CanonifyName(hw_mac));
+    EvalContextClassPutHard(ctx, name,
+                            "inventory,attribute_name=none,source=agent");
+
 # else
-    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name, "mac_unknown", CF_DATA_TYPE_STRING, "source=agent");
+    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, name,
+                                  "mac_unknown", CF_DATA_TYPE_STRING,
+                                  "source=agent");
     EvalContextClassPutHard(ctx, "mac_unknown", "source=agent");
 # endif
 }
@@ -311,7 +325,6 @@ void GetInterfacesInfo(EvalContext *ctx)
     struct ifreq ifbuf[CF_IFREQ], ifr, *ifp;
     struct ifconf list;
     struct sockaddr_in *sin;
-    struct hostent *hp;
     char *sp, workbuf[CF_BUFSIZE];
     char ip[CF_MAXVARSIZE];
     char name[CF_MAXVARSIZE];
@@ -375,19 +388,11 @@ void GetInterfacesInfo(EvalContext *ctx)
             continue;
         }
 
-        /* Skip virtual network interfaces for Linux, which seems to be a problem */
+        /* Skip network interfaces listed in ignore_interfaces.rx */
 
         if (IgnoreInterface(ifp->ifr_name))
         {
             continue;
-        }
-
-        if (strstr(ifp->ifr_name, ":"))
-        {
-#ifdef __linux__
-            Log(LOG_LEVEL_VERBOSE, "Skipping apparent virtual interface %d: %s", j + 1, ifp->ifr_name);
-            continue;
-#endif
         }
         else
         {
@@ -441,32 +446,6 @@ void GetInterfacesInfo(EvalContext *ctx)
 
                 Log(LOG_LEVEL_DEBUG, "Adding hostip '%s'", txtaddr);
                 EvalContextClassPutHard(ctx, txtaddr, "inventory,attribute_name=none,source=agent");
-
-                if ((hp = gethostbyaddr((char *) &(sin->sin_addr.s_addr),
-                                        sizeof(sin->sin_addr.s_addr), AF_INET))
-                    == NULL)
-                {
-                    Log(LOG_LEVEL_DEBUG, "No hostinformation for '%s' found",
-                        txtaddr);
-                }
-                else
-                {
-                    if (hp->h_name != NULL)
-                    {
-                        Log(LOG_LEVEL_DEBUG, "Adding hostname '%s'", hp->h_name);
-                        EvalContextClassPutHard(ctx, hp->h_name, "inventory,attribute_name=none,source=agent");
-
-                        if (hp->h_aliases != NULL)
-                        {
-                            for (i = 0; hp->h_aliases[i] != NULL; i++)
-                            {
-                                Log(LOG_LEVEL_DEBUG, "Adding alias '%s'",
-                                    hp->h_aliases[i]);
-                                EvalContextClassPutHard(ctx, hp->h_aliases[i], "inventory,attribute_name=none,source=agent");
-                            }
-                        }
-                    }
-                }
 
                 if (strcmp(txtaddr, "0.0.0.0") == 0)
                 {
@@ -582,7 +561,7 @@ void GetInterfacesInfo(EvalContext *ctx)
     if (ips)
     {
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "ip_addresses", ips, CF_DATA_TYPE_STRING_LIST,
-                                      "inventory,source=agent,attribute_name=IPv4 addresses");
+                                      "source=agent");
     }
 
     RlistDestroy(interfaces);
@@ -625,7 +604,7 @@ static void FindV6InterfacesInfo(EvalContext *ctx)
         return;
     }
 #else
-    if ((pp = cf_popen("/sbin/ifconfig -a", "r", true)) == NULL)
+    if (!FileCanOpen("/sbin/ifconfig", "r") || ((pp = cf_popen("/sbin/ifconfig -a", "r", true)) == NULL))
     {
         Log(LOG_LEVEL_VERBOSE, "Could not find interface info");
         return;
@@ -688,7 +667,7 @@ static void InitIgnoreInterfaces()
     FILE *fin;
     char filename[CF_BUFSIZE],regex[CF_MAXVARSIZE];
 
-    snprintf(filename, sizeof(filename), "%s%cinputs%c%s", CFWORKDIR, FILE_SEPARATOR, FILE_SEPARATOR, CF_IGNORE_INTERFACES);
+    snprintf(filename, sizeof(filename), "%s%cinputs%c%s", GetWorkDir(), FILE_SEPARATOR, FILE_SEPARATOR, CF_IGNORE_INTERFACES);
 
     if ((fin = fopen(filename,"r")) == NULL)
     {

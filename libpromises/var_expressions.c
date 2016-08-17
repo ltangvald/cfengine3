@@ -31,6 +31,10 @@
 #include <hashes.h>
 #include <scope.h>
 
+// This is not allowed to be the part of VarRef.indices so looks safe 
+// to be used as multi array indices separator while hashing.
+#define ARRAY_SEPARATOR_HASH ']' 
+
 static size_t VarRefHash(const VarRef *ref)
 {
     unsigned int h = 0;
@@ -69,6 +73,13 @@ static size_t VarRefHash(const VarRef *ref)
 
     for (size_t k = 0; k < ref->num_indices; k++)
     {
+        // Fixing multi index arrays hashing collisions - Redmine 6674
+        // Multi index arrays with indexes expanded to the same string 
+        // (e.g. v[te][st], v[t][e][s][t]) will not be hashed to the same value.
+        h += ARRAY_SEPARATOR_HASH;
+        h += (h << 10);
+        h ^= (h >> 6);
+        
         for (int i = 0; ref->indices[k][i] != '\0'; i++)
         {
             h += ref->indices[k][i];
@@ -247,6 +258,7 @@ VarRef *VarRefParseFromNamespaceAndScope(const char *qualified_name, const char 
     char *lval = NULL;
     char **indices = NULL;
     size_t num_indices = 0;
+    size_t name_index_count = 0;
 
     if (indices_start)
     {
@@ -260,6 +272,7 @@ VarRef *VarRefParseFromNamespaceAndScope(const char *qualified_name, const char 
         else
         {
             num_indices = IndexCount(indices_start - 1);
+            name_index_count = num_indices;
             indices = xmalloc(num_indices * sizeof(char *));
 
             Buffer *buf = BufferNew();
@@ -323,6 +336,7 @@ VarRef *VarRefParseFromNamespaceAndScope(const char *qualified_name, const char 
     ref->ns = ns ? ns : (_ns ? xstrdup(_ns) : NULL);
     ref->scope = scope ? scope : (_scope ? xstrdup(_scope) : NULL);
     ref->lval = lval;
+    ref->name_index_count = name_index_count;
     ref->indices = indices;
     ref->num_indices = num_indices;
 

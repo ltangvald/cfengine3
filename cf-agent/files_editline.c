@@ -28,6 +28,7 @@
 #include <eval_context.h>
 #include <promises.h>
 #include <files_names.h>
+#include <files_interfaces.h>
 #include <vars.h>
 #include <item_lib.h>
 #include <sort.h>
@@ -92,7 +93,7 @@ static int SanityCheckInsertions(Attributes a);
 static int SanityCheckDeletions(Attributes a, const Promise *pp);
 static int SelectLine(EvalContext *ctx, const char *line, Attributes a);
 static int NotAnchored(char *s);
-static int SelectRegion(EvalContext *ctx, Item *start, Item **begin_ptr, Item **end_ptr, Attributes a, const Promise *pp, EditContext *edcontext, PromiseResult *result);
+static int SelectRegion(EvalContext *ctx, Item *start, Item **begin_ptr, Item **end_ptr, Attributes a, EditContext *edcontext);
 static int MultiLineString(char *s);
 static int InsertFileAtLocation(EvalContext *ctx, Item **start, Item *begin_ptr, Item *end_ptr, Item *location, Item *prev, Attributes a, const Promise *pp, EditContext *edcontext, PromiseResult *result);
 
@@ -128,8 +129,6 @@ int ScheduleEditLineOperations(EvalContext *ctx, const Bundle *bp, Attributes a,
             {
                 continue;
             }
-
-            BannerSubPromiseType(ctx, bp->name, sp->name);
 
             EvalContextStackPushPromiseTypeFrame(ctx, sp);
             for (size_t ppi = 0; ppi < SeqLength(sp->promises); ppi++)
@@ -266,9 +265,10 @@ Bundle *MakeTemporaryBundleFromTemplate(EvalContext *ctx, Policy *policy, Attrib
                     sp += len;
                 }
 
-                *(sp-1) = '\0'; // StripTrailingNewline(promiser) and terminate
+                int nl = StripTrailingNewline(promiser, size);
+                assert(nl != -1);
 
-                np = PromiseTypeAppendPromise(tp, promiser, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context);
+                np = PromiseTypeAppendPromise(tp, promiser, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context, NULL);
                 np->offset.line = lineno;
                 PromiseAppendConstraint(np, "insert_type", RvalNew("preserve_all_lines", RVAL_TYPE_SCALAR), false);
 
@@ -288,7 +288,7 @@ Bundle *MakeTemporaryBundleFromTemplate(EvalContext *ctx, Policy *policy, Attrib
                     {
                         //install independent promise line
                         StripTrailingNewline(buffer, buffer_size);
-                        np = PromiseTypeAppendPromise(tp, buffer, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context);
+                        np = PromiseTypeAppendPromise(tp, buffer, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context, NULL);
                         np->offset.line = lineno;
                         PromiseAppendConstraint(np, "insert_type", RvalNew("preserve_all_lines", RVAL_TYPE_SCALAR), false);
                     }
@@ -312,7 +312,7 @@ static PromiseResult KeepEditLinePromise(EvalContext *ctx, const Promise *pp, vo
 {
     EditContext *edcontext = param;
 
-    PromiseBanner(pp);
+    PromiseBanner(ctx, pp);
 
     if (strcmp("classes", pp->parent_promise_type->name) == 0)
     {
@@ -367,10 +367,10 @@ static PromiseResult VerifyLineDeletions(EvalContext *ctx, const Promise *pp, Ed
     PromiseResult result = PROMISE_RESULT_NOOP;
     if (!a.haveregion)
     {
-        begin_ptr = CF_UNDEFINED_ITEM;
-        end_ptr = CF_UNDEFINED_ITEM;
+        begin_ptr = NULL;
+        end_ptr = NULL;
     }
-    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, pp, edcontext, &result))
+    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, edcontext))
     {
         if (a.region.include_end || a.region.include_start)
         {
@@ -386,6 +386,14 @@ static PromiseResult VerifyLineDeletions(EvalContext *ctx, const Promise *pp, Ed
         }
         result = PromiseResultUpdate(result, PROMISE_RESULT_INTERRUPTED);
         return result;
+    }
+    if (!end_ptr && a.region.select_end)
+    {
+        cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_INTERRUPTED, pp, a,
+            "The promised end pattern '%s' was not found when selecting region to delete in '%s'",
+             a.region.select_end, edcontext->filename);
+        result = PromiseResultUpdate(result, PROMISE_RESULT_INTERRUPTED);
+        return false;
     }
 
     snprintf(lockname, CF_BUFSIZE - 1, "deleteline-%s-%s", pp->promiser, edcontext->filename);
@@ -447,7 +455,7 @@ static PromiseResult VerifyColumnEdits(EvalContext *ctx, const Promise *pp, Edit
         begin_ptr = *start;
         end_ptr = NULL;         // EndOfList(*start);
     }
-    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, pp, edcontext, &result))
+    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, edcontext))
     {
         cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_INTERRUPTED, pp, a, "The promised column edit '%s' could not select an edit region in '%s'",
              pp->promiser, edcontext->filename);
@@ -503,7 +511,7 @@ static PromiseResult VerifyPatterns(EvalContext *ctx, const Promise *pp, EditCon
         begin_ptr = *start;
         end_ptr = NULL;         //EndOfList(*start);
     }
-    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, pp, edcontext, &result))
+    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, edcontext))
     {
         cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_INTERRUPTED, pp, a,
              "The promised pattern replace '%s' could not select an edit region in '%s'", pp->promiser,
@@ -538,10 +546,10 @@ static PromiseResult VerifyPatterns(EvalContext *ctx, const Promise *pp, EditCon
 
 static int SelectNextItemMatching(EvalContext *ctx, const char *regexp, Item *begin, Item *end, Item **match, Item **prev)
 {
-    Item *ip_prev = CF_UNDEFINED_ITEM;
+    Item *ip_prev = NULL;
 
-    *match = CF_UNDEFINED_ITEM;
-    *prev = CF_UNDEFINED_ITEM;
+    *match = NULL;
+    *prev = NULL;
 
     for (Item *ip = begin; ip != end; ip = ip->next)
     {
@@ -567,10 +575,10 @@ static int SelectNextItemMatching(EvalContext *ctx, const char *regexp, Item *be
 
 static int SelectLastItemMatching(EvalContext *ctx, const char *regexp, Item *begin, Item *end, Item **match, Item **prev)
 {
-    Item *ip, *ip_last = NULL, *ip_prev = CF_UNDEFINED_ITEM;
+    Item *ip, *ip_last = NULL, *ip_prev = NULL;
 
-    *match = CF_UNDEFINED_ITEM;
-    *prev = CF_UNDEFINED_ITEM;
+    *match = NULL;
+    *prev = NULL;
 
     for (ip = begin; ip != end; ip = ip->next)
     {
@@ -604,8 +612,8 @@ static int SelectItemMatching(EvalContext *ctx, Item *start, char *regex, Item *
     Item *ip;
     int ret = false;
 
-    *match = CF_UNDEFINED_ITEM;
-    *prev = CF_UNDEFINED_ITEM;
+    *match = NULL;
+    *prev = NULL;
 
     if (regex == NULL)
     {
@@ -627,7 +635,7 @@ static int SelectItemMatching(EvalContext *ctx, Item *start, char *regex, Item *
         }
     }
 
-    if ((*match != CF_UNDEFINED_ITEM) && (*prev == CF_UNDEFINED_ITEM))
+    if ((*match != NULL) && (*prev == NULL))
     {
         for (ip = start; (ip != NULL) && (ip != *match); ip = ip->next)
         {
@@ -667,7 +675,7 @@ static PromiseResult VerifyLineInsertions(EvalContext *ctx, const Promise *pp, E
         begin_ptr = *start;
         end_ptr = NULL;         //EndOfList(*start);
     }
-    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, pp, edcontext, &result))
+    else if (!SelectRegion(ctx, *start, &begin_ptr, &end_ptr, a, edcontext))
     {
         cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_INTERRUPTED, pp, a,
              "The promised line insertion '%s' could not select an edit region in '%s'", pp->promiser,
@@ -727,33 +735,32 @@ static PromiseResult VerifyLineInsertions(EvalContext *ctx, const Promise *pp, E
 /***************************************************************************/
 
 static int SelectRegion(EvalContext *ctx, Item *start, Item **begin_ptr, Item **end_ptr, Attributes a,
-                        const Promise *pp, EditContext *edcontext, PromiseResult *result)
+                        EditContext *edcontext)
 /*
 
 This should provide pointers to the first and last line of text that include the
 delimiters, since we need to include those in case they are being deleted, etc.
 It returns true if a match was identified, else false.
 
-If no such region matches, begin_ptr and end_ptr should point to CF_UNDEFINED_ITEM
+If no such region matches, begin_ptr and end_ptr should point to NULL 
 
 */
 {
-    Item *ip, *beg = CF_UNDEFINED_ITEM, *end = CF_UNDEFINED_ITEM;
+    Item *ip, *beg = NULL, *end = NULL;
 
     for (ip = start; ip != NULL; ip = ip->next)
     {
         if (a.region.select_start)
         {
-            if (beg == CF_UNDEFINED_ITEM && FullTextMatch(ctx, a.region.select_start, ip->name))
+            if (!beg && FullTextMatch(ctx, a.region.select_start, ip->name))
             {
                 if (!a.region.include_start)
                 {
                     if (ip->next == NULL)
                     {
-                        cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_INTERRUPTED, pp, a,
+                        Log(LOG_LEVEL_VERBOSE,
                              "The promised start pattern '%s' found an empty region at the end of file '%s'",
                              a.region.select_start, edcontext->filename);
-                        *result = PromiseResultUpdate(*result, PROMISE_RESULT_INTERRUPTED);
                         return false;
                     }
                 }
@@ -763,33 +770,27 @@ If no such region matches, begin_ptr and end_ptr should point to CF_UNDEFINED_IT
             }
         }
 
-        if (a.region.select_end && beg != CF_UNDEFINED_ITEM)
+        if (a.region.select_end && beg)
         {
-            if (end == CF_UNDEFINED_ITEM && FullTextMatch(ctx, a.region.select_end, ip->name))
+            if (!end && FullTextMatch(ctx, a.region.select_end, ip->name))
             {
                 end = ip;
                 break;
             }
         }
 
-        if (beg != CF_UNDEFINED_ITEM && end != CF_UNDEFINED_ITEM)
+        if (beg && end)
         {
             break;
         }
     }
 
-    if (beg == CF_UNDEFINED_ITEM && a.region.select_start)
+    if (!beg && a.region.select_start)
     {
-        cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_INTERRUPTED, pp, a,
+        Log(LOG_LEVEL_VERBOSE,
              "The promised start pattern '%s' was not found when selecting edit region in '%s'",
              a.region.select_start, edcontext->filename);
-        *result = PromiseResultUpdate(*result, PROMISE_RESULT_INTERRUPTED);
         return false;
-    }
-
-    if (end == CF_UNDEFINED_ITEM)
-    {
-        end = NULL;
     }
 
     *begin_ptr = beg;
@@ -808,27 +809,31 @@ static int MatchRegion(EvalContext *ctx, const char *chunk, const Item *begin, c
 */
 {
     const Item *ip = begin;
-    char buf[CF_BUFSIZE];
+    size_t buf_size = strlen(chunk) + 1;
+    char *buf = xmalloc(buf_size);
     int lines = 0;
 
     for (const char *sp = chunk; sp <= chunk + strlen(chunk); sp++)
     {
-        memset(buf, 0, CF_BUFSIZE);
+        buf[0] = '\0';
         sscanf(sp, "%[^\n]", buf);
         sp += strlen(buf);
 
         if (ip == NULL)
         {
-            return false;
+            lines = 0;
+            goto bad;
         }
 
         if (!regex && strcmp(buf, ip->name) != 0)
         {
-            return false;
+            lines = 0;
+            goto bad;
         }
         if (regex && !FullTextMatch(ctx, buf, ip->name))
         {
-            return false;
+            lines = 0;
+            goto bad;
         }
 
         lines++;
@@ -837,7 +842,8 @@ static int MatchRegion(EvalContext *ctx, const char *chunk, const Item *begin, c
 
         if (ip == end)
         {
-            return false;
+            lines = 0;
+            goto bad;
         }
 
         // Now see if there is more
@@ -850,13 +856,16 @@ static int MatchRegion(EvalContext *ctx, const char *chunk, const Item *begin, c
         {
             if (++sp <= chunk + strlen(chunk))
             {
-                return false;
+                lines = 0;
+                goto bad;
             }
 
             break;
         }
     }
 
+bad:
+    free(buf);
     return lines;
 }
 
@@ -865,7 +874,7 @@ static int MatchRegion(EvalContext *ctx, const char *chunk, const Item *begin, c
 static int InsertMultipleLinesToRegion(EvalContext *ctx, Item **start, Item *begin_ptr, Item *end_ptr, Attributes a,
                                        const Promise *pp, EditContext *edcontext, PromiseResult *result)
 {
-    Item *ip, *prev = CF_UNDEFINED_ITEM;
+    Item *ip, *prev = NULL;
     int allow_multi_lines = a.sourcetype && strcmp(a.sourcetype, "preserve_all_lines") == 0;
 
     // Insert at the start of the file
@@ -879,7 +888,10 @@ static int InsertMultipleLinesToRegion(EvalContext *ctx, Item **start, Item *beg
 
     if (a.location.before_after == EDIT_ORDER_BEFORE)
     {
-        for (ip = *start; ip != NULL; ip = ip->next)
+        /* As region was already selected by SelectRegion() and we know
+         * what are the region boundaries (begin_ptr and end_ptr) there
+         * is no reason to iterate over whole file. */
+        for (ip = begin_ptr; ip != NULL; ip = ip->next)
         {
             if (ip == begin_ptr)
             {
@@ -894,7 +906,13 @@ static int InsertMultipleLinesToRegion(EvalContext *ctx, Item **start, Item *beg
 
     if (a.location.before_after == EDIT_ORDER_AFTER)
     {
-        for (ip = *start; ip != NULL; ip = ip->next)
+        /* As region was already selected by SelectRegion() and we know
+         * what are the region boundaries (begin_ptr and end_ptr) there
+         * is no reason to iterate over whole file. It is safe to start from
+         * begin_ptr. 
+         * As a bonus Redmine #7640 is fixed as we are not interested in
+         * matching values outside of the region we are iterating over. */
+        for (ip = begin_ptr; ip != NULL; ip = ip->next)
         {
             if (!allow_multi_lines && MatchRegion(ctx, pp->promiser, ip, end_ptr, false))
             {
@@ -956,7 +974,7 @@ static int DeletePromisedLinesMatching(EvalContext *ctx, Item **start, Item *beg
 
 // Get a pointer from before the region so we can patch the hole later
 
-    if (begin == CF_UNDEFINED_ITEM)
+    if (begin == NULL)
     {
         initiator = *start;
     }
@@ -972,7 +990,7 @@ static int DeletePromisedLinesMatching(EvalContext *ctx, Item **start, Item *beg
         }
     }
 
-    if (end == CF_UNDEFINED_ITEM)
+    if (end == NULL)
     {
         terminator = NULL;
     }
@@ -1022,7 +1040,7 @@ static int DeletePromisedLinesMatching(EvalContext *ctx, Item **start, Item *beg
 
             if (a.transaction.action == cfa_warn)
             {
-                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                      "Need to delete line '%s' from %s - but only a warning was promised", ip->name,
                      edcontext->filename);
                 *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1174,7 +1192,7 @@ static int ReplacePatterns(EvalContext *ctx, Item *file_start, Item *file_end, A
 
         if (a.transaction.action == cfa_warn)
         {
-            cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_WARN, pp, a,
+            cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                  "Need to replace line '%s' in '%s' - but only a warning was promised", pp->promiser,
                  edcontext->filename);
             *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1388,21 +1406,28 @@ static int SanityCheckDeletions(Attributes a, const Promise *pp)
 
 /***************************************************************************/
 
+/* XXX */
 static int MatchPolicy(EvalContext *ctx, const char *camel, const char *haystack, Rlist *insert_match, const Promise *pp)
 {
     Rlist *rp;
     char *sp, *spto, *firstchar, *lastchar;
     InsertMatchType opt;
-    char work[CF_BUFSIZE], final[CF_BUFSIZE];
     Item *list = SplitString(camel, '\n'), *ip;
     int direct_cmp = false, ok = false, escaped = false;
+    char *final = NULL;
+    size_t final_size = 0;
+    char *work = NULL;
+    size_t work_size = 0;
 
-//Split into separate lines first
-
+    //Split into separate lines first
     for (ip = list; ip != NULL; ip = ip->next)
     {
         ok = false;
         direct_cmp = (strcmp(camel, haystack) == 0);
+        final = xstrdup(ip->name);
+        final_size = strlen(final) + 1;
+        work = NULL;
+        work_size = final_size;
 
         if (insert_match == NULL)
         {
@@ -1410,9 +1435,6 @@ static int MatchPolicy(EvalContext *ctx, const char *camel, const char *haystack
             ok = ok || direct_cmp;
             break;
         }
-
-        
-        strlcpy(final, ip->name, CF_BUFSIZE);
 
         for (rp = insert_match; rp != NULL; rp = rp->next)
         {
@@ -1433,27 +1455,33 @@ static int MatchPolicy(EvalContext *ctx, const char *camel, const char *haystack
             }
 
             if (!escaped)
-            {    
-            // Need to escape the original string once here in case it contains regex chars when non-exact match
-            EscapeRegexChars(ip->name, final, CF_BUFSIZE - 1);
-            escaped = true;
+            {
+                // Need to escape the original string once here in case it contains regex chars when non-exact match
+                // Check size of escaped string, and realloc if necessary
+                size_t escape_regex_len = EscapeRegexCharsLen(ip->name);
+                if (escape_regex_len + 1 > final_size)
+                {
+                    final = xrealloc(final, escape_regex_len + 1);
+                    final_size = escape_regex_len + 1;
+                }
+
+                EscapeRegexChars(ip->name, final, final_size);
+                escaped = true;
             }
-            
+
             if (opt == INSERT_MATCH_TYPE_IGNORE_EMBEDDED)
             {
-                memset(work, 0, CF_BUFSIZE);
-
                 // Strip initial and final first
+                // Since we're stripping space and replacing it with \s+, we need to account for that
+                // when allocating work
+                for (firstchar = final; isspace((int)*firstchar); firstchar++);
+                for (lastchar = final + strlen(final) - 1; (lastchar > firstchar) && (isspace((int)*lastchar)); lastchar--);
+                work_size = final_size + 6;
+                work = xcalloc(1, work_size);
+                size_t required_size = 0;
+                char toadd[] = {'\0', '\0', '\0', '\0'};
 
-                for (firstchar = final; isspace((int)*firstchar); firstchar++)
-                {
-                }
-
-                for (lastchar = final + strlen(final) - 1; (lastchar > firstchar) && (isspace((int)*lastchar)); lastchar--)
-                {
-                }
-
-                for (sp = final, spto = work; *sp != '\0'; sp++)
+                for (sp = final, spto = work; *sp != '\0'; sp++, spto += strlen(toadd), toadd[0] = '\0')
                 {
                     if ((sp > firstchar) && (sp < lastchar))
                     {
@@ -1462,34 +1490,78 @@ static int MatchPolicy(EvalContext *ctx, const char *camel, const char *haystack
                             while (isspace((int)*(sp + 1)))
                             {
                                 sp++;
+                                required_size++;
                             }
 
-                            strcat(spto, "\\s+");
-                            spto += 3;
+                            required_size += 3;
+                            strlcpy(toadd, "\\s+", sizeof(toadd));
                         }
                         else
                         {
-                            *spto++ = *sp;
+                            required_size++;
+                            toadd[0] = *sp;
+                            toadd[1] = '\0';
                         }
                     }
                     else
                     {
-                        *spto++ = *sp;
+                        required_size++;
+                        toadd[0] = *sp;
+                        toadd[1] = '\0';
+                    }
+
+                    if (required_size > work_size)
+                    {
+                        // Increase required_size by a small amount, so we don't reallocate every
+                        // iteration
+                        work_size = required_size + 12;
+                        work = xrealloc(work, work_size);
+                    }
+
+                    if (strlcat(spto, toadd, work_size) >= work_size - 1)
+                    {
+                        UnexpectedError("Truncation concatenating %s and %s", spto, toadd);
                     }
                 }
+                required_size += 1;
 
-                strcpy(final, work);
+                if (required_size > work_size)
+                {
+                    work_size = required_size + 12;
+                    work = xrealloc(work, work_size);
+                }
+
+
+                // Realloc and retry on truncation
+                if (strlcpy(final, work, final_size) >= final_size - 1)
+                {
+                    final = xrealloc(final, work_size);
+                    final_size = work_size;
+                    strlcpy(final, work, final_size);
+                }
+
+                free(work);
+                work = NULL;
             }
 
             if (opt == INSERT_MATCH_TYPE_IGNORE_LEADING)
             {
                 if (strncmp(final, "\\s*", 3) != 0)
                 {
-                    for (sp = final; isspace((int)*sp); sp++)
-                    {
-                    }
+                    for (sp = final; isspace((int)*sp); sp++);
+                    work_size = final_size + 3;
+                    work = xcalloc(1, work_size);
                     strcpy(work, sp);
-                    snprintf(final, CF_BUFSIZE, "\\s*%s", work);
+
+                    if (snprintf(final, final_size, "\\s*%s", work) >= final_size - 1)
+                    {
+                        final = xrealloc(final, work_size);
+                        final_size = work_size;
+                        snprintf(final, final_size, "\\s*%s", work);
+                    }
+
+                    free(work);
+                    work = NULL;
                 }
             }
 
@@ -1497,20 +1569,36 @@ static int MatchPolicy(EvalContext *ctx, const char *camel, const char *haystack
             {
                 if (strncmp(final + strlen(final) - 4, "\\s*", 3) != 0)
                 {
+                    work_size = final_size + 3;
+                    work = xcalloc(1, work_size);
                     strcpy(work, final);
-                    snprintf(final, CF_BUFSIZE, "%s\\s*", work);
+
+                    for (sp = work + strlen(work) - 1; (sp > work) && (isspace((int)*sp)); sp--);
+                    *++sp = '\0';
+                    if (snprintf(final, final_size, "%s\\s*", work) >= final_size - 1)
+                    {
+                        final = xrealloc(final, work_size);
+                        final_size = work_size;
+                        snprintf(final, final_size, "%s\\s*", work);
+                    }
+
+                    free(work);
+                    work = NULL;
                 }
             }
 
             ok = ok || (FullTextMatch(ctx, final, haystack));
         }
 
+        free(final);
+        final = NULL;
         if (!ok)                // All lines in region need to match to avoid insertions
         {
             break;
         }
     }
 
+    free(final);
     DeleteItemList(list);
     return ok;
 }
@@ -1534,7 +1622,6 @@ static int InsertFileAtLocation(EvalContext *ctx, Item **start, Item *begin_ptr,
                                 Item *prev, Attributes a, const Promise *pp, EditContext *edcontext, PromiseResult *result)
 {
     FILE *fin;
-    char buf[CF_BUFSIZE];
     int retval = false;
     Item *loc = NULL;
     int preserve_block = a.sourcetype && strcmp(a.sourcetype, "file_preserve_block") == 0;
@@ -1546,41 +1633,13 @@ static int InsertFileAtLocation(EvalContext *ctx, Item **start, Item *begin_ptr,
         return false;
     }
 
+    size_t buf_size = CF_BUFSIZE;
+    char *buf = xmalloc(buf_size);
     loc = location;
     Buffer *exp = BufferNew();
 
-    for(;;)
+    while (CfReadLine(&buf, &buf_size, fin) != -1)
     {
-        if (fgets(buf, sizeof(buf), fin) == NULL)
-        {
-            if (ferror(fin)) {
-                if (errno == EISDIR)
-                {
-                    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_INTERRUPTED, pp, a, "Could not read file %s: Is a directory", pp->promiser);
-                    *result = PromiseResultUpdate(*result, PROMISE_RESULT_INTERRUPTED);
-                    break;
-                }
-                else
-                {
-                    UnexpectedError("Failed to read line from stream");
-                    break;
-                }
-            }
-            else /* feof */
-            {
-                break;
-            }
-        }
-        if (StripTrailingNewline(buf, CF_EXPANDSIZE) == -1)
-        {
-            Log(LOG_LEVEL_ERR, "StripTrailingNewline was called on an overlong string");
-        }
-
-        if (feof(fin) && strlen(buf) == 0)
-        {
-            break;
-        }
-
         BufferClear(exp);
         if (a.expandvars)
         {
@@ -1607,14 +1666,14 @@ static int InsertFileAtLocation(EvalContext *ctx, Item **start, Item *begin_ptr,
 
         retval |= InsertCompoundLineAtLocation(ctx, BufferGet(exp), start, begin_ptr, end_ptr, loc, prev, a, pp, edcontext, result);
 
-        if (preserve_block && prev == CF_UNDEFINED_ITEM)
+        if (preserve_block && !prev)
         {
             // If we are inserting a preserved block before, need to flip the implied order after the first insertion
             // to get the order of the block right
             //a.location.before_after = cfe_after;
         }
 
-        if (prev && prev != CF_UNDEFINED_ITEM)
+        if (prev)
         {
             prev = prev->next;
         }
@@ -1631,12 +1690,27 @@ static int InsertFileAtLocation(EvalContext *ctx, Item **start, Item *begin_ptr,
         {
             location = *start;
         }
+
+        free(buf);
+        buf = NULL;
+    }
+
+    if (ferror(fin))
+    {
+        if (errno == EISDIR)
+        {
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_INTERRUPTED, pp, a, "Could not read file %s: Is a directory", pp->promiser);
+            *result = PromiseResultUpdate(*result, PROMISE_RESULT_INTERRUPTED);
+        }
+        else
+        {
+            UnexpectedError("Failed to read line from stream");
+        }
     }
 
     fclose(fin);
     BufferDestroy(exp);
     return retval;
-
 }
 
 /***************************************************************************/
@@ -1646,8 +1720,6 @@ static int InsertCompoundLineAtLocation(EvalContext *ctx, char *chunk, Item **st
                                         PromiseResult *result)
 {
     bool retval = false;
-    char buf[CF_EXPANDSIZE];
-    char *sp;
     int preserve_all_lines = a.sourcetype && strcmp(a.sourcetype, "preserve_all_lines") == 0;
     int preserve_block = a.sourcetype && (preserve_all_lines || strcmp(a.sourcetype, "preserve_block") == 0 || strcmp(a.sourcetype, "file_preserve_block") == 0);
 
@@ -1659,10 +1731,18 @@ static int InsertCompoundLineAtLocation(EvalContext *ctx, char *chunk, Item **st
 
     // Iterate over any lines within the chunk
 
-    for (sp = chunk; sp <= chunk + strlen(chunk); sp++)
+    char *buf = NULL;
+    size_t buf_size = 0;
+    for (char *sp = chunk; sp <= chunk + strlen(chunk); sp++)
     {
-        memset(buf, 0, CF_BUFSIZE);
-        StringNotMatchingSetCapped(sp, CF_BUFSIZE, "\n", buf);
+        if (strlen(chunk) + 1 > buf_size)
+        {
+            buf_size = strlen(chunk) + 1;
+            buf = xrealloc(buf, buf_size);
+        }
+
+        memset(buf, 0, buf_size);
+        StringNotMatchingSetCapped(sp, buf_size, "\n", buf);
         sp += strlen(buf);
 
         if (!SelectLine(ctx, buf, a))
@@ -1678,7 +1758,7 @@ static int InsertCompoundLineAtLocation(EvalContext *ctx, char *chunk, Item **st
 
         retval |= InsertLineAtLocation(ctx, buf, start, location, prev, a, pp, edcontext, result);
 
-        if (preserve_block && a.location.before_after == EDIT_ORDER_BEFORE && location == NULL && prev == CF_UNDEFINED_ITEM)
+        if (preserve_block && a.location.before_after == EDIT_ORDER_BEFORE && location == NULL && prev == NULL)
         {
             // If we are inserting a preserved block before, need to flip the implied order after the first insertion
             // to get the order of the block right
@@ -1686,7 +1766,7 @@ static int InsertCompoundLineAtLocation(EvalContext *ctx, char *chunk, Item **st
             location = *start;
         }
 
-        if (prev && prev != CF_UNDEFINED_ITEM)
+        if (prev)
         {
             prev = prev->next;
         }
@@ -1705,6 +1785,7 @@ static int InsertCompoundLineAtLocation(EvalContext *ctx, char *chunk, Item **st
         }
     }
 
+    free(buf);
     return retval;
 }
 
@@ -1756,7 +1837,7 @@ static int InsertLineAtLocation(EvalContext *ctx, char *newline, Item **start, I
 
 {   int preserve_block = a.sourcetype && strcmp(a.sourcetype, "preserve_block") == 0;
 
-    if (prev == CF_UNDEFINED_ITEM)      /* Insert at first line */
+    if (!prev)      /* Insert at first line */
     {
         if (a.location.before_after == EDIT_ORDER_BEFORE)
         {
@@ -1764,7 +1845,7 @@ static int InsertLineAtLocation(EvalContext *ctx, char *newline, Item **start, I
             {
                 if (a.transaction.action == cfa_warn)
                 {
-                    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                    cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                          "Need to insert the promised line '%s' in %s - but only a warning was promised", newline,
                          edcontext->filename);
                     *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1785,7 +1866,7 @@ static int InsertLineAtLocation(EvalContext *ctx, char *newline, Item **start, I
             {
                 if (a.transaction.action == cfa_warn)
                 {
-                    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                    cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                          "Need to prepend the promised line '%s' to %s - but only a warning was promised",
                          newline, edcontext->filename);
                     *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1822,7 +1903,7 @@ static int InsertLineAtLocation(EvalContext *ctx, char *newline, Item **start, I
         {
             if (a.transaction.action == cfa_warn)
             {
-                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                      "Need to insert line '%s' into '%s' but only a warning was promised", newline,
                      edcontext->filename);
                 *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1851,7 +1932,7 @@ static int InsertLineAtLocation(EvalContext *ctx, char *newline, Item **start, I
         {
             if (a.transaction.action == cfa_warn)
             {
-                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                      "Need to insert line '%s' in '%s' but only a warning was promised", newline, edcontext->filename);
                 *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
                 return true;
@@ -1940,7 +2021,7 @@ static int EditLineByColumn(EvalContext *ctx, Rlist **columns, Attributes a,
         {
             if (a.transaction.action == cfa_warn)
             {
-                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a, "Need to edit field in %s but only warning promised",
+                cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a, "Need to edit field in %s but only warning promised",
                      edcontext->filename);
                 *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
                 retval = false;
@@ -1972,7 +2053,7 @@ static int EditLineByColumn(EvalContext *ctx, Rlist **columns, Attributes a,
         {
             if (a.transaction.action == cfa_warn)
             {
-                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                      "Need to delete field field value %s in %s but only a warning was promised", RlistScalarValue(rp),
                      edcontext->filename);
                 *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
@@ -1993,7 +2074,7 @@ static int EditLineByColumn(EvalContext *ctx, Rlist **columns, Attributes a,
         {
             if (a.transaction.action == cfa_warn)
             {
-                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+                cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                      "Need to set column field value %s to %s in %s but only a warning was promised",
                      RlistScalarValue(rp), a.column.column_value, edcontext->filename);
                 *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);

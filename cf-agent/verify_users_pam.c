@@ -252,28 +252,32 @@ static bool GetPasswordHash(const char *puser, const struct passwd *passwd_info,
     if (strlen(passwd_info->pw_passwd) <= 4)
     {
 #ifdef HAVE_FGETSPENT
-        Log(LOG_LEVEL_VERBOSE, "Getting user '%s' password hash from shadow database.", puser);
+        struct stat statbuf;
+        if (stat("/etc/shadow", &statbuf) == 0)
+        {
+            Log(LOG_LEVEL_VERBOSE, "Getting user '%s' password hash from shadow database.", puser);
 
-        struct spwd *spwd_info;
-        errno = 0;
-        spwd_info = GetSpEntry(puser);
-        if (!spwd_info)
-        {
-            if (errno)
+            struct spwd *spwd_info;
+            errno = 0;
+            spwd_info = GetSpEntry(puser);
+            if (!spwd_info)
             {
-                Log(LOG_LEVEL_ERR, "Could not get information from user shadow database: %s", GetErrorStr());
-                return false;
+                if (errno)
+                {
+                    Log(LOG_LEVEL_ERR, "Could not get information from user shadow database: %s", GetErrorStr());
+                    return false;
+                }
+                else
+                {
+                    Log(LOG_LEVEL_ERR, "Could not find user when checking password.");
+                    return false;
+                }
             }
-            else
+            else if (spwd_info)
             {
-                Log(LOG_LEVEL_ERR, "Could not find user when checking password.");
-                return false;
+                *result = spwd_info->sp_pwdp;
+                return true;
             }
-        }
-        else if (spwd_info)
-        {
-            *result = spwd_info->sp_pwdp;
-            return true;
         }
 
 #elif defined(_AIX)
@@ -681,12 +685,38 @@ static bool IsAccountLocked(const char *puser, const struct passwd *passwd_info)
     return (system_hash[0] == '!');
 }
 
-static bool SetAccountLockExpiration(const char *puser, bool lock)
+static bool PlatformSupportsExpirationLock(void)
 {
+#ifdef __sun
     // Solaris has the concept of account expiration, but it is only possible
     // to set a date in the future. We need to set it to a past date, so we
     // have to skip it on that platform.
-#ifndef __sun
+    return false;
+
+#elif __hpux
+    struct stat statbuf;
+    // "/etc/shadow" signals the so called "trusted model" on HPUX.
+    if (stat("/etc/shadow", &statbuf) == 0)
+    {
+        return true;
+    }
+    else
+    {
+        return false;
+    }
+
+#else
+    return true;
+#endif
+}
+
+static bool SetAccountLockExpiration(const char *puser, bool lock)
+{
+    if (!PlatformSupportsExpirationLock())
+    {
+        return true;
+    }
+
     char cmd[CF_BUFSIZE + strlen(puser)];
 
     strcpy (cmd, USERMOD);
@@ -709,34 +739,34 @@ static bool SetAccountLockExpiration(const char *puser, bool lock)
             lock ? "locking" : "unlocking", puser, cmd);
         return false;
     }
-#endif // !__sun
 
     return true;
 }
 
 static bool SetAccountLocked(const char *puser, const char *hash, bool lock)
 {
-    if (lock)
+    if (hash)
     {
-        if (hash[0] != '!')
+        if (lock)
         {
-            char new_hash[strlen(hash) + 2];
-            xsnprintf(new_hash, sizeof(new_hash), "!%s", hash);
-            if (!ChangePassword(puser, new_hash, PASSWORD_FORMAT_HASH))
+            if (hash[0] != '!')
             {
-                return false;
+                char new_hash[strlen(hash) + 2];
+                xsnprintf(new_hash, sizeof(new_hash), "!%s", hash);
+                if (!ChangePassword(puser, new_hash, PASSWORD_FORMAT_HASH))
+                {
+                    return false;
+                }
             }
         }
-    }
-    else
-    {
-        // Important to check. Password may already have been changed if that was also
-        // specified in the policy.
-        if (hash[0] == '!')
+        else
         {
-            if (!ChangePassword(puser, &hash[1], PASSWORD_FORMAT_HASH))
+            if (hash[0] == '!')
             {
-                return false;
+                if (!ChangePassword(puser, &hash[1], PASSWORD_FORMAT_HASH))
+                {
+                    return false;
+                }
             }
         }
     }
@@ -1119,18 +1149,26 @@ static bool DoCreateUser(const char *puser, User u, enum cfopaction action,
         StringAppend(cmd, u.shell, sizeof(cmd));
         StringAppend(cmd, "\"", sizeof(cmd));
     }
+
+#ifndef __hpux
+    // HP-UX has two variants of useradd, the normal one which does
+    // not support -M and one variant to modify default values which
+    // does take -M and yes or no
+    // Since both are output with -h SupportOption incorrectly reports
+    // -M as supported
     if (SupportsOption(USERADD, "-M"))
     {
         // Prevents creation of home_dir.
         // We want home_bundle to do that.
         StringAppend(cmd, " -M", sizeof(cmd));
     }
+#endif
     StringAppend(cmd, " ", sizeof(cmd));
     StringAppend(cmd, puser, sizeof(cmd));
 
     if (action == cfa_warn || DONTDO)
     {
-        Log(LOG_LEVEL_NOTICE, "Need to create user '%s'.", puser);
+        Log(LOG_LEVEL_WARNING, "Need to create user '%s'.", puser);
         return false;
     }
     else
@@ -1199,7 +1237,7 @@ static bool DoRemoveUser (const char *puser, enum cfopaction action)
 
     if (action == cfa_warn || DONTDO)
     {
-        Log(LOG_LEVEL_NOTICE, "Need to remove user '%s'.", puser);
+        Log(LOG_LEVEL_WARNING, "Need to remove user '%s'.", puser);
         return false;
     }
 
@@ -1233,6 +1271,8 @@ static bool DoModifyUser (const char *puser, User u, const struct passwd *passwd
         StringAppend(cmd, "\"", sizeof(cmd));
     }
 
+#ifndef __hpux
+    // HP-UX does not support -G with empty argument
     if (CFUSR_CHECKBIT (changemap, i_groups) != 0)
     {
         /* Work around bug on SUSE. If secondary groups contain a group that is
@@ -1243,6 +1283,7 @@ static bool DoModifyUser (const char *puser, User u, const struct passwd *passwd
         */
         StringAppend(cmd, " -G \"\"", sizeof(cmd));
     }
+#endif
 
     if (CFUSR_CHECKBIT (changemap, i_home) != 0)
     {
@@ -1265,7 +1306,7 @@ static bool DoModifyUser (const char *puser, User u, const struct passwd *passwd
     {
         if (action == cfa_warn || DONTDO)
         {
-            Log(LOG_LEVEL_NOTICE, "Need to change password for user '%s'.", puser);
+            Log(LOG_LEVEL_WARNING, "Need to change password for user '%s'.", puser);
             return false;
         }
         else
@@ -1281,16 +1322,26 @@ static bool DoModifyUser (const char *puser, User u, const struct passwd *passwd
     {
         if (action == cfa_warn || DONTDO)
         {
-            Log(LOG_LEVEL_NOTICE, "Need to %s account for user '%s'.",
+            Log(LOG_LEVEL_WARNING, "Need to %s account for user '%s'.",
                 (u.policy == USER_STATE_LOCKED) ? "lock" : "unlock", puser);
             return false;
         }
         else
         {
             const char *hash;
-            if (!GetPasswordHash(puser, passwd_info, &hash))
+            if (CFUSR_CHECKBIT(changemap, i_password) == 0)
             {
-                return false;
+                if (!GetPasswordHash(puser, passwd_info, &hash))
+                {
+                    return false;
+                }
+            }
+            else
+            {
+                // Don't unlock the hash if we already set the password. Our
+                // cached value in passwd_info->pw_passwd will be wrong, and the
+                // account will already have been unlocked anyway.
+                hash = NULL;
             }
             if (!SetAccountLocked(puser, hash, (u.policy == USER_STATE_LOCKED)))
             {
@@ -1304,14 +1355,24 @@ static bool DoModifyUser (const char *puser, User u, const struct passwd *passwd
     CFUSR_CLEARBIT(changemap, i_locked);
     if (action == cfa_warn || DONTDO)
     {
-        Log(LOG_LEVEL_NOTICE, "Need to update user attributes (command '%s').", cmd);
+        Log(LOG_LEVEL_WARNING, "Need to update user attributes (command '%s').", cmd);
         return false;
     }
     else if (changemap != 0)
     {
-        if (!ExecuteUserCommand(puser, cmd, sizeof(cmd), "modifying", "Modifying"))
+#ifdef __hpux
+        // This is to overcome the Suse hack above which does not work on HP-UX and thus we
+        // risk getting an empty command if change of secondary groups is the only change
+        // Only run for other changes than i_groups, otherwise the command will be empty
+        uint32_t changemap_without_groups = changemap;
+        CFUSR_CLEARBIT(changemap_without_groups, i_groups);
+        if(changemap_without_groups != 0)
+#endif
         {
-            return false;
+            if (!ExecuteUserCommand(puser, cmd, sizeof(cmd), "modifying", "Modifying"))
+            {
+                return false;
+            }
         }
         if (CFUSR_CHECKBIT (changemap, i_groups) != 0)
         {

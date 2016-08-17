@@ -77,15 +77,16 @@ static char *NewIndexKey(char type, const char *name, int *size)
 
 // "H_" plus pathname plus index_str in one block + \0
 
-    *size = strlen(name) + CHANGES_HASH_FILE_NAME_OFFSET + 3;
+    const size_t len = strlen(name);
+    *size = len + CHANGES_HASH_FILE_NAME_OFFSET + 3;
 
     chk_key = xcalloc(1, *size);
 
 // Data start after offset for index
 
-    strncpy(chk_key, "H_", 2);
-    strncpy(chk_key + 2, HashNameFromId(type), CHANGES_HASH_STRING_LEN);
-    strncpy(chk_key + 2 + CHANGES_HASH_FILE_NAME_OFFSET, name, strlen(name));
+    strlcpy(chk_key, "H_", 2);
+    strlcpy(chk_key + 2, HashNameFromId(type), CHANGES_HASH_STRING_LEN);
+    memcpy(chk_key + 2 + CHANGES_HASH_FILE_NAME_OFFSET, name, len);
     return chk_key;
 }
 
@@ -304,8 +305,8 @@ static bool OpenChangesDB(CF_DB **db)
     }
 
     struct stat statbuf;
-    char *old_checksums_db = DBIdToPath(GetWorkDir(), dbid_checksums);
-    char *old_filestats_db = DBIdToPath(GetWorkDir(), dbid_filestats);
+    char *old_checksums_db = DBIdToPath(dbid_checksums);
+    char *old_filestats_db = DBIdToPath(dbid_filestats);
 
     if (stat(old_checksums_db, &statbuf) != -1)
     {
@@ -790,7 +791,7 @@ void FileChangesLogChange(const char *file, FileState status, char *msg, const P
 
 /* This is inefficient but we don't want to lose any data */
 
-    snprintf(fname, CF_BUFSIZE, "%s/state/%s", CFWORKDIR, CF_FILECHANGE_NEW);
+    snprintf(fname, CF_BUFSIZE, "%s/%s", GetStateDir(), CF_FILECHANGE_NEW);
     MapName(fname);
 
 #ifndef __MINGW32__

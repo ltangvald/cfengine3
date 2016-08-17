@@ -24,8 +24,6 @@
 
 #include <platform.h>
 #include <cfnet.h>                                            /* CF_BUFSIZE */
-#include <cf3.defs.h>
-#include <cf3.extern.h>                                    /* BINDINTERFACE */
 #include <net.h>
 #include <classic.h>
 #include <tls_generic.h>
@@ -34,10 +32,20 @@
 #include <misc_lib.h>
 
 
+/* TODO remove libpromises dependency. */
+extern char BINDINTERFACE[];                  /* cf3globals.c, cf3.extern.h */
+
 
 /**
  * @param len is the number of bytes to send, or 0 if buffer is a
  *        '\0'-terminated string so strlen(buffer) can used.
+ * @return -1 in case of error or connection closed
+ *         (also currently returns 0 for success but don't count on it)
+ * @NOTE #buffer can't be of zero length, our protocol
+ *       does not allow empty transactions! The reason is that
+ *       ReceiveTransaction() can't differentiate between that
+ *       and connection closed.
+ * @NOTE (len <= CF_BUFSIZE - CF_INBAND_OFFSET)
  */
 int SendTransaction(const ConnectionInfo *conn_info,
                     const char *buffer, int len, char status)
@@ -51,6 +59,10 @@ int SendTransaction(const ConnectionInfo *conn_info,
     {
         len = strlen(buffer);
     }
+
+    /* Not allowed to send zero-payload packets, because
+       (ReceiveTransaction() == 0) currently means connection closed. */
+    assert(len > 0);
 
     if (len > CF_BUFSIZE - CF_INBAND_OFFSET)
     {
@@ -67,77 +79,133 @@ int SendTransaction(const ConnectionInfo *conn_info,
     LogRaw(LOG_LEVEL_DEBUG, "SendTransaction data: ",
            work + CF_INBAND_OFFSET, len);
 
-    switch(ConnectionInfoProtocolVersion(conn_info))
+    switch(conn_info->protocol)
     {
+
     case CF_PROTOCOL_CLASSIC:
-        ret = SendSocketStream(ConnectionInfoSocket(conn_info), work,
+        ret = SendSocketStream(conn_info->sd, work,
                                len + CF_INBAND_OFFSET);
         break;
+
     case CF_PROTOCOL_TLS:
-        ret = TLSSend(ConnectionInfoSSL(conn_info), work, len + CF_INBAND_OFFSET);
+        ret = TLSSend(conn_info->ssl, work, len + CF_INBAND_OFFSET);
+        if (ret <= 0)
+        {
+            ret = -1;
+        }
         break;
+
     default:
         UnexpectedError("SendTransaction: ProtocolVersion %d!",
-                        ConnectionInfoProtocolVersion(conn_info));
+                        conn_info->protocol);
         ret = -1;
     }
 
     if (ret == -1)
-        return -1;
+    {
+        return -1;                                              /* error */
+    }
     else
+    {
+        /* SSL_MODE_AUTO_RETRY guarantees no partial writes. */
+        assert(ret == len + CF_INBAND_OFFSET);
+
         return 0;
+    }
 }
 
 /*************************************************************************/
 
 /**
- *  @return 0 in case of socket closed, -1 in case of other error, or
- *          >0 the number of bytes read.
+ *  Receive a transaction packet of at most CF_BUFSIZE-1 bytes, and
+ *  NULL-terminate it.
+ *
+ *  @return 0 in case of socket closed, -1 in case of other error or timeout.
+ *              In both cases the connection MAY NOT BE FINALISED!
+ *          >0 the number of bytes read, transaction was successfully received.
+ *
+ *  @TODO shutdown() the connection in all cases were this function returns -1,
+ *        in order to protect against future garbage reads.
  */
-int ReceiveTransaction(const ConnectionInfo *conn_info, char *buffer, int *more)
+int ReceiveTransaction(ConnectionInfo *conn_info, char *buffer, int *more)
 {
     char proto[CF_INBAND_OFFSET + 1] = { 0 };
-    char status = 'x';
-    unsigned int len = 0;
     int ret;
 
     /* Get control channel. */
-    switch(ConnectionInfoProtocolVersion(conn_info))
+    switch(conn_info->protocol)
     {
     case CF_PROTOCOL_CLASSIC:
-        ret = RecvSocketStream(ConnectionInfoSocket(conn_info), proto, CF_INBAND_OFFSET);
+        ret = RecvSocketStream(conn_info->sd, proto, CF_INBAND_OFFSET);
         break;
     case CF_PROTOCOL_TLS:
-        ret = TLSRecv(ConnectionInfoSSL(conn_info), proto, CF_INBAND_OFFSET);
+        ret = TLSRecv(conn_info->ssl, proto, CF_INBAND_OFFSET);
         break;
     default:
         UnexpectedError("ReceiveTransaction: ProtocolVersion %d!",
-                        ConnectionInfoProtocolVersion(conn_info));
+                        conn_info->protocol);
         ret = -1;
     }
+
+    /* If error occured or recv() timeout or if connection was gracefully
+     * closed. Connection has been finalised. */
     if (ret == -1 || ret == 0)
+    {
+        /* We are experiencing problems with receiving data from server.
+         * This might lead to packages being not delivered in correct
+         * order and unexpected issues like directories being replaced
+         * with files.
+         * In order to make sure that file transfer is reliable we have to
+         * close connection to avoid broken packages being received. */
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
         return ret;
+    }
+    else if (ret != CF_INBAND_OFFSET)
+    {
+        /* If we received less bytes than expected. Might happen
+         * with TLSRecv(). */
+        Log(LOG_LEVEL_ERR,
+            "ReceiveTransaction: bogus short header (%d bytes: '%s')",
+            ret, proto);
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
+        return -1;
+    }
 
     LogRaw(LOG_LEVEL_DEBUG, "ReceiveTransaction header: ", proto, ret);
 
-    ret = sscanf(proto, "%c %u", &status, &len);
+    char status = 'x';
+    int len = 0;
+
+    ret = sscanf(proto, "%c %d", &status, &len);
     if (ret != 2)
     {
         Log(LOG_LEVEL_ERR,
-            "ReceiveTransaction: Bad packet -- bogus header: %s", proto);
+            "ReceiveTransaction: bogus header: %s", proto);
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
+        return -1;
+    }
+
+    if (status != CF_MORE && status != CF_DONE)
+    {
+        Log(LOG_LEVEL_ERR,
+            "ReceiveTransaction: bogus header (more='%c')", status);
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
         return -1;
     }
     if (len > CF_BUFSIZE - CF_INBAND_OFFSET)
     {
         Log(LOG_LEVEL_ERR,
-            "ReceiveTransaction: Bad packet -- too long (len=%d)", len);
+            "ReceiveTransaction: packet too long (len=%d)", len);
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
         return -1;
     }
-    if (status != CF_MORE && status != CF_DONE)
+    else if (len <= 0)
     {
+        /* Zero-length packets are disallowed, because
+         * ReceiveTransaction() == 0 currently means connection closed. */
         Log(LOG_LEVEL_ERR,
-            "ReceiveTransaction: Bad packet -- bogus header (more='%c')",
-            status);
+            "ReceiveTransaction: packet too short (len=%d)", len);
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
         return -1;
     }
 
@@ -158,24 +226,161 @@ int ReceiveTransaction(const ConnectionInfo *conn_info, char *buffer, int *more)
     }
 
     /* Get data. */
-    switch(ConnectionInfoProtocolVersion(conn_info))
+    switch(conn_info->protocol)
     {
     case CF_PROTOCOL_CLASSIC:
-        ret = RecvSocketStream(ConnectionInfoSocket(conn_info), buffer, len);
+        ret = RecvSocketStream(conn_info->sd, buffer, len);
         break;
     case CF_PROTOCOL_TLS:
-        ret = TLSRecv(ConnectionInfoSSL(conn_info), buffer, len);
+        ret = TLSRecv(conn_info->ssl, buffer, len);
         break;
     default:
         UnexpectedError("ReceiveTransaction: ProtocolVersion %d!",
-                        ConnectionInfoProtocolVersion(conn_info));
+                        conn_info->protocol);
         ret = -1;
+    }
+
+    if (ret <= 0)
+    {
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
+        return ret;
+    }
+    else if (ret != len)
+    {
+        /*
+         * Should never happen except with TLS, given that we are using
+         * SSL_MODE_AUTO_RETRY and that transaction payload < CF_BUFSIZE < TLS
+         * record size, it can currently only happen if the other side does
+         * TLSSend(wrong_number) for the transaction.
+         *
+         * TODO IMPORTANT terminate TLS session in that case.
+         */
+        Log(LOG_LEVEL_ERR,
+            "Partial transaction read %d != %d bytes!",
+            ret, len);
+        conn_info->status = CONNECTIONINFO_STATUS_BROKEN;
+        return -1;
     }
 
     LogRaw(LOG_LEVEL_DEBUG, "ReceiveTransaction data: ", buffer, ret);
 
     return ret;
 }
+
+/* BWlimit global variables
+
+  Throttling happens for all network interfaces, all traffic being sent for
+  any connection of this process (cf-agent or cf-serverd).
+  We need a lock, to avoid concurrent writes to "bwlimit_next".
+  Then, "bwlimit_next" is the absolute time (as of clock_gettime() ) that we
+  are clear to send, after. It is incremented with the delay for every packet
+  scheduled for sending. Thus, integer arithmetic will make sure we wait for
+  the correct amount of time, in total.
+ */
+
+#ifndef _WIN32
+static pthread_mutex_t bwlimit_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct timespec bwlimit_next = {0, 0L};
+#endif
+
+uint32_t bwlimit_kbytes = 0; /* desired limit, in kB/s */
+
+
+/** Throttle traffic, if next packet happens too soon after the previous one
+ * 
+ *  This function is global, across all network operations (and interfaces, perhaps)
+ *  @param tosend Length of current packet being sent out (in bytes)
+ */
+
+#ifdef CLOCK_MONOTONIC
+# define PREFERRED_CLOCK CLOCK_MONOTONIC
+#else
+/* Some OS-es don't have monotonic clock, but we can still use the
+ * next available one */
+# define PREFERRED_CLOCK CLOCK_REALTIME
+#endif
+
+void EnforceBwLimit(int tosend)
+{
+    if (!bwlimit_kbytes)
+    {
+        /* early return, before any expensive syscalls */
+        return;
+    }
+
+#ifdef _WIN32
+    Log(LOG_LEVEL_WARNING, "Bandwidth limiting with \"bwlimit\" is not supported on Windows.");
+    (void)tosend; // Avoid "unused" warning.
+    return;
+#else
+
+    const uint32_t u_10e6 = 1000000L;
+    const uint32_t u_10e9 = 1000000000L;
+    struct timespec clock_now = {0, 0L};
+
+    if (pthread_mutex_lock(&bwlimit_lock) == 0)
+    {
+        clock_gettime(PREFERRED_CLOCK, &clock_now);
+
+        if ((bwlimit_next.tv_sec < clock_now.tv_sec) ||
+            ( (bwlimit_next.tv_sec == clock_now.tv_sec) &&
+              (bwlimit_next.tv_nsec < clock_now.tv_nsec) ) )
+        {
+            /* penalty has expired, we can immediately send data. But reset the timestamp */
+            bwlimit_next = clock_now;
+            clock_now.tv_sec = 0;
+            clock_now.tv_nsec = 0L;
+        }
+        else
+        {
+            clock_now.tv_sec = bwlimit_next.tv_sec - clock_now.tv_sec;
+            clock_now.tv_nsec = bwlimit_next.tv_nsec - clock_now.tv_nsec;
+            if (clock_now.tv_nsec < 0L)
+            {
+                clock_now.tv_sec --;
+                clock_now.tv_nsec += u_10e9;
+            }
+        }
+
+        uint64_t delay = ((uint64_t) tosend * u_10e6) / bwlimit_kbytes; /* in ns */
+
+        bwlimit_next.tv_sec += (delay / u_10e9);
+        bwlimit_next.tv_nsec += (long) (delay % u_10e9);
+        if (bwlimit_next.tv_nsec >= u_10e9)
+        {
+            bwlimit_next.tv_sec++;
+            bwlimit_next.tv_nsec -= u_10e9;
+        }
+
+        if (bwlimit_next.tv_sec > 20)
+        {
+            /* Upper limit of 20sec for penalty. This will avoid huge wait if
+             * our clock has jumped >minutes back in time. Still, assuming that
+             * most of our packets are <= 2048 bytes, the lower bwlimit is bound
+             * to 102.4 Bytes/sec. With 65k packets (rare) is 3.7kBytes/sec in
+             * that extreme case.
+             * With more clients hitting a single server, this lower bound is
+             * multiplied by num of clients, eg. 102.4kBytes/sec for 1000 reqs.
+             * simultaneously.
+             */
+            bwlimit_next.tv_sec = 20;
+        }
+        pthread_mutex_unlock(&bwlimit_lock);
+    }
+
+    /* Even if we push our data every few bytes to the network interface,
+      the software+hardware buffers will queue it and send it in bursts,
+      anyway. It is more likely that we will waste CPU sys-time calling
+      nanosleep() for such short delays.
+      So, sleep only if we have >1ms penalty
+    */
+    if (clock_now.tv_sec > 0 || ( (clock_now.tv_sec == 0) && (clock_now.tv_nsec >= u_10e6))  )
+    {
+        nanosleep(&clock_now, NULL);
+    }
+#endif // !_WIN32
+}
+
 
 /*************************************************************************/
 
@@ -429,7 +634,7 @@ bool TryConnect(int sd, unsigned long timeout_ms,
         }
     }
 
-    /* Connection suceeded, return to blocking mode. */
+    /* Connection succeeded, return to blocking mode. */
     ret = fcntl(sd, F_SETFL, arg);
     if (ret == -1)
     {
@@ -479,7 +684,7 @@ int SetReceiveTimeout(int fd, unsigned long ms)
 
     if (ret != 0)
     {
-        Log(LOG_LEVEL_INFO,
+        Log(LOG_LEVEL_VERBOSE,
             "Failed to set socket timeout to %lu milliseconds.", ms);
         return -1;
     }

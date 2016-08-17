@@ -1,3 +1,26 @@
+dnl
+dnl  Copyright (C) CFEngine AS
+dnl
+dnl  This file is part of CFEngine 3 - written and maintained by CFEngine AS.
+dnl
+dnl  This program is free software; you can redistribute it and/or modify it
+dnl  under the terms of the GNU General Public License as published by the
+dnl  Free Software Foundation; version 3.
+dnl
+dnl  This program is distributed in the hope that it will be useful,
+dnl  but WITHOUT ANY WARRANTY; without even the implied warranty of
+dnl  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+dnl  GNU General Public License for more details.
+dnl
+dnl You should have received a copy of the GNU General Public License
+dnl along with this program; if not, write to the Free Software
+dnl Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+dnl
+dnl To the extent this program is licensed as part of the Enterprise
+dnl versions of CFEngine, the applicable Commercial Open Source License
+dnl (COSL) may apply to this file if you as a licensee so wish it. See
+dnl included file COSL.txt.
+dnl
 dnl ##########################################################################
 dnl #
 dnl # Build CFEngine
@@ -6,7 +29,7 @@ dnl # Run ./autogen.sh to build configure script
 dnl #
 dnl ##########################################################################
 
-AC_PREREQ(2.59)
+AC_PREREQ(2.63)
 
 AC_INIT
 AC_CONFIG_SRCDIR([libpromises/generic_agent.c])
@@ -18,15 +41,27 @@ dnl AM_INIT_AUTOMAKE.
 dnl
 AC_CHECK_PROG(MAKEINFO, makeinfo, makeinfo)
 
-define([revision], esyscmd([sh -c "(git rev-list -1 --abbrev-commit HEAD || echo unknown) | tr -d '\n'" 2>/dev/null]))dnl
+m4_define([revision], m4_normalize(m4_esyscmd([git rev-list -1 --abbrev-commit HEAD])))
 
-dnl
-dnl The version in the next line is the only one to set
-dnl
+m4_define([cfversion_from_env], m4_normalize(m4_esyscmd([echo $EXPLICIT_VERSION])))
+m4_ifval(cfversion_from_env, [
+    m4_define([cfversion], cfversion_from_env)
+], [
+    m4_define([cfversion_from_detect], m4_normalize(m4_esyscmd([misc/determine-version.py])))
+    m4_if(m4_sysval, 0, [], [
+        m4_fatal([Could not determine CFEngine version. Please set EXPLICIT_VERSION in the environment or make sure all git tags are up to date.])
+    ])
+    m4_define([cfversion], cfversion_from_detect[]a1.revision)
+    m4_undefine([cfversion_from_detect])
+])
 
 _AM_SET_OPTION([tar-ustar])
-AM_INIT_AUTOMAKE(cfengine, 3.6.2)
+AM_INIT_AUTOMAKE(cfengine, cfversion)
 AM_MAINTAINER_MODE([enable])
+
+m4_undefine([revision])
+m4_undefine([cfversion])
+m4_undefine([cfversion_from_env])
 
 AC_DEFINE(BUILD_YEAR, esyscmd([date +%Y | tr -d '\n']), "Software build year")
 
@@ -75,6 +110,7 @@ m4_ifdef([LT_INIT],
 AM_PROG_LEX
 AC_PROG_YACC
 AC_PROG_INSTALL
+AC_PATH_PROG([PERL], [perl])
 AC_CONFIG_LIBOBJ_DIR(libcompat)
 AC_PATH_PROG(GETCONF, getconf, false, $PATH:$prefix/bin:/usr/bin:/usr/local/bin:/sw/bin)
 AM_CONDITIONAL(CROSS_COMPILING, test "x$cross_compiling" = "xyes")
@@ -136,6 +172,7 @@ AS_IF([test x"$enable_fhs" = xyes], [
   INPUTDIR='default'
   LOGDIR='${localstatedir}/lib/cfengine'
   PIDDIR='${localstatedir}/lib/cfengine'
+  STATEDIR='default'
 ], [
   if test x"$prefix" = xNONE || test x"$prefix" = x/var/cfengine; then
     prefix=/var/cfengine
@@ -146,6 +183,7 @@ AS_IF([test x"$enable_fhs" = xyes], [
         INPUTDIR=default
         LOGDIR=$(cmd /c "echo %PROGRAMFILES%\\Cfengine" | sed 's/\\/\\\\/g')
         PIDDIR=$(cmd /c "echo %PROGRAMFILES%\\Cfengine" | sed 's/\\/\\\\/g')
+        STATEDIR=default
       ;;
       *)
         WORKDIR=/var/cfengine
@@ -153,6 +191,7 @@ AS_IF([test x"$enable_fhs" = xyes], [
         INPUTDIR=default
         LOGDIR=/var/cfengine
         PIDDIR=/var/cfengine
+        STATEDIR=default
       ;;
     esac
   else
@@ -161,6 +200,7 @@ AS_IF([test x"$enable_fhs" = xyes], [
     INPUTDIR="default"
     LOGDIR="${localstatedir}/cfengine"
     PIDDIR="${localstatedir}/cfengine"
+    STATEDIR="default"
   fi
 
   sbindir='${exec_prefix}/bin' # /var/cfengine/bin despite being sbin_?
@@ -447,6 +487,19 @@ if test "x$with_libacl" != xno; then
   ])
  fi
 
+dnl libyaml
+
+AC_ARG_WITH([libyaml],
+    [AS_HELP_STRING([--with-libyaml[[=PATH]]], [Specify libyaml path])], [], [with_libyaml=check])
+
+if test "x$with_libyaml" != xno; then
+  CF3_WITH_LIBRARY(libyaml, [
+    AC_CHECK_LIB(yaml, yaml_parser_initialize, [], [if test "x$with_libyaml" != xcheck; then AC_MSG_ERROR(Cannot find libyaml library); fi])
+    AC_CHECK_HEADERS([yaml.h], [libyaml_header_found=yes])
+    if test "x$libyaml_header_found" != "xyes" && test "x$with_libyaml" != xcheck; then AC_MSG_ERROR(Cannot find libyaml library headers); fi
+  ])
+ fi
+
 dnl libxml2
 
 AC_ARG_WITH([libxml2],
@@ -528,6 +581,11 @@ AC_CHECK_HEADERS(sys/mount.h, [], [], [AC_INCLUDES_DEFAULT
 # Required on BSD to get struct sockaddr_dl (for retrieving MAC addresses from getifaddrs())
 AC_CHECK_HEADERS(net/if_dl.h)
 
+# Required on Solaris to get struct arpreq (for retrieving MAC addresses)
+AC_CHECK_HEADERS(net/if_arp.h, , , [AC_INCLUDES_DEFAULT
+#include <sys/socket.h>
+])
+
 AC_CHECK_HEADERS(utime.h)
 AC_CHECK_HEADERS(time.h)
 AC_CHECK_HEADERS(sys/time.h)
@@ -554,6 +612,8 @@ AC_CHECK_HEADERS(sys/jail.h, [], [], [AC_INCLUDES_DEFAULT
 # include <sys/param.h>
 #endif
 ])
+AC_CHECK_HEADERS(net/route.h netinet/in.h netinet/ip.h)
+
 
 AC_HEADER_STDC
 AC_HEADER_TIME
@@ -687,6 +747,10 @@ AC_CHECK_DECLS(getline, [], [], [#define _GNU_SOURCE 1
 AC_INCLUDES_DEFAULT])
 AC_REPLACE_FUNCS(getline)
 
+AC_CHECK_DECLS(strchrnul, [], [], [#define _GNU_SOURCE 1
+AC_INCLUDES_DEFAULT])
+AC_REPLACE_FUNCS(strchrnul)
+
 AC_CHECK_DECLS(localtime_r, [], [], [[#include <time.h>]])
 AC_REPLACE_FUNCS(localtime_r)
 
@@ -697,6 +761,11 @@ AC_CHECK_DECLS(isfinite, [], [], [[#include <math.h>]])
 AC_CHECK_FUNCS(getpwent setpwent endpwent)
 
 AC_CHECK_FUNCS(fgetspent lckpwdf ulckpwdf)
+AC_CHECK_LIB([sec], [fgetspent], [
+    AC_DEFINE([HAVE_LIBSEC], 1, [Define if -lsec is available])
+    AC_DEFINE([HAVE_FGETSPENT], 1, [Define if fgetspent is available])
+    LIBS="-lsec $LIBS"
+])
 
 AC_CHECK_DECLS(getloadavg)
 AC_FUNC_GETLOADAVG
@@ -704,6 +773,13 @@ AC_FUNC_GETLOADAVG
 AC_C_BIGENDIAN
 AC_CHECK_HEADERS([endian.h])
 AC_CHECK_DECLS(le32toh, [], [], [[#include <endian.h>]])
+
+AC_CHECK_DECLS(closefrom, [], [], [[#include <unistd.h>
+                                    #include <stdlib.h>]])
+AC_REPLACE_FUNCS(closefrom)
+
+AC_CHECK_HEADERS([sys/pstat.h])
+AC_CHECK_FUNCS(pstat_getfile2)
 
 CF3_PATH_ROOT_PROG([CHPASSWD], [chpasswd], [], [/sbin:/usr/sbin:/bin:/usr/bin:$PATH])
 AS_IF([test "x$CHPASSWD" != "x"],
@@ -950,10 +1026,19 @@ AC_REPLACE_FUNCS(pthread_attr_setstacksize)
 AC_CHECK_DECLS(pthread_sigmask, [], [], [[#include <signal.h>]])
 AC_REPLACE_FUNCS(pthread_sigmask)
 
-AC_CHECK_DECLS([openat], [], [], [[#include <fcntl.h>]])
-AC_CHECK_DECLS([fstatat], [], [], [[#include <sys/stat.h>]])
-AC_CHECK_DECLS([fchownat], [], [], [[#include <unistd.h>]])
-AC_REPLACE_FUNCS(openat fstatat fchownat)
+AC_CHECK_DECLS(sched_yield, [], [], [[#include <sched.h>]])
+AC_CHECK_FUNCS(sched_yield)
+
+AC_CHECK_DECLS([openat], [], [], [[#define _GNU_SOURCE 1
+                                   #include <fcntl.h>]])
+AC_CHECK_DECLS([fstatat], [], [], [[#define _GNU_SOURCE 1
+                                    #include <sys/stat.h>]])
+AC_CHECK_DECLS([fchownat], [], [], [[#define _GNU_SOURCE 1
+                                     #include <unistd.h>]])
+AC_CHECK_DECLS([readlinkat], [], [], [[#define _GNU_SOURCE 1
+                                       #include <unistd.h>]])
+AC_REPLACE_FUNCS(openat fstatat fchownat readlinkat)
+cf3_FUNC_FCHMODAT
 
 AC_CHECK_DECLS([log2], [], [], [[#include <math.h>]])
 AC_REPLACE_FUNCS(log2)
@@ -1042,16 +1127,16 @@ dnl #######################################################################
 dnl Enable extended attributes. Used for SELinux and ACLs
 dnl #######################################################################
 
-AC_CHECK_FUNCS(listxattr, [AC_DEFINE(WITH_XATTR, 1, [Define if you have a libc that supports extended attributes])])
+AC_CHECK_FUNCS(llistxattr, [AC_DEFINE(WITH_XATTR, 1, [Define if you have a libc that supports extended attributes])])
 AC_CHECK_HEADERS([attr/xattr.h sys/xattr.h])
 
 AC_MSG_CHECKING([whether xattr functions have extra arguments])
 AC_COMPILE_IFELSE([AC_LANG_PROGRAM([#include <sys/types.h>
                                     #include <sys/xattr.h>],
-                                    [(void)listxattr("", 0, 0, 0);
-                                    (void)getxattr("", "", 0, 0, 0, 0);
-                                    (void)setxattr("", "", "", 0, 0, 0);
-                                    (void)removexattr("", "", 0);])],
+                                    [(void)llistxattr("", 0, 0, 0);
+                                    (void)lgetxattr("", "", 0, 0, 0, 0);
+                                    (void)lsetxattr("", "", "", 0, 0, 0);
+                                    (void)lremovexattr("", "", 0);])],
                   [AC_DEFINE(WITH_XATTR_EXTRA_ARGS, 1, [Define if your xattr implementation has extra arguments])]
                   [AC_MSG_RESULT([yes])],
                   [AC_MSG_RESULT([no])])
@@ -1066,10 +1151,10 @@ dnl ######################################################################
 dnl Collect all the options
 dnl ######################################################################
 
-CORE_CPPFLAGS="$LMDB_CPPFLAGS $TOKYOCABINET_CPPFLAGS $QDBM_CPPFLAGS $PCRE_CPPFLAGS $OPENSSL_CPPFLAGS $SQLITE3_CPPFLAGS $LIBACL_CPPFLAGS $POSTGRESQL_CPPFLAGS $MYSQL_CPPFLAGS $LIBXML2_CPPFLAGS $CPPFLAGS"
-CORE_CFLAGS="$LMDB_CFLAGS $TOKYOCABINET_CFLAGS $QDBM_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $LIBACL_CFLAGS $POSTGRESQL_CFLAGS $MYSQL_CFLAGS $LIBXML2_CFLAGS $CFLAGS"
-CORE_LDFLAGS="$LMDB_LDFLAGS $TOKYOCABINET_LDFLAGS $QDBM_LDFLAGS $PCRE_LDFLAGS $OPENSSL_LDFLAGS $SQLITE3_LDFLAGS $LIBACL_LDFLAGS $POSTGRESQL_LDFLAGS $MYSQL_LDFLAGS $LIBXML2_LDFLAGS $LDFLAGS"
-CORE_LIBS="$LMDB_LIBS $TOKYOCABINET_LIBS $QDBM_LIBS $PCRE_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $LIBACL_LIBS $POSTGRESQL_LIBS $MYSQL_LIBS $LIBXML2_LIBS $LIBS"
+CORE_CPPFLAGS="$LMDB_CPPFLAGS $TOKYOCABINET_CPPFLAGS $QDBM_CPPFLAGS $PCRE_CPPFLAGS $OPENSSL_CPPFLAGS $SQLITE3_CPPFLAGS $LIBACL_CPPFLAGS $LIBYAML_CPPFLAGS $POSTGRESQL_CPPFLAGS $MYSQL_CPPFLAGS $LIBXML2_CPPFLAGS $CPPFLAGS"
+CORE_CFLAGS="$LMDB_CFLAGS $TOKYOCABINET_CFLAGS $QDBM_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $LIBACL_CFLAGS $LIBYAML_CFLAGS $POSTGRESQL_CFLAGS $MYSQL_CFLAGS $LIBXML2_CFLAGS $CFLAGS"
+CORE_LDFLAGS="$LMDB_LDFLAGS $TOKYOCABINET_LDFLAGS $QDBM_LDFLAGS $PCRE_LDFLAGS $OPENSSL_LDFLAGS $SQLITE3_LDFLAGS $LIBACL_LDFLAGS $LIBYAML_LDFLAGS $POSTGRESQL_LDFLAGS $MYSQL_LDFLAGS $LIBXML2_LDFLAGS $LDFLAGS"
+CORE_LIBS="$LMDB_LIBS $TOKYOCABINET_LIBS $QDBM_LIBS $PCRE_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $LIBACL_LIBS $LIBYAML_LIBS $POSTGRESQL_LIBS $MYSQL_LIBS $LIBXML2_LIBS $LIBS"
 
 dnl ######################################################################
 dnl Make them available to subprojects.
@@ -1095,12 +1180,14 @@ case "$target_os" in
         AC_DEFINE(_XOPEN_SOURCE, 600, [SUSv3])
         AC_DEFINE(__EXTENSIONS__, 1, [Extended UNIX 98 interfaces])
         ;;
-   hpux*|hp-ux*) 
+   hpux*|hp-ux*)
+        dnl pstat* functions may fail with EOVERFLOW without this.
+        AC_DEFINE(_PSTAT64, 1, [Enable wide data structures everywhere])
         ;;
    aix*)
         CPPFLAGS="$CPPFLAGS -w"
         ;;
-   linux*|*bsd*gnu)
+   linux*|*bsd*|*gnu*)
         AC_CHECK_LIB(nss_nis, yp_get_default_domain)
         ;;
    freebsd*|dragonfly*)
@@ -1114,8 +1201,6 @@ case "$target_os" in
    qnx*)
         ;;
    openbsd*|obsd*)
-        ;;
-   gnu*)
         ;;
    sysv4.2MP|unix_sv*)
         ;;
@@ -1139,12 +1224,12 @@ dnl Configure LOCKDIR and LOGDIR
 dnl #####################################################################
 
 AC_ARG_WITH(workdir,
-    [  --with-workdir=WORKDIR  default internal for trusted cache ],
+    [  --with-workdir=WORKDIR  default for internal (trusted) working directory ],
     [
-        if test x$withval != x ; then
-            WORKDIR=$withval
-            LOGDIR=$withval
-            PIDDIR=$withval
+        if test "x$withval" != x ; then
+            WORKDIR="$withval"
+            LOGDIR="$withval"
+            PIDDIR="$withval"
         fi
     ],
 )
@@ -1157,10 +1242,10 @@ AC_DEFINE_UNQUOTED(WORKDIR, "${WORKDIR}", [Workdir location])
 AC_SUBST(workdir, "${WORKDIR}")
 
 AC_ARG_WITH(masterdir,
-    [  --with-masterdir=MASTERDIR  default internal for masterfiles directory ],
+    [  --with-masterdir=MASTERDIR  default for internal masterfiles directory ],
     [
-        if test x$withval != x ; then
-            MASTERDIR=$withval
+        if test "x$withval" != x ; then
+            MASTERDIR="$withval"
         fi
     ],
 )
@@ -1173,10 +1258,10 @@ AC_DEFINE_UNQUOTED(MASTERDIR, "${MASTERDIR}", [Masterfiles directory location])
 AC_SUBST(masterdir, "${MASTERDIR}")
 
 AC_ARG_WITH(inputdir,
-    [  --with-inputdir=INPUTDIR  default internal for inputs directory ],
+    [  --with-inputdir=INPUTDIR  default for internal inputs directory ],
     [
-        if test x$withval != x ; then
-            INPUTDIR=$withval
+        if test "x$withval" != x ; then
+            INPUTDIR="$withval"
         fi
     ],
 )
@@ -1189,10 +1274,10 @@ AC_DEFINE_UNQUOTED(INPUTDIR, "${INPUTDIR}", [Inputs directory location])
 AC_SUBST(inputdir, "${INPUTDIR}")
 
 AC_ARG_WITH(logdir,
-    [  --with-logdir=LOGDIR  default internal for log directory ],
+    [  --with-logdir=LOGDIR  default for internal log directory ],
     [
-        if test x$withval != x ; then
-            LOGDIR=$withval
+        if test "x$withval" != x ; then
+            LOGDIR="$withval"
         fi
     ],
 )
@@ -1205,10 +1290,10 @@ AC_DEFINE_UNQUOTED(LOGDIR, "${LOGDIR}", [Logdir location])
 AC_SUBST(logdir, "${LOGDIR}")
 
 AC_ARG_WITH(piddir,
-    [  --with-piddir=LOGDIR  default internal for pid directory ],
+    [  --with-piddir=LOGDIR  default for internal pid directory ],
     [
-        if test x$withval != x ; then
-            PIDDIR=$withval
+        if test "x$withval" != x ; then
+            PIDDIR="$withval"
         fi
     ],
 )
@@ -1220,6 +1305,22 @@ adl_RECURSIVE_EVAL("${PIDDIR}", PIDDIR)
 AC_DEFINE_UNQUOTED(PIDDIR, "${PIDDIR}", [piddir location])
 AC_SUBST(piddir, "${PIDDIR}")
 
+AC_ARG_WITH(statedir,
+    [  --with-statedir=STATEDIR  default for internal state directory ],
+    [
+        if test "x$withval" != x ; then
+            STATEDIR="$withval"
+        fi
+    ],
+)
+
+dnl Expand ${prefix} and whatnot in STATEDIR
+
+adl_RECURSIVE_EVAL("${STATEDIR}", STATEDIR)
+
+AC_DEFINE_UNQUOTED(STATEDIR, "${STATEDIR}", [State directory location])
+AC_SUBST(statedir, "${STATEDIR}")
+
 AC_ARG_WITH(shell, [AS_HELP_STRING([--with-shell=PATH],
                    [Specify path to POSIX-compatible shell (if not /bin/sh)])],
                    [],
@@ -1229,6 +1330,83 @@ if test "x$with_shell" = "xno"; then
    AC_MSG_ERROR([Please specify full path to POSIX-compatible shell])
 fi
 AC_DEFINE_UNQUOTED(SHELL_PATH, "$with_shell", [Path to the POSIX-compatible shell])
+
+dnl ######################################################################
+dnl init.d script installation
+dnl ######################################################################
+
+AC_ARG_WITH(init-script, AS_HELP_STRING([--with-init-script=PATH],
+    [Install init.d script in given path. The default is no, but if specified, the default path is platform specific.]),
+[
+    if test -n "$withval" && test "x$withval" != "xno"; then
+        if test "x$withval" = "xyes"; then
+            AS_CASE(["$target_os"],
+            [aix*],
+            [
+                INIT_D_PATH=/etc/rc.d/init.d
+            ],
+            [hpux*],
+            [
+                INIT_D_PATH=/sbin/init.d
+            ],
+            [
+                INIT_D_PATH=/etc/init.d
+            ])
+        else
+            INIT_D_PATH="$withval"
+        fi
+        AC_SUBST([INIT_D_PATH])
+        AC_CONFIG_FILES([misc/init.d/cfengine3], [chmod +x misc/init.d/cfengine3])
+    fi
+])
+AM_CONDITIONAL([WITH_INIT_D_SCRIPT], [test -n "$INIT_D_PATH"])
+
+dnl ######################################################################
+dnl systemd unit file installation
+dnl ######################################################################
+
+AC_ARG_WITH(systemd-service, AS_HELP_STRING([--with-systemd-service=PATH],
+    [Install systemd service file in given path. The default is no, but if specified, the default path is /usr/lib/systemd/system.]),
+[
+    if test -n "$withval" && test "x$withval" != "xno"; then
+        if test "x$withval" = "xyes"; then
+            SYSTEMD_SERVICE_PATH=/usr/lib/systemd/system
+        else
+            SYSTEMD_SERVICE_PATH="$withval"
+        fi
+        AC_SUBST([SYSTEMD_SERVICE_PATH])
+        AC_CONFIG_FILES([misc/systemd/cfengine3.service])
+        AC_CONFIG_FILES([misc/systemd/cfengine3-web.service])
+    fi
+])
+AM_CONDITIONAL([WITH_SYSTEMD_SERVICE], [test -n "$SYSTEMD_SERVICE_PATH"])
+
+AC_ARG_WITH(environment-path, AS_HELP_STRING([--with-environment-path=PATH],
+    [Specifies the location of the environment files for the platform. Currently used only by systemd.]))
+OS_ENVIRONMENT_PATH=
+if test -z "$with_environment_path" || test "$with_environment_path" = "yes"; then
+    if test -n "$SYSTEMD_SERVICE_PATH"; then
+        for i in /etc/sysconfig /etc/default; do
+            if test -d $i; then
+                OS_ENVIRONMENT_PATH=$i
+                break
+            fi
+        done
+        if test -z "$OS_ENVIRONMENT_PATH"; then
+            AC_MSG_ERROR([Unable to detect location of environment files on the platform (e.g. '/etc/sysconfig'). Please specify it using --with-environment-path, or turn off systemd support.])
+        fi
+    fi
+else
+    if test "$with_environment_path" = "no"; then
+        if test -n "$SYSTEMD_SERVICE_PATH"; then
+            AC_MSG_ERROR([It is not possible to both specify systemd support and not provide an environment path with --without-environment-path.])
+        fi
+    else
+        OS_ENVIRONMENT_PATH="$with_environment_path"
+    fi
+fi
+AC_SUBST([OS_ENVIRONMENT_PATH])
+
 
 dnl #####################################################################
 dnl Hostname and Version stuff
@@ -1355,6 +1533,12 @@ else
   AC_MSG_RESULT([-> libacl: disabled])
 fi
 
+if test "x$ac_cv_lib_yaml_yaml_parser_initialize" = xyes; then
+  AC_MSG_RESULT([-> libyaml: $LIBYAML_PATH])
+else
+  AC_MSG_RESULT([-> libyaml: disabled])
+fi
+
 if test "x$ac_cv_lib_xml2_xmlFirstElementChild" = xyes; then
   AC_MSG_RESULT([-> libxml2: $LIBXML2_PATH])
 else
@@ -1373,6 +1557,22 @@ else
   AC_MSG_RESULT([-> Enterprise extensions: Plugin or not included])
 fi
 
+if test -n "$INIT_D_PATH"; then
+  AC_MSG_RESULT([-> init.d script: $INIT_D_PATH])
+else
+  AC_MSG_RESULT([-> init.d script: disabled])
+fi
+
+if test -n "$SYSTEMD_SERVICE_PATH"; then
+  AC_MSG_RESULT([-> Systemd service: $SYSTEMD_SERVICE_PATH])
+else
+  AC_MSG_RESULT([-> Systemd service: disabled])
+fi
+
+if test -n "$OS_ENVIRONMENT_PATH"; then
+  AC_MSG_RESULT([-> Path of platform environment files: $OS_ENVIRONMENT_PATH])
+fi
+
 m4_indir(incstart[]incend, [nova/config.m4])
 
 AC_MSG_RESULT([-> Workdir: $WORKDIR])
@@ -1380,6 +1580,7 @@ AC_MSG_RESULT([-> Masterdir: $MASTERDIR])
 AC_MSG_RESULT([-> Inputdir: $INPUTDIR])
 AC_MSG_RESULT([-> Logdir: $LOGDIR])
 AC_MSG_RESULT([-> Piddir: $PIDDIR])
+AC_MSG_RESULT([-> Statedir: $STATEDIR])
 
 AC_MSG_RESULT( )
 
@@ -1404,6 +1605,7 @@ AC_CONFIG_FILES([Makefile
     cf-upgrade/Makefile
     cf-runagent/Makefile
     cf-serverd/Makefile
+    misc/Makefile
     ext/Makefile
     examples/Makefile
     tests/Makefile

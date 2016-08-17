@@ -33,6 +33,7 @@
 #include <misc_lib.h>
 #include <file_lib.h>
 #include <known_dirs.h>
+#include <bootstrap.h>
 
 #ifdef LMDB
 
@@ -55,6 +56,7 @@ typedef struct DBTxn_
     MDB_txn *txn;
     // Whether txn is a read/write (true) or read-only (false) transaction.
     bool rw_txn;
+    bool cursor_open;
 } DBTxn;
 
 struct DBCursorPriv_
@@ -66,9 +68,11 @@ struct DBCursorPriv_
     bool pending_delete;
 };
 
+static int DB_MAX_READERS = -1;
+
 /******************************************************************************/
 
-static int GetReadTransaction(DBPriv *db, MDB_txn **txn)
+static int GetReadTransaction(DBPriv *db, DBTxn **txn)
 {
     DBTxn *db_txn = pthread_getspecific(db->txn_key);
     int rc = MDB_SUCCESS;
@@ -88,12 +92,12 @@ static int GetReadTransaction(DBPriv *db, MDB_txn **txn)
         }
     }
 
-    *txn = db_txn->txn;
+    *txn = db_txn;
 
     return rc;
 }
 
-static int GetWriteTransaction(DBPriv *db, MDB_txn **txn)
+static int GetWriteTransaction(DBPriv *db, DBTxn **txn)
 {
     DBTxn *db_txn = pthread_getspecific(db->txn_key);
     int rc = MDB_SUCCESS;
@@ -127,7 +131,7 @@ static int GetWriteTransaction(DBPriv *db, MDB_txn **txn)
         }
     }
 
-    *txn = db_txn->txn;
+    *txn = db_txn;
 
     return rc;
 }
@@ -168,8 +172,38 @@ const char *DBPrivGetFileExtension(void)
 #define LMDB_MAXSIZE    104857600
 #endif
 
-/* Lastseen default number of maxreaders = 4x the default lmdb maxreaders */
-#define DEFAULT_LASTSEEN_MAXREADERS (126*4)
+void DBPrivSetMaximumConcurrentTransactions(int max_txn)
+{
+    DB_MAX_READERS = max_txn;
+}
+
+static int LmdbEnvOpen(MDB_env *env, const char *path, unsigned int flags, mdb_mode_t mode)
+{
+    /* There is a race condition in LMDB that will fail to open the database
+     * environment if another process is opening it at the exact same time. This
+     * condition is signaled by returning ENOENT, which we should never get
+     * otherwise. This can lead to error messages on a heavily loaded machine,
+     * so try to open it again after allowing other threads to finish their
+     * opening process. */
+    int attempts = 5;
+    while (attempts-- > 0)
+    {
+        int rc = mdb_env_open(env, path, flags, mode);
+        if (rc != ENOENT)
+        {
+            return rc;
+        }
+
+#if HAVE_DECL_SCHED_YIELD && defined(HAVE_SCHED_YIELD)
+        // Not required for this to work, but makes it less likely that the race
+        // condition will persist.
+        sched_yield();
+#endif
+    }
+
+    // Return EBUSY for an error message slightly more related to reality.
+    return EBUSY;
+}
 
 DBPriv *DBPrivOpenDB(const char *dbpath, dbid id)
 {
@@ -200,30 +234,62 @@ DBPriv *DBPrivOpenDB(const char *dbpath, dbid id)
               dbpath, mdb_strerror(rc));
         goto err;
     }
-    if (id == dbid_lastseen)
+    if (DB_MAX_READERS > 0)
     {
-        /* lastseen needs by default 4x more reader locks than other DBs*/
-        rc = mdb_env_set_maxreaders(db->env, DEFAULT_LASTSEEN_MAXREADERS);
+        rc = mdb_env_set_maxreaders(db->env, DB_MAX_READERS);
         if (rc)
         {
             Log(LOG_LEVEL_ERR, "Could not set maxreaders for database %s: %s",
-                  dbpath, mdb_strerror(rc));
+                dbpath, mdb_strerror(rc));
             goto err;
         }
     }
-    if (id != dbid_locks)
+
+    unsigned int open_flags = MDB_NOSUBDIR;
+    if (id == dbid_locks
+        || (GetAmPolicyHub() && id == dbid_lastseen))
     {
-        rc = mdb_env_open(db->env, dbpath, MDB_NOSUBDIR, 0644);
+        open_flags |= MDB_NOSYNC;
     }
-    else
-    {
-        rc = mdb_env_open(db->env, dbpath, MDB_NOSUBDIR|MDB_NOSYNC, 0644);
-    }
+
+#ifdef __hpux
+    /*
+     * On HP-UX, a unified file cache was not introduced until version 11.31.
+     * This means that on 11.23 there are separate file caches for mmap()'ed
+     * files and open()'ed files. When these two are mixed, changes made using
+     * one mode won't be immediately seen by the other mode, which is an
+     * assumption LMDB is relying on. The MDB_WRITEMAP flag causes LMDB to use
+     * mmap() only, so that we stay within one file cache.
+     */
+    open_flags |= MDB_WRITEMAP;
+#endif
+
+    rc = LmdbEnvOpen(db->env, dbpath, open_flags, 0644);
     if (rc)
     {
         Log(LOG_LEVEL_ERR, "Could not open database %s: %s",
               dbpath, mdb_strerror(rc));
         goto err;
+    }
+    if (DB_MAX_READERS > 0)
+    {
+        int max_readers;
+        rc = mdb_env_get_maxreaders(db->env, &max_readers);
+        if (rc)
+        {
+            Log(LOG_LEVEL_ERR, "Could not get maxreaders for database %s: %s",
+                dbpath, mdb_strerror(rc));
+            goto err;
+        }
+        if (max_readers < DB_MAX_READERS)
+        {
+            // LMDB will only reinitialize maxreaders if no database handles are
+            // open, including in other processes, which is how we might end up
+            // here.
+            Log(LOG_LEVEL_VERBOSE, "Failed to set LMDB max reader limit on database '%s', "
+                "consider restarting CFEngine",
+                dbpath);
+        }
     }
     rc = mdb_txn_begin(db->env, NULL, MDB_RDONLY, &txn);
     if (rc)
@@ -279,11 +345,30 @@ void DBPrivCloseDB(DBPriv *db)
     free(db);
 }
 
+#define EMPTY_DB 0
+
+bool DBPrivClean(DBPriv *db)
+{
+    DBTxn *txn;
+    int rc = GetWriteTransaction(db, &txn);
+    
+    if (rc != MDB_SUCCESS)
+    {
+        Log(LOG_LEVEL_ERR, "Unable to get write transaction: %s", mdb_strerror(rc));
+        return false;
+    }
+    
+    assert(!txn->cursor_open);
+    
+    return mdb_drop(txn->txn, db->dbi, EMPTY_DB);
+}
+
 void DBPrivCommit(DBPriv *db)
 {
     DBTxn *db_txn = pthread_getspecific(db->txn_key);
     if (db_txn && db_txn->txn)
     {
+        assert(!db_txn->cursor_open);
         int rc = mdb_txn_commit(db_txn->txn);
         if (rc != MDB_SUCCESS)
         {
@@ -297,16 +382,17 @@ void DBPrivCommit(DBPriv *db)
 bool DBPrivHasKey(DBPriv *db, const void *key, int key_size)
 {
     MDB_val mkey, data;
-    MDB_txn *txn;
+    DBTxn *txn;
     int rc;
-    // FIXME: distinguish between "entry not found" and "error occured"
+    // FIXME: distinguish between "entry not found" and "error occurred"
 
     rc = GetReadTransaction(db, &txn);
     if (rc == MDB_SUCCESS)
     {
+        assert(!txn->cursor_open);
         mkey.mv_data = (void *)key;
         mkey.mv_size = key_size;
-        rc = mdb_get(txn, db->dbi, &mkey, &data);
+        rc = mdb_get(txn->txn, db->dbi, &mkey, &data);
         if (rc && rc != MDB_NOTFOUND)
         {
             Log(LOG_LEVEL_ERR, "Could not read database entry: %s", mdb_strerror(rc));
@@ -320,7 +406,7 @@ bool DBPrivHasKey(DBPriv *db, const void *key, int key_size)
 int DBPrivGetValueSize(DBPriv *db, const void *key, int key_size)
 {
     MDB_val mkey, data;
-    MDB_txn *txn;
+    DBTxn *txn;
     int rc;
 
     data.mv_size = 0;
@@ -328,9 +414,10 @@ int DBPrivGetValueSize(DBPriv *db, const void *key, int key_size)
     rc = GetReadTransaction(db, &txn);
     if (rc == MDB_SUCCESS)
     {
+        assert(!txn->cursor_open);
         mkey.mv_data = (void *)key;
         mkey.mv_size = key_size;
-        rc = mdb_get(txn, db->dbi, &mkey, &data);
+        rc = mdb_get(txn->txn, db->dbi, &mkey, &data);
         if (rc && rc != MDB_NOTFOUND)
         {
             Log(LOG_LEVEL_ERR, "Could not read database entry: %s", mdb_strerror(rc));
@@ -344,16 +431,17 @@ int DBPrivGetValueSize(DBPriv *db, const void *key, int key_size)
 bool DBPrivRead(DBPriv *db, const void *key, int key_size, void *dest, int dest_size)
 {
     MDB_val mkey, data;
-    MDB_txn *txn;
+    DBTxn *txn;
     int rc;
     bool ret = false;
 
     rc = GetReadTransaction(db, &txn);
     if (rc == MDB_SUCCESS)
     {
+        assert(!txn->cursor_open);
         mkey.mv_data = (void *)key;
         mkey.mv_size = key_size;
-        rc = mdb_get(txn, db->dbi, &mkey, &data);
+        rc = mdb_get(txn->txn, db->dbi, &mkey, &data);
         if (rc == MDB_SUCCESS)
         {
             if (dest_size > data.mv_size)
@@ -375,15 +463,16 @@ bool DBPrivRead(DBPriv *db, const void *key, int key_size, void *dest, int dest_
 bool DBPrivWrite(DBPriv *db, const void *key, int key_size, const void *value, int value_size)
 {
     MDB_val mkey, data;
-    MDB_txn *txn;
+    DBTxn *txn;
     int rc = GetWriteTransaction(db, &txn);
     if (rc == MDB_SUCCESS)
     {
+        assert(!txn->cursor_open);
         mkey.mv_data = (void *)key;
         mkey.mv_size = key_size;
         data.mv_data = (void *)value;
         data.mv_size = value_size;
-        rc = mdb_put(txn, db->dbi, &mkey, &data, 0);
+        rc = mdb_put(txn->txn, db->dbi, &mkey, &data, 0);
         if (rc != MDB_SUCCESS)
         {
             Log(LOG_LEVEL_ERR, "Could not write database entry: %s", mdb_strerror(rc));
@@ -396,13 +485,14 @@ bool DBPrivWrite(DBPriv *db, const void *key, int key_size, const void *value, i
 bool DBPrivDelete(DBPriv *db, const void *key, int key_size)
 {
     MDB_val mkey;
-    MDB_txn *txn;
+    DBTxn *txn;
     int rc = GetWriteTransaction(db, &txn);
     if (rc == MDB_SUCCESS)
     {
+        assert(!txn->cursor_open);
         mkey.mv_data = (void *)key;
         mkey.mv_size = key_size;
-        rc = mdb_del(txn, db->dbi, &mkey, NULL);
+        rc = mdb_del(txn->txn, db->dbi, &mkey, NULL);
         if (rc == MDB_NOTFOUND)
         {
             Log(LOG_LEVEL_DEBUG, "Entry not found: %s", mdb_strerror(rc));
@@ -419,19 +509,21 @@ bool DBPrivDelete(DBPriv *db, const void *key, int key_size)
 DBCursorPriv *DBPrivOpenCursor(DBPriv *db)
 {
     DBCursorPriv *cursor = NULL;
-    MDB_txn *txn;
+    DBTxn *txn;
     int rc;
     MDB_cursor *mc;
 
     rc = GetWriteTransaction(db, &txn);
     if (rc == MDB_SUCCESS)
     {
-        rc = mdb_cursor_open(txn, db->dbi, &mc);
+        assert(!txn->cursor_open);
+        rc = mdb_cursor_open(txn->txn, db->dbi, &mc);
         if (rc == MDB_SUCCESS)
         {
             cursor = xcalloc(1, sizeof(DBCursorPriv));
             cursor->db = db;
             cursor->mc = mc;
+            txn->cursor_open = true;
         }
         else
         {
@@ -538,6 +630,12 @@ bool DBPrivWriteCursorEntry(DBCursorPriv *cursor, const void *value, int value_s
 
 void DBPrivCloseCursor(DBCursorPriv *cursor)
 {
+    DBTxn *txn;
+    int rc = GetWriteTransaction(cursor->db, &txn);
+    assert(rc == MDB_SUCCESS);
+    assert(txn->cursor_open);
+    txn->cursor_open = false;
+
     if (cursor->curkv)
     {
         free(cursor->curkv);
@@ -555,45 +653,5 @@ void DBPrivCloseCursor(DBCursorPriv *cursor)
 char *DBPrivDiagnose(const char *dbpath)
 {
     return StringFormat("Unable to diagnose LMDB file (not implemented) for '%s'", dbpath);
-}
-
-int UpdateLastSeenMaxReaders(int maxreaders)
-{
-    int rc = 0;
-    /* We assume that every cf_lastseen DB has already a minimum of 504 maxreaders */
-    if (maxreaders > DEFAULT_LASTSEEN_MAXREADERS)
-    {
-        char workbuf[CF_BUFSIZE];
-        MDB_env *env = NULL;
-        rc = mdb_env_create(&env);
-        if (rc)
-        {
-            Log(LOG_LEVEL_ERR, "Could not create lastseen database env : %s",
-                mdb_strerror(rc));
-            goto err;
-        }
-
-        rc = mdb_env_set_maxreaders(env, maxreaders);
-        if (rc)
-        {
-            Log(LOG_LEVEL_ERR, "Could not change lastseen maxreaders to %d : %s",
-                maxreaders, mdb_strerror(rc));
-            goto err;
-        }
-
-        snprintf(workbuf, CF_BUFSIZE, "%s%ccf_lastseen.lmdb", GetWorkDir(), FILE_SEPARATOR);
-        rc = mdb_env_open(env, workbuf, MDB_NOSUBDIR, 0644);
-        if (rc)
-        {
-            Log(LOG_LEVEL_ERR, "Could not open lastseen database env : %s",
-                mdb_strerror(rc));
-        }
-err:
-        if (env)
-        {
-            mdb_env_close(env);
-        }
-    }
-    return rc;
 }
 #endif

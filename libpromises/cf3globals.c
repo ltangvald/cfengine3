@@ -54,7 +54,7 @@ int LASTSEENEXPIREAFTER = SECONDS_PER_WEEK; /* GLOBAL_P */
 char POLICY_SERVER[CF_MAX_IP_LEN] = ""; /* GLOBAL_X */
 
 /*****************************************************************************/
-/* Compatability infrastructure                                              */
+/* Compatibility infrastructure                                              */
 /*****************************************************************************/
 
 bool DONTDO = false; /* GLOBAL_A */
@@ -62,8 +62,6 @@ bool DONTDO = false; /* GLOBAL_A */
 char VFQNAME[CF_MAXVARSIZE] = ""; /* GLOBAL_E GLOBAL_P */
 char VUQNAME[CF_MAXVARSIZE] = ""; /* GLOBAL_E */
 char VDOMAIN[CF_MAXVARSIZE] = ""; /* GLOBAL_E GLOBAL_P */
-
-char CFWORKDIR[CF_BUFSIZE] = ""; /* GLOBAL_C */
 
 /*
   Default value for copytype attribute. Loaded by cf-agent from body control
@@ -96,8 +94,10 @@ HashMethod CF_DEFAULT_DIGEST; /* GLOBAL_C, initialized later */
 int CF_DEFAULT_DIGEST_LEN; /* GLOBAL_C, initialized later */
 
 /*
-  Holds the "now" time captured at the moment of policy load (and in response to
-  cf-runagent command to cf-serverd?!).
+  Holds the "now" time captured at the moment of policy (re)load.
+
+  TODO: This variable should be internal to timeout.c, not exposed.
+  It should only be set by SetStartTime() and read by GetStartTime().
 
   Utilized everywhere "now" start time is needed
 */
@@ -121,7 +121,7 @@ pid_t ALARM_PID = -1; /* GLOBAL_X */
 
   Used as a default value for maxfilesize attribute in policy
 */
-int EDITFILESIZE = 10000; /* GLOBAL_P */
+int EDITFILESIZE = 100000; /* GLOBAL_P */
 
 /*
   Set in cf-agent (from control body) and GenericAgentInitialize.

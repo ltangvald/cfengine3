@@ -1,0 +1,24 @@
+To fix the kfreebsd build
+
+--- a/cf-agent/verify_users_pam.c
++++ b/cf-agent/verify_users_pam.c
+@@ -80,6 +80,9 @@
+     return "January 02 1970";
+ #elif defined(__linux__)
+     return "1970-01-02";
++// special case for Debian/kFreeBSD
++#elif defined(__GLIBC__)
++    return "1970-01-02";
+ #else
+ # error Your operating system lacks the proper string for the "usermod -e" utility.
+ #endif
+--- a/tests/unit/Makefile.am
++++ b/tests/unit/Makefile.am
+@@ -146,7 +146,6 @@
+ 	string_expressions_test \
+ 	var_expressions_test \
+ 	process_terminate_unix_test \
+-	process_test \
+ 	exec-config-test \
+ 	generic_agent_test \
+ 	syntax_test \

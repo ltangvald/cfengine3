@@ -70,14 +70,14 @@ static bool ProcessSanityChecks(Attributes a, const Promise *pp)
         if ((RlistKeyIn(a.signals, "term")) || (RlistKeyIn(a.signals, "kill")))
         {
             Log(LOG_LEVEL_WARNING, "Promise '%s' kills then restarts - never strictly converges",
-                  pp->promiser);
+                pp->promiser);
             PromiseRef(LOG_LEVEL_INFO, pp);
         }
 
         if (a.haveprocess_count)
         {
             Log(LOG_LEVEL_ERR,
-                  "process_count and restart_class should not be used in the same promise as this makes no sense");
+                "process_count and restart_class should not be used in the same promise as this makes no sense");
             PromiseRef(LOG_LEVEL_INFO, pp);
             ret = false;
         }
@@ -86,7 +86,7 @@ static bool ProcessSanityChecks(Attributes a, const Promise *pp)
     if (promised_zero && (a.restart_class))
     {
         Log(LOG_LEVEL_ERR, "Promise constraint conflicts - '%s' processes cannot have zero count if restarted",
-              pp->promiser);
+            pp->promiser);
         PromiseRef(LOG_LEVEL_ERR, pp);
         ret = false;
     }
@@ -123,7 +123,7 @@ static PromiseResult VerifyProcesses(EvalContext *ctx, Attributes a, const Promi
         return PROMISE_RESULT_SKIPPED;
     }
 
-    PromiseBanner(pp);
+    PromiseBanner(ctx, pp);
     PromiseResult result = VerifyProcessOp(ctx, PROCESSTABLE, a, pp);
 
     YieldCurrentLock(thislock);
@@ -239,14 +239,16 @@ static PromiseResult VerifyProcessOp(EvalContext *ctx, Item *procdata, Attribute
     {
         if (a.transaction.action == cfa_warn)
         {
-            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, a,
+            cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, a,
                  "Need to keep restart promise for '%s', but only a warning is promised", pp->promiser);
             result = PromiseResultUpdate(result, PROMISE_RESULT_WARN);
         }
         else
         {
-            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Making a one-time restart promise for '%s'", pp->promiser);
-            result = PromiseResultUpdate(result, PROMISE_RESULT_CHANGE);
+            PromiseResult status = killed ? PROMISE_RESULT_CHANGE : PROMISE_RESULT_NOOP;
+            cfPS(ctx, LOG_LEVEL_VERBOSE, status, pp, a,
+                 "C:     +  Global class: %s ", a.restart_class);
+            result = PromiseResultUpdate(result, status);
             EvalContextClassPutSoft(ctx, a.restart_class, CONTEXT_SCOPE_NAMESPACE, "source=promise");
         }
     }
@@ -261,6 +263,7 @@ int DoAllSignals(EvalContext *ctx, Item *siglist, Attributes a, const Promise *p
     Rlist *rp;
     pid_t pid;
     int killed = false;
+    bool failure = false;
 
     if (siglist == NULL)
     {
@@ -290,24 +293,30 @@ int DoAllSignals(EvalContext *ctx, Item *siglist, Attributes a, const Promise *p
 
                 if (kill((pid_t) pid, signal) < 0)
                 {
-                    cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, a,
+                    cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_FAIL, pp, a,
                          "Couldn't send promised signal '%s' (%d) to pid %jd (might be dead). (kill: %s)", RlistScalarValue(rp),
                          signal, (intmax_t)pid, GetErrorStr());
-                    *result = PromiseResultUpdate(*result, PROMISE_RESULT_FAIL);
+                    failure = true;
                 }
                 else
                 {
                     cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_CHANGE, pp, a, "Signalled '%s' (%d) to process %jd (%s)",
                          RlistScalarValue(rp), signal, (intmax_t)pid, ip->name);
                     *result = PromiseResultUpdate(*result, PROMISE_RESULT_CHANGE);
+                    failure = false;
                 }
             }
             else
             {
                 Log(LOG_LEVEL_ERR, "Need to keep signal promise '%s' in process entry '%s'",
-                      RlistScalarValue(rp), ip->name);
+                    RlistScalarValue(rp), ip->name);
             }
         }
+    }
+
+    if (failure)
+    {
+        *result = PromiseResultUpdate(*result, PROMISE_RESULT_FAIL);
     }
 
     return killed;
@@ -356,14 +365,14 @@ static int FindPidMatches(Item *procdata, Item **killlist, Attributes a, const c
 
         if ((a.transaction.action == cfa_warn) && promised_zero)
         {
-            Log(LOG_LEVEL_ERR, "Process alert '%s'", procdata->name);     /* legend */
-            Log(LOG_LEVEL_ERR, "Process alert '%s'", ip->name);
+            Log(LOG_LEVEL_WARNING, "Process alert '%s'", procdata->name);     /* legend */
+            Log(LOG_LEVEL_WARNING, "Process alert '%s'", ip->name);
             continue;
         }
 
         if (a.transaction.action == cfa_warn)
         {
-            Log(LOG_LEVEL_ERR, "Matched '%s'", ip->name);
+            Log(LOG_LEVEL_WARNING, "Matched '%s'", ip->name);
         }
         else
         {

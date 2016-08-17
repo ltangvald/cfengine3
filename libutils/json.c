@@ -22,18 +22,21 @@
   included file COSL.txt.
 */
 
+#include <logging.h>
+#include <json.h>
+#include <json-priv.h>
+#include <json-yaml.h>
 
 #include <alloc.h>
 #include <sequence.h>
 #include <string_lib.h>
+#include <misc_lib.h>
 #include <file_lib.h>
 #include <printsize.h>
 #include <regex.h>
 
-#include <json.h>
-
 static const int SPACES_PER_INDENT = 2;
-static const int DEFAULT_CONTAINER_CAPACITY = 64;
+const int DEFAULT_CONTAINER_CAPACITY = 64;
 
 static const char *const JSON_TRUE = "true";
 static const char *const JSON_FALSE = "false";
@@ -93,6 +96,13 @@ static void JsonElementSetPropertyName(JsonElement *element, const char *propert
     {
         element->propertyName = xstrdup(propertyName);
     }
+}
+
+const char* JsonElementGetPropertyName(const JsonElement *element)
+{
+    assert(element);
+
+    return element->propertyName;
 }
 
 static JsonElement *JsonElementCreateContainer(JsonContainerType containerType, const char *propertyName,
@@ -605,6 +615,38 @@ const char *JsonPrimitiveGetAsString(const JsonElement *primitive)
     assert(primitive->type == JSON_ELEMENT_TYPE_PRIMITIVE);
 
     return primitive->primitive.value;
+}
+
+char* JsonPrimitiveToString(const JsonElement *primitive)
+{
+    if (JsonGetElementType(primitive) != JSON_ELEMENT_TYPE_PRIMITIVE)
+    {
+        return NULL;
+    }
+
+    switch (JsonGetPrimitiveType(primitive))
+    {
+    case JSON_PRIMITIVE_TYPE_BOOL:
+        return xstrdup(JsonPrimitiveGetAsBool(primitive) ? "true" : "false");
+        break;
+
+    case JSON_PRIMITIVE_TYPE_INTEGER:
+        return StringFromLong(JsonPrimitiveGetAsInteger(primitive));
+        break;
+
+    case JSON_PRIMITIVE_TYPE_REAL:
+        return StringFromDouble(JsonPrimitiveGetAsReal(primitive));
+        break;
+
+    case JSON_PRIMITIVE_TYPE_STRING:
+        return xstrdup(JsonPrimitiveGetAsString(primitive));
+        break;
+
+    case JSON_PRIMITIVE_TYPE_NULL: // redundant
+        break;
+    }
+
+    return NULL;
 }
 
 bool JsonPrimitiveGetAsBool(const JsonElement *primitive)
@@ -1120,13 +1162,33 @@ JsonElement *JsonArrayGetAsObject(JsonElement *array, size_t index)
     return NULL;
 }
 
-JsonElement *JsonArrayGet(JsonElement *array, size_t index)
+JsonElement *JsonArrayGet(const JsonElement *array, size_t index)
 {
     assert(array);
     assert(array->type == JSON_ELEMENT_TYPE_CONTAINER);
     assert(array->container.type == JSON_CONTAINER_TYPE_ARRAY);
 
     return JsonAt(array, index);
+}
+
+bool JsonArrayContainsOnlyPrimitives(JsonElement *array)
+{
+    assert(array);
+    assert(array->type == JSON_ELEMENT_TYPE_CONTAINER);
+    assert(array->container.type == JSON_CONTAINER_TYPE_ARRAY);
+
+
+    for (size_t i = 0; i < JsonLength(array); i++)
+    {
+        JsonElement *child = JsonArrayGet(array, i);
+
+        if (child->type != JSON_ELEMENT_TYPE_PRIMITIVE)
+        {
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void JsonContainerReverse(JsonElement *array)
@@ -1276,12 +1338,27 @@ static void JsonArrayWrite(Writer *writer, const JsonElement *array, size_t inde
     WriterWriteChar(writer, ']');
 }
 
+int JsonElementPropertyCompare(const void *e1, const void *e2, ARG_UNUSED void *user_data)
+{
+    return strcmp( ((JsonElement*)e1)->propertyName,
+                   ((JsonElement*)e2)->propertyName);
+}
+
 void JsonObjectWrite(Writer *writer, const JsonElement *object, size_t indent_level)
 {
     assert(object->type == JSON_ELEMENT_TYPE_CONTAINER);
     assert(object->container.type == JSON_CONTAINER_TYPE_OBJECT);
 
     WriterWrite(writer, "{\n");
+
+    for (size_t i = 0; i < object->container.children->length; i++)
+    {
+        assert(((JsonElement*)object->container.children->data[i])->propertyName);
+    }
+
+    // sort the children Seq so the output is canonical (keys are sorted)
+    // we've already asserted that the children have a valid propertyName
+    JsonSort((JsonElement*)object, (JsonComparator*)JsonElementPropertyCompare, NULL);
 
     for (size_t i = 0; i < object->container.children->length; i++)
     {
@@ -1391,9 +1468,17 @@ void JsonObjectWriteCompact(Writer *writer, const JsonElement *object)
 
     for (size_t i = 0; i < object->container.children->length; i++)
     {
+        assert(((JsonElement*)object->container.children->data[i])->propertyName);
+    }
+
+    // sort the children Seq so the output is canonical (keys are sorted)
+    // we've already asserted that the children have a valid propertyName
+    JsonSort((JsonElement*)object, (JsonComparator*)JsonElementPropertyCompare, NULL);
+
+    for (size_t i = 0; i < object->container.children->length; i++)
+    {
         JsonElement *child = object->container.children->data[i];
 
-        assert(child->propertyName);
         WriterWriteF(writer, "\"%s\":", child->propertyName);
 
         switch (child->type)
@@ -1501,7 +1586,6 @@ const char* JsonParseErrorToString(JsonParseError error)
 
         [JSON_PARSE_ERROR_STRING_NO_DOUBLEQUOTE_START] = "Unable to parse json data as string, did not start with doublequote",
         [JSON_PARSE_ERROR_STRING_NO_DOUBLEQUOTE_END] = "Unable to parse json data as string, did not end with doublequote",
-        [JSON_PARSE_ERROR_STRING_UNSUPPORTED_ESCAPE] = "Unsupported escape sequence",
 
         [JSON_PARSE_ERROR_NUMBER_EXPONENT_NEGATIVE] = "Unable to parse json data as number, - not at the start or not after exponent",
         [JSON_PARSE_ERROR_NUMBER_EXPONENT_POSITIVE] = "Unable to parse json data as number, + without preceding exponent",
@@ -1515,6 +1599,7 @@ const char* JsonParseErrorToString(JsonParseError error)
 
         [JSON_PARSE_ERROR_ARRAY_START] = "Unable to parse json data as array, did not start with '['",
         [JSON_PARSE_ERROR_ARRAY_END] = "Unable to parse json data as array, did not end with ']'",
+        [JSON_PARSE_ERROR_ARRAY_COMMA] = "Unable to parse json data as array, extraneous commas",
 
         [JSON_PARSE_ERROR_OBJECT_BAD_SYMBOL] = "Unable to parse json data as object, unrecognized token beginning entry",
         [JSON_PARSE_ERROR_OBJECT_START] = "Unable to parse json data as object, did not start with '{'",
@@ -1526,6 +1611,9 @@ const char* JsonParseErrorToString(JsonParseError error)
         [JSON_PARSE_ERROR_OBJECT_OPEN_LVAL] = "Unable to parse json data as object, tried to close object having opened an l-value",
 
         [JSON_PARSE_ERROR_INVALID_START] = "Unwilling to parse json data starting with invalid character",
+        [JSON_PARSE_ERROR_TRUNCATED] = "Unable to parse JSON without truncating",
+        [JSON_PARSE_ERROR_NO_LIBYAML] = "CFEngine was not built with libyaml support",
+        [JSON_PARSE_ERROR_LIBYAML_FAILURE] = "libyaml internal failure",
         [JSON_PARSE_ERROR_NO_DATA] = "No data"
     };
 
@@ -1535,6 +1623,8 @@ const char* JsonParseErrorToString(JsonParseError error)
 
 static JsonParseError JsonParseAsString(const char **data, char **str_out)
 {
+    /* NB: although JavaScript supports both single and double quotes
+     * as string delimiters, JSON only supports double quotes. */
     if (**data != '"')
     {
         *str_out = NULL;
@@ -1558,8 +1648,8 @@ static JsonParseError JsonParseAsString(const char **data, char **str_out)
             case '\\':
             case '"':
             case '/':
-                WriterWriteChar(writer, **data);
-                continue;
+                break;
+
             case 'b':
                 WriterWriteChar(writer, '\b');
                 continue;
@@ -1577,14 +1667,22 @@ static JsonParseError JsonParseAsString(const char **data, char **str_out)
                 continue;
 
             default:
-                WriterClose(writer);
-                *str_out = NULL;
-                return JSON_PARSE_ERROR_STRING_UNSUPPORTED_ESCAPE;
+                /* Unrecognised escape sequence.
+                 *
+                 * For example, we fail to handle Unicode escapes -
+                 * \u{hex digits} - we have no way to represent the
+                 * character they denote.  So keep them verbatim, for
+                 * want of any other way to handle them; but warn. */
+                Log(LOG_LEVEL_WARNING,
+                    "Keeping verbatim unrecognised JSON escape '%.6s'",
+                    *data - 1); /* i.e. include the \ in the displayed escape */
+                WriterWriteChar(writer, '\\');
+                break;
             }
-
+            /* Deliberate fall-through */
         default:
             WriterWriteChar(writer, **data);
-            continue;
+            break;
         }
     }
 
@@ -1593,7 +1691,7 @@ static JsonParseError JsonParseAsString(const char **data, char **str_out)
     return JSON_PARSE_ERROR_STRING_NO_DOUBLEQUOTE_END;
 }
 
-static JsonParseError JsonParseAsNumber(const char **data, JsonElement **json_out)
+JsonParseError JsonParseAsNumber(const char **data, JsonElement **json_out)
 {
     Writer *writer = StringWriter();
 
@@ -1763,6 +1861,7 @@ static JsonParseError JsonParseAsArray(const char **data, JsonElement **json_out
     }
 
     JsonElement *array = JsonArrayCreate(DEFAULT_CONTAINER_CAPACITY);
+    char prev_char = '[';
 
     for (*data = *data + 1; **data != '\0'; *data = *data + 1)
     {
@@ -1788,6 +1887,11 @@ static JsonParseError JsonParseAsArray(const char **data, JsonElement **json_out
 
         case '[':
             {
+                if (prev_char != '[' && prev_char != ',')
+                {
+                    JsonDestroy(array);
+                    return JSON_PARSE_ERROR_ARRAY_START;
+                }
                 JsonElement *child_array = NULL;
                 JsonParseError err = JsonParseAsArray(data, &child_array);
                 if (err != JSON_PARSE_OK)
@@ -1803,6 +1907,11 @@ static JsonParseError JsonParseAsArray(const char **data, JsonElement **json_out
 
         case '{':
             {
+                if (prev_char != '[' && prev_char != ',')
+                {
+                    JsonDestroy(array);
+                    return JSON_PARSE_ERROR_ARRAY_START;
+                }
                 JsonElement *child_object = NULL;
                 JsonParseError err = JsonParseAsObject(data, &child_object);
                 if (err != JSON_PARSE_OK)
@@ -1817,6 +1926,11 @@ static JsonParseError JsonParseAsArray(const char **data, JsonElement **json_out
             break;
 
         case ',':
+            if (prev_char == ',' || prev_char == '[')
+            {
+                JsonDestroy(array);
+                return JSON_PARSE_ERROR_ARRAY_COMMA;
+            }
             break;
 
         case ']':
@@ -1857,6 +1971,8 @@ static JsonParseError JsonParseAsArray(const char **data, JsonElement **json_out
             JsonDestroy(array);
             return JSON_PARSE_ERROR_OBJECT_BAD_SYMBOL;
         }
+
+        prev_char = **data;
     }
 
     *json_out = NULL;
@@ -1874,6 +1990,7 @@ static JsonParseError JsonParseAsObject(const char **data, JsonElement **json_ou
 
     JsonElement *object = JsonObjectCreate(DEFAULT_CONTAINER_CAPACITY);
     char *property_name = NULL;
+    char prev_char = '{';
 
     for (*data = *data + 1; **data != '\0'; *data = *data + 1)
     {
@@ -1916,7 +2033,7 @@ static JsonParseError JsonParseAsObject(const char **data, JsonElement **json_ou
             break;
 
         case ':':
-            if (property_name == NULL)
+            if (property_name == NULL || prev_char == ':' || prev_char == ',')
             {
                 json_out = NULL;
                 free(property_name);
@@ -1926,7 +2043,7 @@ static JsonParseError JsonParseAsObject(const char **data, JsonElement **json_ou
             break;
 
         case ',':
-            if (property_name != NULL)
+            if (property_name != NULL || prev_char == ':' || prev_char == ',')
             {
                 free(property_name);
                 JsonDestroy(object);
@@ -2038,6 +2155,8 @@ static JsonParseError JsonParseAsObject(const char **data, JsonElement **json_ou
             JsonDestroy(object);
             return JSON_PARSE_ERROR_OBJECT_BAD_SYMBOL;
         }
+
+        prev_char = **data;
     }
 
     *json_out = NULL;
@@ -2077,17 +2196,37 @@ JsonParseError JsonParse(const char **data, JsonElement **json_out)
     return JSON_PARSE_ERROR_NO_DATA;
 }
 
-JsonParseError JsonParseFile(const char *path, size_t size_max, JsonElement **json_out)
+JsonParseError JsonParseAnyFile(const char *path, size_t size_max, JsonElement **json_out, const bool yaml_format)
 {
-    Writer *contents = FileRead(path, size_max, NULL);
+    bool truncated = false;
+    Writer *contents = FileRead(path, size_max, &truncated);
     if (!contents)
     {
         return JSON_PARSE_ERROR_NO_DATA;
     }
-    JsonElement *json = NULL;
+    else if (truncated)
+    {
+        return JSON_PARSE_ERROR_TRUNCATED;
+    }
+    assert(json_out);
+    *json_out = NULL;
     const char *data = StringWriterData(contents);
-    JsonParseError err = JsonParse(&data, &json);
+    JsonParseError err;
+
+    if (yaml_format)
+    {
+        err = JsonParseYamlString(&data, json_out);
+    }
+    else
+    {
+        err = JsonParse(&data, json_out);
+    }
+
     WriterClose(contents);
-    *json_out = json;
     return err;
+}
+
+JsonParseError JsonParseFile(const char *path, size_t size_max, JsonElement **json_out)
+{
+    return JsonParseAnyFile(path, size_max, json_out, false);
 }
