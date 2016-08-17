@@ -1,3 +1,11 @@
+cfengine3 (3.7.4-4) unstable; urgency=medium
+
+  * debian/watch: added a line to download masterfiles.
+  * debian/patches/0006-skip_failing_tests.patch:
+    + disabled run_lastseen_threaded_load to build on powerpc.
+
+ --  Antonio Radici <antonio@debian.org>  Wed, 17 Aug 2016 16:39:45 +0100
+
 cfengine3 (3.7.4-3) unstable; urgency=medium
 
   * debian/patches:

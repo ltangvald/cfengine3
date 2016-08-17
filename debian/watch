@@ -1,2 +1,3 @@
-version=3
+version=4
 https://cfengine.com/product/community/ .*/cfengine-(\d.*).tar.gz
+opts="component=masterfiles" https://cfengine.com/product/community/ .*/cfengine-masterfiles-(\d.*).tar.gz

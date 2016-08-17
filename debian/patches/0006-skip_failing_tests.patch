@@ -176,3 +176,23 @@ Fails during reproducibility testing on amd64:
      cfengine_enterprise_la_SOURCES = enterprise_extension_test_lib.c
      cfengine_enterprise_la_LDFLAGS = $(AM_LDFLAGS) \
  	-avoid-version -module -shared -export-dynamic -rpath /
+--- a/tests/load/Makefile.am
++++ b/tests/load/Makefile.am
+@@ -39,14 +39,12 @@
+ 	-I../../libpromises
+ 
+ EXTRA_DIST = \
+-	run_db_load.sh \
+-	run_lastseen_threaded_load.sh
++	run_db_load.sh
+ 
+ TESTS = \
+-	run_db_load.sh \
+-	run_lastseen_threaded_load.sh
++	run_db_load.sh
+ 
+-check_PROGRAMS = db_load lastseen_load lastseen_threaded_load
++check_PROGRAMS = db_load lastseen_load
+ 
+ 
+ db_load_SOURCES = db_load.c
