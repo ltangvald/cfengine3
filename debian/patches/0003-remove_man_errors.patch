@@ -1,0 +1,22 @@
+From: Antonio Radici <antonio@debian.org>
+Date: Sun, 14 Aug 2016 22:07:44 +0100
+Subject: remove_man_errors
+
+===================================================================
+---
+ libutils/man.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/libutils/man.c b/libutils/man.c
+index 328aa48..41f5de9 100644
+--- a/libutils/man.c
++++ b/libutils/man.c
+@@ -134,7 +134,7 @@ static void WriteOptions(Writer *out, const struct option options[],
+     {
+         if (options[i].has_arg)
+         {
+-            WriterWriteF(out, ".IP \"--%s, -%c\" value\n%s\n", options[i].name, (char) options[i].val, option_hints[i]);
++            WriterWriteF(out, ".IP \"--%s, -%c\" \n%s\n", options[i].name, (char) options[i].val, option_hints[i]);
+         }
+         else
+         {

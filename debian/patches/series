@@ -1,3 +1,9 @@
-remove-man-errors
-fhs-compliance
-fix-examples-paths
+0002-clean_xml_output.patch
+0003-remove_man_errors.patch
+0004-remove_rpath.patch
+0005-do_not_build_rpmver.patch
+0006-skip_failing_tests.patch
+0007-fix_kfreebsd_build.patch
+0009_disable_spelling_errors.patch
+0010_disable_date_annotation.patch
+0011_build_with_openssl_1.1.patch

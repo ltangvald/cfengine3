@@ -1,0 +1,21 @@
+From: Antonio Radici <antonio@debian.org>
+Date: Sun, 14 Aug 2016 22:07:44 +0100
+Subject: remove_rpath
+
+===================================================================
+---
+ cf-agent/Makefile.am | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+--- a/cf-agent/Makefile.am
++++ b/cf-agent/Makefile.am
+@@ -50,8 +50,7 @@
+ 	$(LIBVIRT_LDFLAGS) \
+ 	$(POSTGRESQL_LDFLAGS) \
+ 	$(MYSQL_LDFLAGS) \
+-	$(LIBXML2_LDFLAGS) \
+-	$(PAM_LDFLAGS)
++	$(LIBXML2_LDFLAGS)
+ 
+ libcf_agent_la_LIBADD = ../libpromises/libpromises.la \
+ 	$(OPENSSL_LIBS) \
