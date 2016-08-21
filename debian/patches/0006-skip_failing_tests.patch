@@ -21,7 +21,7 @@ Fails during reproducibility testing on amd64:
  # included file COSL.txt.
  #
 -SUBDIRS = unit load acceptance
-+SUBDIRS = unit load
++SUBDIRS = unit
 --- a/tests/acceptance/01_vars/02_functions/network/008.cf
 +++ /dev/null
 @@ -1,66 +0,0 @@
