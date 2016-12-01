@@ -47,8 +47,8 @@
 #include <logging_priv.h>
 #include <known_dirs.h>
 #include <printsize.h>
-#include <map.h>
 #include <regex.h>
+#include <map.h>
 
 
 /**
@@ -73,6 +73,10 @@ TYPED_MAP_DEFINE(FuncCache, Rlist *, Rval *,
                  RlistDestroy_untyped,
                  RvalDestroy2)
 
+
+static pcre *context_expression_whitespace_rx = NULL;
+
+#include <policy.h>
 
 static bool BundleAborted(const EvalContext *ctx);
 static void SetBundleAborted(EvalContext *ctx);
@@ -122,17 +126,33 @@ struct EvalContext_
 
     // Full path to directory that the binary was launched from.
     char *launch_directory;
-    
+
     /* new package promise evaluation context */
     PackagePromiseContext *package_promise_context;
+    
+    /* select_end_match_eof context*/
+    bool select_end_match_eof;
+
+    /* List if all classes set during policy evaluation */
+    StringSet *all_classes;
 };
+
+bool EvalContextGetSelectEndMatchEof(const EvalContext *ctx)
+{
+    return ctx->select_end_match_eof;
+}
+
+void EvalContextSetSelectEndMatchEof(EvalContext *ctx, bool value)
+{
+    ctx->select_end_match_eof = value;
+}
 
 
 void AddDefaultPackageModuleToContext(const EvalContext *ctx, char *name)
 {
     assert(ctx);
     assert(ctx->package_promise_context);
-    
+
     free(ctx->package_promise_context->control_package_module);
     ctx->package_promise_context->control_package_module =
             SafeStringDuplicate(name);
@@ -317,7 +337,7 @@ static const char *GetAgentAbortingContext(const EvalContext *ctx)
 
             if (cls)
             {
-                return regex;
+                return cls->name;
             }
         }
     }
@@ -453,6 +473,11 @@ static char *EvalVarRef(ARG_UNUSED const char *varname, ARG_UNUSED VarRefType ty
 
 /**********************************************************************/
 
+bool ClassCharIsWhitespace(char ch)
+{
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r';
+}
+
 bool IsDefinedClass(const EvalContext *ctx, const char *context)
 {
     ParseResult res;
@@ -462,7 +487,27 @@ bool IsDefinedClass(const EvalContext *ctx, const char *context)
         return true;
     }
 
-    res = ParseExpression(context, 0, strlen(context));
+    if (NULL == context_expression_whitespace_rx)
+    {
+        context_expression_whitespace_rx = CompileRegex(CFENGINE_REGEX_WHITESPACE_IN_CONTEXTS);
+    }
+
+    if (NULL == context_expression_whitespace_rx)
+    {
+        Log(LOG_LEVEL_ERR, "The context expression whitespace regular expression could not be compiled, aborting.");
+        return false;
+    }
+
+    if (StringMatchFullWithPrecompiledRegex(context_expression_whitespace_rx, context))
+    {
+        Log(LOG_LEVEL_INFO, "class names can't be separated by whitespace without an intervening operator in expression '%s'", context);
+        return false;
+    }
+
+    Buffer *condensed = BufferNewFrom(context, strlen(context));
+    BufferRewrite(condensed, &ClassCharIsWhitespace, true);
+    res = ParseExpression(BufferData(condensed), 0, BufferSize(condensed));
+    BufferDestroy(condensed);
 
     if (!res.result)
     {
@@ -725,9 +770,11 @@ void EvalContextHeapAddAbort(EvalContext *ctx, const char *context, const char *
         AppendItem(&ctx->heap_abort, context, activated_on_context);
     }
 
-    if (GetAgentAbortingContext(ctx))
+    const char *aborting_context = GetAgentAbortingContext(ctx);
+
+    if (aborting_context)
     {
-        FatalError(ctx, "cf-agent aborted on context '%s'", GetAgentAbortingContext(ctx));
+        FatalError(ctx, "cf-agent aborted on defined class '%s'", aborting_context);
     }
 }
 
@@ -900,6 +947,9 @@ EvalContext *EvalContextNew(void)
 
     ctx->package_promise_context = PackagePromiseConfigNew();
 
+    ctx->all_classes = NULL;
+    ctx->select_end_match_eof = false;
+
     return ctx;
 }
 
@@ -934,6 +984,8 @@ void EvalContextDestroy(EvalContext *ctx)
         FuncCacheMapDestroy(ctx->function_cache);
 
         FreePackagePromiseContext(ctx->package_promise_context);
+
+        StringSetDestroy(ctx->all_classes);
 
         free(ctx);
     }
@@ -998,6 +1050,85 @@ void EvalContextClear(EvalContext *ctx)
     StringSetClear(ctx->promise_lock_cache);
     SeqClear(ctx->stack);
     FuncCacheMapClear(ctx->function_cache);
+}
+
+Rlist *EvalContextGetPromiseCallerMethods(EvalContext *ctx) {
+    Rlist *callers_promisers = NULL;
+
+    for (size_t i = 0; i < SeqLength(ctx->stack); i++)
+    {
+        StackFrame *frame = SeqAt(ctx->stack, i);
+        switch (frame->type)
+        {
+        case STACK_FRAME_TYPE_BODY:
+            break;
+
+        case STACK_FRAME_TYPE_BUNDLE:
+            break;
+
+        case STACK_FRAME_TYPE_PROMISE_ITERATION:
+            break;
+
+        case STACK_FRAME_TYPE_PROMISE:
+            if (strcmp(frame->data.promise.owner->parent_promise_type->name, "methods") == 0) {
+                RlistAppendScalar(&callers_promisers, frame->data.promise.owner->promiser);
+            }
+            break;
+
+        case STACK_FRAME_TYPE_PROMISE_TYPE:
+            break;
+        }
+    }
+    return callers_promisers;
+}
+
+JsonElement *EvalContextGetPromiseCallers(EvalContext *ctx) {
+    JsonElement *callers = JsonArrayCreate(4);
+    size_t depth = SeqLength(ctx->stack);
+
+    for (size_t i = 0; i < depth; i++)
+    {
+        StackFrame *frame = SeqAt(ctx->stack, i);
+        JsonElement *f = JsonObjectCreate(10);
+        JsonObjectAppendInteger(f, "frame", depth-i);
+        JsonObjectAppendInteger(f, "depth", i);
+
+        switch (frame->type)
+        {
+        case STACK_FRAME_TYPE_BODY:
+            JsonObjectAppendString(f, "type", "body");
+            JsonObjectAppendObject(f, "body", BodyToJson(frame->data.body.owner));
+            break;
+
+        case STACK_FRAME_TYPE_BUNDLE:
+            JsonObjectAppendString(f, "type", "bundle");
+            JsonObjectAppendObject(f, "bundle", BundleToJson(frame->data.bundle.owner));
+            break;
+
+        case STACK_FRAME_TYPE_PROMISE_ITERATION:
+            JsonObjectAppendString(f, "type", "iteration");
+            JsonObjectAppendInteger(f, "iteration_index", frame->data.promise_iteration.index);
+
+            break;
+
+        case STACK_FRAME_TYPE_PROMISE:
+            JsonObjectAppendString(f, "type", "promise");
+            JsonObjectAppendString(f, "promise_type", frame->data.promise.owner->parent_promise_type->name);
+            JsonObjectAppendString(f, "promiser", frame->data.promise.owner->promiser);
+            JsonObjectAppendString(f, "promise_classes", frame->data.promise.owner->classes);
+            JsonObjectAppendString(f, "promise_comment", NULL == frame->data.promise.owner->comment ? "" : frame->data.promise.owner->comment);
+            break;
+
+        case STACK_FRAME_TYPE_PROMISE_TYPE:
+            JsonObjectAppendString(f, "type", "promise_type");
+            JsonObjectAppendString(f, "promise_type", frame->data.promise_type.owner->name);
+            break;
+        }
+
+        JsonArrayAppendObject(callers, f);
+    }
+
+    return callers;
 }
 
 void EvalContextSetBundleArgs(EvalContext *ctx, const Rlist *args)
@@ -1413,6 +1544,8 @@ static bool EvalContextClassPut(EvalContext *ctx, const char *ns, const char *na
     {
         return false;
     }
+
+    Nova_ClassHistoryAddContextName(ctx->all_classes, name);
 
     switch (scope)
     {
@@ -2043,28 +2176,88 @@ const Bundle *EvalContextResolveBundleExpression(const EvalContext *ctx, const P
     return bp;
 }
 
-const Body *EvalContextResolveBodyExpression(const EvalContext *ctx, const Policy *policy,
-                                             const char *callee_reference, const char *callee_type)
+const Body *EvalContextFindFirstMatchingBody(const Policy *policy, const char *type,
+                                             const char *namespace, const char *name)
 {
-    ClassRef ref = IDRefQualify(ctx, callee_reference);
-
-    const Body *bp = NULL;
     for (size_t i = 0; i < SeqLength(policy->bodies); i++)
     {
         const Body *curr_bp = SeqAt(policy->bodies, i);
-        if ((strcmp(curr_bp->type, callee_type) != 0) ||
-            (strcmp(curr_bp->name, ref.name) != 0) ||
-            !StringSafeEqual(curr_bp->ns, ref.ns))
+        if ((strcmp(curr_bp->type, type) == 0) &&
+            (strcmp(curr_bp->name, name) == 0) &&
+            StringSafeEqual(curr_bp->ns, namespace))
         {
-            continue;
+            return curr_bp;
         }
+    }
 
-        bp = curr_bp;
-        break;
+    return NULL;
+}
+
+void EvalContextAppendBodyParentsAndArgs(const EvalContext *ctx, const Policy *policy,
+                                         Seq* chain, const Body *bp, const char *callee_type,
+                                         int depth)
+{
+    if (depth > 30) // sanity check
+    {
+        Log(LOG_LEVEL_ERR, "EvalContextAppendBodyParentsAndArgs: body inheritance chain depth %d in body %s is too much, aborting", depth, bp->name);
+        exit(EXIT_FAILURE);
+    }
+
+    for (size_t k = 0; bp->conlist && k < SeqLength(bp->conlist); k++)
+    {
+        Constraint *scp = SeqAt(bp->conlist, k);
+        if (strcmp("inherit_from", scp->lval) == 0)
+        {
+            char* call = NULL;
+
+            if (RVAL_TYPE_SCALAR == scp->rval.type)
+            {
+                call = RvalScalarValue(scp->rval);
+            }
+            else if (RVAL_TYPE_FNCALL == scp->rval.type)
+            {
+                call = RvalFnCallValue(scp->rval)->name;
+            }
+
+            ClassRef parent_ref = IDRefQualify(ctx, call);
+
+            // We don't do a more detailed check for circular
+            // inheritance because the depth check above will catch it
+            if (0 == strcmp(parent_ref.name, bp->name))
+            {
+                Log(LOG_LEVEL_ERR, "EvalContextAppendBodyParentsAndArgs: self body inheritance in %s->%s, aborting", bp->name, parent_ref.name);
+                exit(EXIT_FAILURE);
+            }
+
+            const Body *parent = EvalContextFindFirstMatchingBody(policy, callee_type, parent_ref.ns, parent_ref.name);
+            if (parent)
+            {
+                SeqAppend(chain, (void *)parent);
+                SeqAppend(chain, &(scp->rval));
+                EvalContextAppendBodyParentsAndArgs(ctx, policy, chain, parent, callee_type, depth+1);
+            }
+            ClassRefDestroy(parent_ref);
+        }
+    }
+}
+
+Seq *EvalContextResolveBodyExpression(const EvalContext *ctx, const Policy *policy,
+                                      const char *callee_reference, const char *callee_type)
+{
+    ClassRef ref = IDRefQualify(ctx, callee_reference);
+    Seq *bodies = NULL;
+
+    const Body *bp = EvalContextFindFirstMatchingBody(policy, callee_type, ref.ns, ref.name);
+    if (bp)
+    {
+        bodies = SeqNew(2, NULL);
+        SeqAppend(bodies, (void *)bp);
+        SeqAppend(bodies, (void *)NULL);
+        EvalContextAppendBodyParentsAndArgs(ctx, policy, bodies, bp, callee_type, 1);
     }
 
     ClassRefDestroy(ref);
-    return bp;
+    return bodies;
 }
 
 bool EvalContextPromiseLockCacheContains(const EvalContext *ctx, const char *key)
@@ -2512,9 +2705,9 @@ bool GetChecksumUpdatesDefault(const EvalContext *ctx)
     return ctx->checksum_updates_default;
 }
 
-void EvalContextAddIpAddress(EvalContext *ctx, const char *ip_address)
+void EvalContextAddIpAddress(EvalContext *ctx, const char *ip_address, const char *iface)
 {
-    AppendItem(&ctx->ip_addresses, ip_address, "");
+    AppendItem(&ctx->ip_addresses, ip_address, (NULL == iface ? "" : iface));
 }
 
 void EvalContextDeleteIpAddresses(EvalContext *ctx)
@@ -2683,4 +2876,16 @@ JsonElement* JsonExpandElement(EvalContext *ctx, const JsonElement *source)
 
     ProgrammingError("JsonExpandElement: unexpected container type");
     return NULL;
+}
+
+const StringSet *EvalContextAllClassesGet(const EvalContext *ctx)
+{
+    assert (ctx);
+    return ctx->all_classes;
+}
+
+void EvalContextAllClassesLoggingEnable(EvalContext *ctx, bool enable)
+{
+    assert (ctx);
+    Nova_ClassHistoryEnable(&(ctx->all_classes), enable);
 }

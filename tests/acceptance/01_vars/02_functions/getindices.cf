@@ -13,11 +13,28 @@ body common control
 
 #######################################################
 
-bundle agent init
+# Do not change the name of this bundle or of variables inside this bundle. The
+# original bug CFE-2397 depended on a certain order in the variable table which
+# was triggered by these names.
+bundle common b
 {
-}
+  vars:
+      "d[k]" string => "val1";
+      "d[f][f1]" string => "val2";
+      "d[s][s1]" string => "val3";
 
-#######################################################
+      "d_keys" slist => getindices("d");
+      "d_keys_f" slist => getindices("d[f]");
+      "d_keys_s" slist => getindices("d[s]");
+
+      "c[$(d_keys)]" string => "$(d[$(d_keys)])";
+      "c[f][$(d_keys_f)]" string => "$(d[f][$(d_keys_f)])";
+      "c[s][$(d_keys_s)]" string => "$(d[s][$(d_keys_s)])";
+
+      "c_keys" slist => getindices("c");
+      "c_keys_f" slist => getindices("c[f]");
+      "c_keys_s" slist => getindices("c[s]");
+}
 
 bundle agent test
 {
@@ -30,33 +47,21 @@ bundle agent test
                                            "/export/home/zamboni" };
 
       "fields"     slist => getindices("user");
-      "fields_sorted" slist => sort("fields", "lex");
-      "fields_str" string => join(",", "fields_sorted");
-
       "userfields" slist => getindices("user[fullname]");
-      "userfields_sorted" slist => sort("userfields", "lex");
-      "userfields_str" string => join(",", "userfields_sorted");
+      "inline_fields" slist => getindices('{ "foo": 1, "bar": 2 }');
+      "inline_numfields" slist => getindices('[ "foo", 1, "bar", 2 ]');
+      "inline_function" slist => getindices(parsejson('{ "a": "b", "c": "d" }'));
+      "c_keys"   slist => { @(b.c_keys) };
+      "c_keys_f"   slist => { @(b.c_keys_f) };
+      "c_keys_s"   slist => { @(b.c_keys_s) };
 }
 
 #######################################################
 
 bundle agent check
 {
-  vars:
-      "expected_fields" string => "dirs,fullname,name";
-      "expected_userfields" string => "first,last";
-
-  classes:
-      "ok_fields" expression => strcmp($(expected_fields), $(test.fields_str));
-      "ok_userfields" expression => strcmp($(expected_userfields), $(test.userfields_str));
-      "ok" and => { "ok_fields", "ok_userfields" };
-
-  reports:
-    DEBUG::
-      "fields = '$(test.fields_str)', expected = '$(expected_fields)'";
-      "userfields = '$(test.userfields_str)', expected = '$(expected_userfields)'";
-    ok::
-      "$(this.promise_filename) Pass";
-    !ok::
-      "$(this.promise_filename) FAIL";
+  methods:
+      "check"  usebundle => dcs_check_state(test,
+                                           "$(this.promise_filename).expected.json",
+                                           $(this.promise_filename));
 }

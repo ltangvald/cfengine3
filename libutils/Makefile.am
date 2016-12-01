@@ -66,12 +66,14 @@ libutils_la_SOURCES = \
 	rb-tree.c rb-tree.h \
 	mustache.c mustache.h \
 	cfversion.c cfversion.h \
+	passopenfile.c passopenfile.h \
 	unicode.c unicode.h \
 	hash.c hash.h \
 	queue.c queue.h \
 	ring_buffer.c ring_buffer.h \
 	regex.c regex.h \
 	encode.c encode.h \
+	pcre_wrap.c pcre_wrap.h \
 	printsize.h
 
 if !NT

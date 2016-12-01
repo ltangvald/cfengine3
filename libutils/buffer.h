@@ -56,6 +56,7 @@ typedef struct
 } Buffer;
 
 
+typedef bool (*BufferFilterFn)(char item);
 
 /**
   @brief Buffer initialization routine.
@@ -193,10 +194,21 @@ int BufferPrintf(Buffer *buffer, const char *format, ...) FUNC_ATTR_PRINTF(2, 3)
   character.
   @note The data will be preserved if this operation fails, although it might be in a detached state.
   @param buffer
-  @param format
+  @param format NB! Make sure to sanitize if taken from user input.
   @return The number of bytes written to the buffer or 0 if the operation needs to be retried. In case of error -1 is returned.
   */
 int BufferVPrintf(Buffer *buffer, const char *format, va_list ap);
+
+/**
+  @brief Does a PCRE search and replace on the buffer data.
+
+  @param buffer
+  @param pattern
+  @param substitute (backreferences allowed)
+  @param options Perl-style gms...
+  @return NULL if successful, an error string otherwise.
+  */
+const char* BufferSearchAndReplace(Buffer *buffer, const char *pattern, const char *substitute, const char *options);
 
 /**
   @brief Clears the buffer.
@@ -241,6 +253,45 @@ BufferBehavior BufferMode(const Buffer *buffer);
   @param mode The new mode of operation.
   */
 void BufferSetMode(Buffer *buffer, BufferBehavior mode);
+
+/**
+  @brief Returns a filtered copy of a Buffer
+
+  @param buffer The buffer to operate on.
+  @param filter a function to test for inclusion
+  @param invert Whether the test should be inverted
+  */
+Buffer* BufferFilter(Buffer *buffer, BufferFilterFn filter, const bool invert);
+
+/**
+  @brief Filters a Buffer in place
+
+  @param buffer The buffer to operate on.
+  @param filter a function to test for inclusion
+  @param invert Whether the test should be inverted
+  */
+void BufferRewrite(Buffer *buffer, BufferFilterFn filter, const bool invert);
+
+/**
+  @brief Trim a buffer to be at most max bytes.
+
+  If the buffer is below the max bytes, nothing happens. Otherwise,
+  it's trimmed to that many bytes. This is not persistent, the buffer
+  could grow beyond the max bytes in the future.
+
+  @param buffer
+  @param max the maximum number of bytes to trim to
+  */
+void BufferTrimToMaxLength(Buffer *buffer, unsigned int max);
+
+/**
+  @brief Canonify a buffer in place: replace [^0-9a-zA-Z] with '_'
+
+  @see CanonifyNameInPlace
+
+  @param buffer
+  */
+void BufferCanonify(Buffer *buffer);
 
 /**
   @brief Provides a pointer to the internal data.

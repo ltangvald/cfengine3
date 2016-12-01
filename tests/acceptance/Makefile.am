@@ -21,6 +21,9 @@
 # (COSL) may apply to this file if you as a licensee so wish it. See
 # included file COSL.txt.
 #
+
+SUBDIRS = 25_cf-execd
+
 AM_CPPFLAGS = $(ENTERPRISE_CFLAGS) \
 	-I$(top_srcdir)/libpromises \
 	-I$(top_srcdir)/libutils \
@@ -77,7 +80,7 @@ check-local:
 
 
 EXTRA_DIST = default.cf.sub dcs.cf.sub plucked.cf.sub run_with_server.cf.sub \
-	testall dummy_etc \
+	testall dummy_etc write_args.sh \
 	root-MD5=617eb383deffef843ea856b129d0a423.pub \
 	root-MD5=617eb383deffef843ea856b129d0a423.priv
 
@@ -88,7 +91,7 @@ dist-hook:
 	chmod -R go-w $(distdir)
 
 
-CLEANFILES = *.gcno *.gcda
+CLEANFILES = *.gcno *.gcda Makefile.testall
 
 pluck:
 	echo '### This is an auto-generated file, see Makefile.am and `make pluck` ###' > plucked.cf.sub

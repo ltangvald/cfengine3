@@ -837,8 +837,9 @@ static PromiseResult SourceSearchAndCopy(EvalContext *ctx, const char *from, cha
             }
         }
 
-        if (attr.copy.purge)    /* Purge this file */
+        if (attr.copy.purge)
         {
+            /* Append this file to the list of files not to purge */
             AppendItem(&namecache, dirp->d_name, NULL);
         }
 
@@ -973,6 +974,15 @@ static PromiseResult SourceSearchAndCopy(EvalContext *ctx, const char *from, cha
         else
         {
             result = PromiseResultUpdate(result, VerifyCopy(ctx, newfrom, newto, attr, pp, inode_cache, conn));
+        }
+        
+        if (conn != NULL &&
+            conn->conn_info->status != CONNECTIONINFO_STATUS_ESTABLISHED)
+        {
+            cfPS(ctx, LOG_LEVEL_INFO, PROMISE_RESULT_INTERRUPTED, pp,
+                 attr, "connection error");
+            AbstractDirClose(dirh);
+            return PROMISE_RESULT_INTERRUPTED;
         }
     }
 
@@ -2699,6 +2709,10 @@ static PromiseResult CopyFileSources(EvalContext *ctx, char *destination, Attrib
 
         EndMeasure(eventname, start);
     }
+    else
+    {
+        EndMeasure(NULL, start);
+    }
 
     BufferDestroy(source);
     return result;
@@ -3782,6 +3796,52 @@ bool CfCreateFile(EvalContext *ctx, char *file, const Promise *pp, Attributes at
             *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
             return false;
         }
+    }
+    else if (attr.file_type && !strncmp(attr.file_type, "fifo", 5))
+    {
+#ifndef _WIN32
+        if (!DONTDO)
+        {
+            mode_t saveumask = umask(0);
+            mode_t filemode = 0600;
+
+            if (PromiseGetConstraintAsRval(pp, "mode", RVAL_TYPE_SCALAR) == NULL)
+            {
+                /* Relying on umask is risky */
+                filemode = 0600;
+                Log(LOG_LEVEL_VERBOSE, "No mode was set, choose plain file default %04jo", (uintmax_t)filemode);
+            }
+            else
+            {
+                filemode = attr.perms.plus & ~(attr.perms.minus);
+            }
+
+            MakeParentDirectory(file, attr.move_obstructions);
+
+            char errormsg[CF_BUFSIZE];
+            if (!mkfifo(file, filemode))
+            {
+                snprintf(errormsg, sizeof(errormsg), "(mkfifo: %s)", GetErrorStr());
+                cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_FAIL, pp, attr, "Error creating file '%s', mode '%04jo'. %s",
+                     file, (uintmax_t)filemode, errormsg);
+                umask(saveumask);
+                return false;
+            }
+
+            umask(saveumask);
+            return true;
+        }
+        else
+        {
+            cfPS(ctx, LOG_LEVEL_ERR, PROMISE_RESULT_WARN, pp, attr, "Warning promised, need to create fifo '%s'", file);
+            *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
+            return false;
+        }
+#else
+        cfPS(ctx, LOG_LEVEL_WARNING, PROMISE_RESULT_WARN, pp, attr, "Operation not supported on Windows");
+        *result = PromiseResultUpdate(*result, PROMISE_RESULT_WARN);
+        return false;
+#endif
     }
     else
     {

@@ -1,7 +1,7 @@
 #######################################################
 #
-# Test non matching end selector in region matches
-# EOF
+# Test non matching end selector in region.
+# This will cause content won't be added to file. 
 #
 #######################################################
 
@@ -23,7 +23,6 @@ bar
 
       "expected" string => "[quux]
 bar
-foo
 ";
 
       "files" slist => { "actual", "expected" };

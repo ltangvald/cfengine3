@@ -34,6 +34,15 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 target_triplet = @target@
+
+# Depends on Python.
+@LINUX_TRUE@am__append_1 = \
+@LINUX_TRUE@	test_package_module_apt_get \
+@LINUX_TRUE@	test_package_module_yum
+
+@HAVE_SHUNIT2_TRUE@am__append_2 = test_package_module_freebsd_ports
+@HAVE_PKG_INSTALL_TRUE@@HAVE_SHUNIT2_TRUE@am__append_3 = test_package_module_pkgsrc
+@FREEBSD_TRUE@@HAVE_SHUNIT2_TRUE@am__append_4 = test_package_module_pkg
 subdir = tests/unit
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -96,6 +105,8 @@ abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
 abs_top_builddir = @abs_top_builddir@
 abs_top_srcdir = @abs_top_srcdir@
+ac_cv_pkg_install = @ac_cv_pkg_install@
+ac_cv_shunit2 = @ac_cv_shunit2@
 am__leading_dot = @am__leading_dot@
 am__tar = @am__tar@
 am__untar = @am__untar@
@@ -145,15 +156,12 @@ target_vendor = @target_vendor@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-
-# Depends on Python.
-@LINUX_TRUE@check_SCRIPTS = \
-@LINUX_TRUE@	test_package_module_apt_get \
-@LINUX_TRUE@	test_package_module_yum
-
+check_SCRIPTS = $(am__append_1) $(am__append_2) $(am__append_3) \
+	$(am__append_4)
 TESTS = $(check_SCRIPTS)
-EXTRA_DIST = mock_apt_get mock_dpkg mock_dpkg_deb mock_dpkg_query \
-	mock_rpm mock_yum $(check_SCRIPTS)
+EXTRA_DIST = harness_freebsd_ports mock_apt_get mock_dpkg \
+	mock_dpkg_deb mock_dpkg_query mock_pkgin mock_pkg_info \
+	mock_freebsd_pkg mock_pkgng mock_rpm mock_yum $(check_SCRIPTS)
 all: all-am
 
 .SUFFIXES:

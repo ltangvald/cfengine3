@@ -10,10 +10,10 @@ Subject: clean_xml_output
 
 --- a/tests/acceptance/Makefile.am
 +++ b/tests/acceptance/Makefile.am
-@@ -89,6 +89,7 @@
+@@ -92,6 +92,7 @@
  
  
- CLEANFILES = *.gcno *.gcda
+ CLEANFILES = *.gcno *.gcda Makefile.testall
 +MOSTLYCLEANFILES = *.log *.xml xml.tmp
  
  pluck:

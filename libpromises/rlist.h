@@ -37,6 +37,7 @@ struct Rlist_
 
 RvalType DataTypeToRvalType(DataType datatype);
 
+bool RlistValueIsType(const Rlist *rlist, RvalType type);
 char *RvalScalarValue(Rval rval);
 FnCall *RvalFnCallValue(Rval rval);
 Rlist *RvalRlistValue(Rval rval);
@@ -45,21 +46,25 @@ JsonElement *RvalContainerValue(Rval rval);
 const char *RvalTypeToString(RvalType type);
 
 Rval RvalNew(const void *item, RvalType type);
+Rval RvalNewRewriter(const void *item, RvalType type, JsonElement *map);
 Rval RvalCopy(Rval rval);
+Rval RvalCopyRewriter(Rval rval, JsonElement *map);
 void RvalDestroy(Rval rval);
 JsonElement *RvalToJson(Rval rval);
 char *RvalToString(Rval rval);
 void RvalWrite(Writer *writer, Rval rval);
-void RvalWriteParts(Writer *writer, const void* item, RvalType type);
+void RvalWriteQuoted(Writer *writer, Rval rval);
 unsigned RvalHash(Rval rval, unsigned seed, unsigned max);
 
 Rlist *RlistCopy(const Rlist *list);
+Rlist *RlistCopyRewriter(const Rlist *list, JsonElement *map);
 unsigned int RlistHash        (const Rlist *list, unsigned seed, unsigned max);
 unsigned int RlistHash_untyped(const void *list, unsigned seed, unsigned max);
 void RlistDestroy        (Rlist *list);
 void RlistDestroy_untyped(void *rl);
 void RlistDestroyEntry(Rlist **liststart, Rlist *entry);
 char *RlistScalarValue(const Rlist *rlist);
+char *RlistScalarValueSafe(const Rlist *rlist);
 FnCall *RlistFnCallValue(const Rlist *rlist);
 Rlist *RlistRlistValue(const Rlist *rlist);
 Rlist *RlistParseShown(const char *string);
@@ -79,6 +84,7 @@ Rlist *RlistAppendScalar(Rlist **start, const char *scalar);
 
 Rlist *RlistPrepend(Rlist **start, const void *item, RvalType type);
 Rlist *RlistAppend(Rlist **start, const void *item, RvalType type);
+Rlist *RlistAppendAllTypes(Rlist **start, const void *item, RvalType type, bool all_types);
 
 Rlist *RlistFromSplitString(const char *string, char sep);
 Rlist *RlistFromSplitRegex(const char *string, const char *regex, size_t max_entries, bool allow_blanks);
@@ -87,6 +93,7 @@ void RlistWrite(Writer *writer, const Rlist *list);
 Rlist *RlistLast(Rlist *start);
 void RlistFilter(Rlist **list, bool (*KeepPredicate)(void *item, void *predicate_data), void *predicate_user_data, void (*DestroyItem)(void *item));
 void RlistReverse(Rlist **list);
+void ScalarWrite(Writer *w, const char *s, bool quote);
 void RlistFlatten(EvalContext *ctx, Rlist **list);
 bool RlistEqual        (const Rlist *list1, const Rlist *list2);
 bool RlistEqual_untyped(const void *list1, const void *list2);

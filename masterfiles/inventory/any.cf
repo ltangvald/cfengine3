@@ -529,13 +529,11 @@ bundle agent cfe_autorun_inventory_LLDP
 # testing, and your Friendly Network Admin may be of help too.
 {
   classes:
-      "disable_inventory_LLDP" not => fileexists($(inventory_control.lldpctl_exec));
+      "lldpctl_exec_exists" expression => fileexists($(inventory_control.lldpctl_exec));
 
-  commands:
-    !disable_inventory_LLDP::
-      "$(inventory_control.lldpctl_exec) | perl -n -e 'my ($k, $v) = m/([^=]+)=(.*)/; $k =~ s/\W/_/g; print \"=$k=$v\";"
-      classes => kept_successful_command,
-      module => "true";
+  vars:
+    !disable_inventory_LLDP.lldpctl_exec_exists::
+      "info" data => parsejson(execresult($(inventory_control.lldpctl_json), "noshell"));
 }
 
 bundle agent cfe_autorun_inventory_packages
@@ -560,8 +558,7 @@ bundle agent cfe_autorun_inventory_packages
   packages:
     # From 3.7 onwards there is a new package promise implementation using package
     # modules, in which case installing non_existing_package is not needed any more.
-    #(cfengine_3_5|cfengine_3_6).debian::
-    debian::
+    (cfengine_3_5|cfengine_3_6).debian::
       "cfe_internal_non_existing_package"
       package_policy => "add",
       package_method => inventory_apt_get($(refresh)),
@@ -569,8 +566,7 @@ bundle agent cfe_autorun_inventory_packages
 
     # From 3.7 onwards there is a new package promise implementation using package
     # modules, in which case installing non_existing_package is not needed any more.
-    #(cfengine_3_5|cfengine_3_6).redhat::
-    redhat::
+    (cfengine_3_5|cfengine_3_6).redhat::
       "cfe_internal_non_existing_package"
       package_policy => "add",
       package_method => inventory_yum_rpm($(refresh)),

@@ -308,12 +308,14 @@ const ConstraintSyntax CFA_CONTROLBODY[] =
     ConstraintSyntaxNewInt("sensiblecount", CF_VALRANGE, "Minimum number of files a mounted filesystem is expected to have. Default value: 2 files", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("sensiblesize", CF_VALRANGE, "Minimum number of bytes a mounted filesystem is expected to have. Default value: 1000 bytes", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBool("skipidentify", "Do not send IP/name during server connection because address resolution is broken. Default value: false", SYNTAX_STATUS_NORMAL),
-    ConstraintSyntaxNewStringList("suspiciousnames", "", "List of names to warn about if found during any file search", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewStringList("suspiciousnames", "", "List of names to skip and warn about if found during any file search", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBool("syslog", "true/false switches on output to syslog at the inform level. Default value: false", SYNTAX_STATUS_REMOVED),
     ConstraintSyntaxNewBool("track_value", "true/false switches on tracking of promise valuation. Default value: false", SYNTAX_STATUS_REMOVED),
     ConstraintSyntaxNewStringList("timezone", "", "List of allowed timezones this machine must comply with", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("default_timeout", CF_VALRANGE, "Maximum time a network connection should attempt to connect. Default value: 10 seconds", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBool("verbose", "true/false switches on verbose standard output. Default value: false", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewBool("report_class_log", "true/false enables logging classes at the end of agent execution. Default value: false", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewBool("select_end_match_eof", "Set the default behavior of select_end_match_eof in edit_line promises. Default: false", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };
 
@@ -379,6 +381,8 @@ const ConstraintSyntax CFEX_CONTROLBODY[] = /* enum cfexcontrol */
     ConstraintSyntaxNewString("mailsubject", "", "Define a custom mailsubject for the email message", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("smtpserver", ".*", "Name or IP of a willing smtp server for sending email", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewInt("mailmaxlines", "0,1000", "Maximum number of lines of output to send by email. Default value: 30", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewStringList("mailfilter_include", "", "Which lines from the cf-agent output will be included in emails (regular expression)", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewStringList("mailfilter_exclude", "", "Which lines from the cf-agent output will be excluded in emails (regular expression)", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("schedule", "", "The class schedule used by cf-execd for activating cf-agent", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewOption("executorfacility", CF_FACILITY, "Menu option for syslog facility level. Default value: LOG_USER", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("exec_command", CF_ABSPATHRANGE,"The full path and command to the executable run by default (overriding builtin)", SYNTAX_STATUS_NORMAL),
@@ -398,7 +402,7 @@ const ConstraintSyntax CFH_CONTROLBODY[] =  /* enum cfh_control */
 
 const ConstraintSyntax file_control_constraints[] =  /* enum cfh_control */
 {
-    ConstraintSyntaxNewString("namespace", CF_IDRANGE, "Switch to a private namespace to protect current file from duplicate definitions", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewString("namespace", "[a-zA-Z_][a-zA-Z0-9_]*", "Switch to a private namespace to protect current file from duplicate definitions", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewStringList("inputs", ".*", "List of additional filenames to parse for promises", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };

@@ -59,8 +59,8 @@ leads to Hash Association (lval,rval) => (user,"$(person)")
 
 static Rlist *NewExpArgs(EvalContext *ctx, const Policy *policy, const FnCall *fp)
 {
+    const FnCallType *fn = FnCallTypeGet(fp->name);
     {
-        const FnCallType *fn = FnCallTypeGet(fp->name);
         int len = RlistLen(fp->args);
 
         if (!(fn->options & FNCALL_OPTION_VARARG))
@@ -85,7 +85,9 @@ static Rlist *NewExpArgs(EvalContext *ctx, const Policy *policy, const FnCall *f
         case RVAL_TYPE_FNCALL:
             {
                 FnCall *subfp = RlistFnCallValue(rp);
+
                 rval = FnCallEvaluate(ctx, policy, subfp, fp->caller).rval;
+
                 assert(rval.item);
             }
             break;
@@ -95,7 +97,27 @@ static Rlist *NewExpArgs(EvalContext *ctx, const Policy *policy, const FnCall *f
             break;
         }
 
-        RlistAppend(&expanded_args, rval.item, rval.type);
+        /*
+
+          Collect compound values into containers only if the function
+          supports it.
+
+          Functions without FNCALL_OPTION_COLLECTING don't collect
+          Rlist elements. So in the policy, you call
+          and(splitstring("a b")) and it ends up as and("a", "b").
+          This expansion happens once per FnCall, not for all
+          arguments.
+
+          Functions with FNCALL_OPTION_COLLECTING instead collect all
+          the results of a FnCall into a single JSON array object. It
+          requires functions to expect it, but it's the only
+          reasonable way to preserve backwards compatibility for
+          functions like and() and allow nesting of calls to functions
+          that take and return compound data types.
+
+        */
+        RlistAppendAllTypes(&expanded_args, rval.item, rval.type,
+                            (fn->options & FNCALL_OPTION_COLLECTING));
         RvalDestroy(rval);
     }
 
@@ -139,9 +161,14 @@ FnCall *FnCallNew(const char *name, Rlist *args)
 
 /*******************************************************************/
 
+FnCall *FnCallCopyRewriter(const FnCall *f, JsonElement *map)
+{
+    return FnCallNew(f->name, RlistCopyRewriter(f->args, map));
+}
+
 FnCall *FnCallCopy(const FnCall *f)
 {
-    return FnCallNew(f->name, RlistCopy(f->args));
+    return FnCallCopyRewriter(f, NULL);
 }
 
 /*******************************************************************/
@@ -193,7 +220,7 @@ void FnCallWrite(Writer *writer, const FnCall *call)
         switch (rp->val.type)
         {
         case RVAL_TYPE_SCALAR:
-            WriterWrite(writer, RlistScalarValue(rp));
+            ScalarWrite(writer, RlistScalarValue(rp), true);
             break;
 
         case RVAL_TYPE_FNCALL:
@@ -239,10 +266,9 @@ static FnCallResult CallFunction(EvalContext *ctx, const Policy *policy, const F
         rp = rp->next;
     }
 
-    char output[CF_BUFSIZE];
     if (argnum != RlistLen(expargs) && !(fncall_type->options & FNCALL_OPTION_VARARG))
     {
-        snprintf(output, CF_BUFSIZE, "Argument template mismatch handling function %s(", fp->name);
+        fprintf(stderr, "Argument template mismatch handling function %s(", fp->name);
         {
             Writer *w = FileWriter(stderr);
             RlistWrite(w, expargs);
@@ -271,7 +297,6 @@ static FnCallResult CallFunction(EvalContext *ctx, const Policy *policy, const F
 
         FatalError(ctx, "Bad arguments");
     }
-
 
     return (*fncall_type->impl) (ctx, policy, fp, expargs);
 }
@@ -309,8 +334,8 @@ FnCallResult FnCallEvaluate(EvalContext *ctx, const Policy *policy, FnCall *fp, 
 
     Rlist *expargs = NewExpArgs(ctx, policy, fp);
 
-    Writer *fncall_writer;
-    const char *fncall_string;
+    Writer *fncall_writer = NULL;
+    const char *fncall_string = "";
     if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG)
     {
         fncall_writer = StringWriter();
@@ -324,8 +349,7 @@ FnCallResult FnCallEvaluate(EvalContext *ctx, const Policy *policy, FnCall *fp, 
         // (the first argument will come down expanded as "!any")
         if (0 == strcmp(fp->name, "ifelse") &&
             RlistLen(expargs) == 3 &&
-            expargs->val.type == RVAL_TYPE_SCALAR &&
-            0 == strcmp("!any", RlistScalarValue(expargs)) &&
+            0 == strcmp("!any", RlistScalarValueSafe(expargs)) &&
             !RlistIsUnresolved(expargs->next->next))
         {
                 Log(LOG_LEVEL_DEBUG, "Allowing ifelse() function evaluation even"

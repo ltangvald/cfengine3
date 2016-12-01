@@ -94,6 +94,8 @@ abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
 abs_top_builddir = @abs_top_builddir@
 abs_top_srcdir = @abs_top_srcdir@
+ac_cv_pkg_install = @ac_cv_pkg_install@
+ac_cv_shunit2 = @ac_cv_shunit2@
 am__leading_dot = @am__leading_dot@
 am__tar = @am__tar@
 am__untar = @am__untar@
@@ -145,8 +147,8 @@ top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 ENV_FILE = testall.env
 #These are created by running the submakefile
-CLEANFILES = testall.env summary.log test.log test.xml dcs.cf.sub \
-	default.cf.sub plucked.cf.sub
+CLEANFILES = testall.env summary.log test.log test.xml \
+	Makefile.testall dcs.cf.sub default.cf.sub plucked.cf.sub
 # Distribute library subdirectory (besides .cf files)
 # Distribute all custom test packages and related files
 # Also distribute the '.cf*' files and the testall script itself.

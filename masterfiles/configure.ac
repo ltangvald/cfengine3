@@ -135,6 +135,12 @@ dnl ######################################################################
 
 m4_include([m4/cf3_platforms.m4])
 
+AC_CHECK_PROG([ac_cv_pkg_install], [pkg_install], [yes], [no])
+AC_CHECK_PROG([ac_cv_shunit2], [shunit2], [yes], [no])
+
+AM_CONDITIONAL([HAVE_PKG_INSTALL], [test "$ac_cv_pkg_install" = "yes"])
+AM_CONDITIONAL([HAVE_SHUNIT2], [test "$ac_cv_shunit2" = "yes"])
+
 dnl ######################################################################
 dnl Print summary
 dnl ######################################################################
@@ -201,7 +207,7 @@ do
         MASTERFILES_INSTALL_TARGETS="$MASTERFILES_INSTALL_TARGETS `echo $j | sed -e 's/\.in$//'`"
     done
 done
-for i in templates
+for i in templates cfe_internal
 do
     for j in `find "$srcdir/$i" -name '*.mustache'`
     do
@@ -209,6 +215,11 @@ do
     done
 done
 
+dnl The lib/3.7/README.md is special, so that 3.7 agents can load the stdlib after the version split reunion
+for i in lib/3.7/README.md
+do
+    MASTERFILES_INSTALL_TARGETS="$MASTERFILES_INSTALL_TARGETS $i"
+done
 AC_SUBST(MASTERFILES_INSTALL_TARGETS)
 
 
@@ -217,9 +228,8 @@ dnl Now make the Makefiles
 dnl ######################################################################
 
 AC_CONFIG_FILES([Makefile
-                controls/3.5/update_def.cf
                 controls/3.6/update_def.cf
-                controls/3.7/update_def.cf
+                controls/update_def.cf
                 modules/packages/Makefile
                 promises.cf
                 tests/acceptance/Makefile

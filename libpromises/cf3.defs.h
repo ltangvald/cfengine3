@@ -466,6 +466,8 @@ typedef enum
     AGENT_CONTROL_TIMEZONE,
     AGENT_CONTROL_TIMEOUT,
     AGENT_CONTROL_VERBOSE,
+    AGENT_CONTROL_REPORTCLASSLOG,
+    AGENT_CONTROL_SELECT_END_MATCH_EOF,
     AGENT_CONTROL_NONE
 } AgentControl;
 
@@ -479,6 +481,8 @@ typedef enum
     EXEC_CONTROL_MAILSUBJECT,
     EXEC_CONTROL_SMTPSERVER,
     EXEC_CONTROL_MAILMAXLINES,
+    EXEC_CONTROL_MAILFILTER_INCLUDE,
+    EXEC_CONTROL_MAILFILTER_EXCLUDE,
     EXEC_CONTROL_SCHEDULE,
     EXEC_CONTROL_EXECUTORFACILITY,
     EXEC_CONTROL_EXECCOMMAND,
@@ -544,7 +548,7 @@ typedef enum
 #define CF_CHARRANGE "^.$"
 #define CF_NULL_VALUE "cf_null"
 
-#define CF_MODERANGE   "[0-7augorwxst,+-]+"
+#define CF_MODERANGE   "[0-7augorwxst,+-=]+"
 #define CF_BSDFLAGRANGE "[+-]*[(arch|archived|nodump|opaque|sappnd|sappend|schg|schange|simmutable|sunlnk|sunlink|uappnd|uappend|uchg|uchange|uimmutable|uunlnk|uunlink)]+"
 #define CF_CLASSRANGE  "[a-zA-Z0-9_!&@@$|.()\\[\\]{}:]+"
 #define CF_IDRANGE     "[a-zA-Z0-9_$(){}\\[\\].:]+"
@@ -625,7 +629,8 @@ typedef enum
     FNCALL_CATEGORY_IO,
     FNCALL_CATEGORY_COMM,
     FNCALL_CATEGORY_DATA,
-    FNCALL_CATEGORY_UTILS
+    FNCALL_CATEGORY_UTILS,
+    FNCALL_CATEGORY_INTERNAL
 } FnCallCategory;
 
 struct ConstraintSyntax_
@@ -870,7 +875,6 @@ typedef struct
 {
     char *last;
     char *lock;
-    char *log;
     bool is_dummy;
 } CfLock;
 
@@ -1195,6 +1199,7 @@ typedef struct
     char *select_end;
     int include_start;
     int include_end;
+    bool select_end_match_eof;
 } EditRegion;
 
 typedef struct
@@ -1509,6 +1514,7 @@ typedef struct
     Environments env;
     char *transformer;
     char *pathtype;
+    char *file_type;
     char *repository;
     char *edit_template;
     char *template_method;
@@ -1524,6 +1530,7 @@ typedef struct
 
     ExecContain contain;
     char *args;
+    Rlist *arglist;
     int module;
 
     Rlist *signals;

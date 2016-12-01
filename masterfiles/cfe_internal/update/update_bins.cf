@@ -14,6 +14,59 @@
 #
 ################################################################################
 
+bundle agent cfe_internal_bins
+# @brief Ensure various component binaries and libraries have proper
+# permissions and make sure that symlinks exist in common $PATH for
+# usability.
+{
+  vars:
+    any::
+      "component[cf-agent]"    string => "cf-agent";
+      "component[cf-runagent]" string => "cf-runagent";
+      "component[cf-key]"      string => "cf-key";
+      "component[cf-monitord]" string => "cf-monitord";
+      "component[cf-promises]" string => "cf-promises";
+      "component[cf-serverd]"  string => "cf-serverd";
+
+    enterprise_edition.policy_server::
+      "component[cf-hub]"       string => "cf-hub";
+      "component[cf-consumer]"  string => "cf-consumer";
+
+    any::
+      "agents" slist => getvalues(component);
+
+  files:
+    # TODO: Add support for windows
+    !windows::
+
+      "$(sys.bindir)"
+      comment => "Make sure cfengine binaries have right file permissions",
+      handle => "cfe_internal_bins_files_sys_workdir_bin",
+      perms => u_m("755"),
+      depth_search => u_recurse_basedir("inf"),
+      ifvarclass => and(strcmp($(sys.workdir), "/var/cfengine")),
+      action => u_immediate;
+
+      # Not to be confused with $(sys.libdir) which is for the stdlib
+      "$(sys.workdir)/lib"
+      comment => "Make sure cfengine libraries have right file permissions",
+      handle => "cfe_internal_bins_files_sys_workdir_lib",
+      perms => u_shared_lib_perms,
+      depth_search => u_recurse_basedir("inf"),
+      action => u_immediate;
+
+      "/usr/local/sbin/$(agents)"
+      comment => "Create symlinks of CFE binaries in /usr/local/sbin",
+      handle => canonify("cfe_internal_bins_files_sbin_$(agents)"),
+      move_obstructions => "true",
+      link_from => u_ln_s("$(sys.workdir)/bin/$(agents)");
+
+      "/usr/local/sbin/$(agents).cfsaved"
+      comment => "Remove all .cfsaved file extension",
+      handle => canonify("cfe_internal_bins_files_remove_$(agent)_cfsaved"),
+      delete => u_tidy;
+}
+
 bundle agent cfe_internal_update_bins
 
 {
@@ -469,9 +522,8 @@ body package_method u_generic(repo)
     debian::
       package_add_command        => "/usr/bin/dpkg --force-confdef --force-confnew --install";
       package_delete_command     => "/usr/bin/dpkg --purge";
-    debian.cfengine_3_5::
-      package_update_command     => "/usr/bin/dpkg --force-confdef --force-confnew --install";
-    debian.!cfengine_3_5::
+
+    debian::
       package_update_command     => "$(sys.workdir)/bin/cf-upgrade -b $(cfe_internal_update_bins.backup_script) -s $(cfe_internal_update_bins.backup_file) -i $(cfe_internal_update_bins.install_script)";
 
     redhat|SuSE|suse::
@@ -496,9 +548,7 @@ body package_method u_generic(repo)
       package_delete_command     => "/bin/rpm -e --nodeps";
       package_verify_command     => "/bin/rpm -V";
       package_noverify_regex     => ".*[^\s].*";
-    (redhat|SuSE|suse).cfengine_3_5::
-      package_update_command     => "/bin/rpm -Uvh";
-    (redhat|SuSE|suse).!cfengine_3_5::
+    (redhat|SuSE|suse)::
       package_update_command     => "$(sys.workdir)/bin/cf-upgrade -b $(cfe_internal_update_bins.backup_script) -s $(cfe_internal_update_bins.backup_file) -i $(cfe_internal_update_bins.install_script)";
 
     redhat.!redhat_4::
@@ -587,9 +637,7 @@ body package_method u_generic(repo)
       # Cfengine appends path to package and package name below, respectively
       package_add_command        => "/bin/sh $(repo)/add_scr $(repo)/admin_file";
       package_delete_command     => "/usr/sbin/pkgrm -n -a $(repo)/admin_file";
-    (solarisx86|solaris).cfengine_3_5::
-      package_update_command     => "/bin/sh $(repo)/upg_scr $(repo)/admin_file";
-    (solarisx86|solaris).!cfengine_3_5::
+    (solarisx86|solaris)::
       package_update_command     => "$(sys.workdir)/bin/cf-upgrade -b $(cfe_internal_update_bins.backup_script) -s $(cfe_internal_update_bins.backup_file) -i $(cfe_internal_update_bins.install_script)";
 
     aix::

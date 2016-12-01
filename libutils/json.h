@@ -25,6 +25,8 @@
 #ifndef CFENGINE_JSON_H
 #define CFENGINE_JSON_H
 
+#include <regex.h>
+
 /**
   @brief JSON data-structure.
 
@@ -148,6 +150,13 @@ JsonElement *JsonMerge(const JsonElement *a, const JsonElement *b);
   @param element [in] The JSON element to destroy.
   */
 void JsonDestroy(JsonElement *element);
+
+/**
+  @brief Destroy a JSON element if needed
+  @param element [in] The JSON element to destroy.
+  @param allocated [in] Whether the element was allocated and needs to be destroyed.
+  */
+void JsonDestroyMaybe(JsonElement *element, bool allocated);
 
 /**
   @brief Get the length of a JsonElement. This is the number of elements or fields in an array or object respectively.
@@ -354,6 +363,8 @@ JsonElement *JsonArrayGet(const JsonElement *array, size_t index);
   */
 bool JsonArrayContainsOnlyPrimitives(JsonElement *array);
 
+typedef JsonElement *JsonLookup(void *ctx, const char **data);
+
 /**
   @brief Parse a string to create a JsonElement
   @param data [in] Pointer to the string to parse
@@ -361,6 +372,19 @@ bool JsonArrayContainsOnlyPrimitives(JsonElement *array);
   @returns See JsonParseError and JsonParseErrorToString
   */
 JsonParseError JsonParse(const char **data, JsonElement **json_out);
+
+/**
+  @brief Parse a string to create a JsonElement
+  @param lookup_data [in] Evaluation context for variable lookups
+  @param lookup_function [in] Callback function for variable lookups
+  @param data [in] Pointer to the string to parse
+  @param json_out Resulting JSON object
+  @returns See JsonParseError and JsonParseErrorToString
+
+  The lookup_context type is void so we don't have to include
+  eval_context.h from libpromises into libutil
+  */
+JsonParseError JsonParseWithLookup(void *lookup_data, JsonLookup *lookup_function, const char **data, JsonElement **json_out);
 
 /**
  * @brief Convenience function to parse JSON from a file
@@ -407,5 +431,7 @@ JsonElementType JsonIteratorCurrentElementType(const JsonIterator *iter);
 JsonContainerType JsonIteratorCurrentContainerType(const JsonIterator *iter);
 JsonPrimitiveType JsonIteratorCurrentPrimitiveType(const JsonIterator *iter);
 bool JsonIteratorHasMore(const JsonIterator *iter);
+
+JsonElement* StringCaptureData(pcre *pattern, const char* regex, const char* data);
 
 #endif

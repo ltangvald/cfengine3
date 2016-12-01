@@ -21,7 +21,7 @@
 # (COSL) may apply to this file if you as a licensee so wish it. See
 # included file COSL.txt.
 #
-noinst_LTLIBRARIES = libcf-execd.la
+noinst_LTLIBRARIES = libcf-execd.la libcf-execd-test.la
 
 AM_CPPFLAGS = \
 	$(OPENSSL_CPPFLAGS) \
@@ -43,6 +43,10 @@ libcf_execd_la_SOURCES = \
         cf-execd-runner.c cf-execd-runner.h \
         exec-config.c exec-config.h \
         execd-config.c execd-config.h
+
+libcf_execd_test_la_SOURCES = $(libcf_execd_la_SOURCES)
+libcf_execd_test_la_LIBADD = $(libcf_execd_la_LIBADD)
+libcf_execd_test_la_CPPFLAGS = $(AM_CPPFLAGS) -DTEST_CF_EXECD
 
 if !BUILTIN_EXTENSIONS
  sbin_PROGRAMS = cf-execd

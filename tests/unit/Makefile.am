@@ -63,6 +63,7 @@ libtest_la_LIBADD = ../../libcompat/libcompat.la
 check_LTLIBRARIES += libstr.la
 libstr_la_SOURCES = \
 	../../libutils/buffer.c \
+	../../libutils/pcre_wrap.c \
 	../../libutils/encode.c \
 	../../libutils/logging.c \
 	../../libutils/misc_lib.c \
@@ -129,6 +130,7 @@ check_PROGRAMS = \
 	map_test \
 	parsemode_test \
 	parser_test \
+	passopenfile_test \
 	policy_test \
 	sort_test \
 	file_name_test \
@@ -141,7 +143,6 @@ check_PROGRAMS = \
 	refcount_test \
 	list_test \
 	buffer_test \
-	cf_key_functions_test \
 	connection_management_test \
 	expand_test \
 	string_expressions_test \
@@ -184,7 +185,8 @@ endif
 endif
 
 check_SCRIPTS = bootstrap_inc_uptodate_test.sh \
-	dynamic_dependency_test.sh
+	dynamic_dependency_test.sh \
+	tar_portability_test.sh
 
 if WITH_INIT_D_SCRIPT
 check_SCRIPTS += init_script_test.sh
@@ -237,7 +239,7 @@ str_test_LDADD = libstr.la
 xml_writer_test_SOURCES = xml_writer_test.c ../../libutils/xml_writer.c
 xml_writer_test_LDADD = libtest.la libstr.la
 
-list_test_SOURCES = list_test.c 
+list_test_SOURCES = list_test.c
 
 refcount_test_SOURCES = refcount_test.c ../../libutils/refcount.c
 
@@ -251,9 +253,7 @@ csv_parser_test_LDADD = libtest.la ../../libutils/libutils.la
 
 regex_test_SOURCES = regex_test.c ../../cf-agent/match_scope.c
 
-cf_key_functions_test_SOURCES = cf_key_functions_test.c ../../cf-key/cf-key-functions.c
-
-ipaddress_test_SOURCES = ipaddress_test.c 
+ipaddress_test_SOURCES = ipaddress_test.c
 
 protocol_test_SOURCES = protocol_test.c \
 	../../cf-serverd/server_common.c \
