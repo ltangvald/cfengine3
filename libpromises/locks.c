@@ -55,18 +55,16 @@
 typedef struct CfLockStack_ {
     char lock[CF_BUFSIZE];
     char last[CF_BUFSIZE];
-    char log[CF_BUFSIZE];
     struct CfLockStack_ *previous;
 } CfLockStack;
 
 static CfLockStack *LOCK_STACK = NULL;
 
-static void PushLock(char *lock, char *last, char *log)
+static void PushLock(char *lock, char *last)
 {
     CfLockStack *new_lock = malloc(sizeof(CfLockStack));
     strlcpy(new_lock->lock, lock, CF_BUFSIZE);
     strlcpy(new_lock->last, last, CF_BUFSIZE);
-    strlcpy(new_lock->log, log, CF_BUFSIZE);
 
     new_lock->previous = LOCK_STACK;
     LOCK_STACK = new_lock;
@@ -393,40 +391,6 @@ static pid_t FindLockPid(char *name)
     }
 }
 
-static void LogLockCompletion(char *cflog, int pid, char *str, char *op, char *operand)
-{
-    FILE *fp;
-    char buffer[CF_MAXVARSIZE];
-    time_t tim;
-
-    if (cflog == NULL)
-    {
-        return;
-    }
-
-    if ((fp = fopen(cflog, "a")) == NULL)
-    {
-        Log(LOG_LEVEL_ERR, "Can't open lock-log file '%s'. (fopen: %s)", cflog, GetErrorStr());
-        exit(EXIT_FAILURE);
-    }
-
-    if ((tim = time((time_t *) NULL)) == -1)
-    {
-        Log(LOG_LEVEL_DEBUG, "Couldn't read system clock");
-    }
-
-    snprintf(buffer, sizeof(buffer), "%s", ctime(&tim));
-
-    if (Chop(buffer, CF_EXPANDSIZE) == -1)
-    {
-        Log(LOG_LEVEL_ERR, "Chop was called on a string that seemed to have no terminator");
-    }
-
-    fprintf(fp, "%s:%s:pid=%d:%s:%s\n", buffer, str, pid, op, operand);
-
-    fclose(fp);
-}
-
 static void LocksCleanup(void)
 {
     CfLockStack *lock;
@@ -435,7 +399,6 @@ static void LocksCleanup(void)
         CfLock best_guess = {
             .lock = xstrdup(lock->lock),
             .last = xstrdup(lock->last),
-            .log = xstrdup(lock->log)
         };
         YieldCurrentLock(best_guess);
         free(lock);
@@ -472,6 +435,11 @@ static char *BodyName(const Promise *pp)
             Constraint *cp = SeqAt(pp->conlist, i);
 
             if (strcmp(cp->lval, "args") == 0)      /* Exception for args, by symmetry, for locking */
+            {
+                continue;
+            }
+
+            if (strcmp(cp->lval, "arglist") == 0)      /* Exception for arglist, by symmetry, for locking */
             {
                 continue;
             }
@@ -662,12 +630,11 @@ void PromiseRuntimeHash(const Promise *pp, const char *salt, unsigned char diges
 /* Digest length stored in md_len */
 }
 
-static CfLock CfLockNew(const char *last, const char *lock, const char *log, bool is_dummy)
+static CfLock CfLockNew(const char *last, const char *lock, bool is_dummy)
 {
     return (CfLock) {
         .last = last ? xstrdup(last) : NULL,
         .lock = lock ? xstrdup(lock) : NULL,
-        .log = log ? xstrdup(log) : NULL,
         .is_dummy = is_dummy
     };
 }
@@ -677,7 +644,6 @@ static CfLock CfLockNull(void)
     return (CfLock) {
         .last = NULL,
         .lock = NULL,
-        .log = NULL,
         .is_dummy = false
     };
 }
@@ -707,7 +673,7 @@ CfLock AcquireLock(EvalContext *ctx, const char *operand, const char *host, time
     // Finally if we're supposed to ignore locks ... do the remaining stuff
     if (EvalContextIsIgnoringLocks(ctx))
     {
-        return CfLockNew(NULL, "dummy", NULL, true);
+        return CfLockNew(NULL, "dummy", true);
     }
 
     char *promise = BodyName(pp);
@@ -732,9 +698,6 @@ CfLock AcquireLock(EvalContext *ctx, const char *operand, const char *host, time
     {
         sum = (CF_MACROALPHABET * sum + cc_operand[i]) % CF_HASHTABLESIZE;
     }
-
-    char cflog[CF_BUFSIZE] = "";
-    snprintf(cflog, CF_BUFSIZE, "%s/cf3.%.40s.runlog", GetLogDir(), host);
 
     char cflock[CF_BUFSIZE] = "";
     snprintf(cflock, CF_BUFSIZE, "lock.%.100s.%s.%.100s_%d_%s", PromiseGetBundle(pp)->name, cc_operator, cc_operand, sum, str_digest);
@@ -789,14 +752,12 @@ CfLock AcquireLock(EvalContext *ctx, const char *operand, const char *host, time
 
                 if (KillLockHolder(cflock))
                 {
-                    LogLockCompletion(cflog, pid,
-                                      "Lock expired, process killed",
-                                      cc_operator, cc_operand);
+                    Log(LOG_LEVEL_INFO, "Lock expired, process with PID %jd killed", (intmax_t)pid);
                     unlink(cflock);
                 }
                 else
                 {
-                    Log(LOG_LEVEL_VERBOSE,
+                    Log(LOG_LEVEL_ERR,
                         "Unable to kill expired process %jd from lock %s"
                         " (probably process not found or permission denied)",
                         (intmax_t) pid, cflock);
@@ -827,9 +788,9 @@ CfLock AcquireLock(EvalContext *ctx, const char *operand, const char *host, time
     ReleaseCriticalSection(CF_CRITIAL_SECTION);
 
     // Keep this as a global for signal handling
-    PushLock(cflock, cflast, cflog);
+    PushLock(cflock, cflast);
 
-    return CfLockNew(cflast, cflock, cflog, false);
+    return CfLockNew(cflast, cflock, false);
 }
 
 void YieldCurrentLock(CfLock lock)
@@ -852,7 +813,6 @@ void YieldCurrentLock(CfLock lock)
         Log(LOG_LEVEL_VERBOSE, "Unable to remove lock %s", lock.lock);
         free(lock.last);
         free(lock.lock);
-        free(lock.log);
         return;
     }
 
@@ -861,7 +821,6 @@ void YieldCurrentLock(CfLock lock)
         Log(LOG_LEVEL_ERR, "Unable to create '%s'. (creat: %s)", lock.last, GetErrorStr());
         free(lock.last);
         free(lock.lock);
-        free(lock.log);
         return;
     }
 
@@ -873,8 +832,7 @@ void YieldCurrentLock(CfLock lock)
     while (stack)
     {
         if ((strcmp(stack->lock, lock.lock) == 0)
-         && (strcmp(stack->last, lock.last) == 0)
-         && (strcmp(stack->log, lock.log) == 0))
+         && (strcmp(stack->last, lock.last) == 0))
         {
             CfLockStack *delete_me = stack;
             stack = stack->previous;
@@ -892,11 +850,8 @@ void YieldCurrentLock(CfLock lock)
         stack = stack->previous;
     }
 
-    LogLockCompletion(lock.log, getpid(), "Lock removed normally ", lock.lock, "");
-
     free(lock.last);
     free(lock.lock);
-    free(lock.log);
 }
 
 void YieldCurrentLockAndRemoveFromCache(EvalContext *ctx, CfLock lock,
@@ -931,10 +886,10 @@ void GetLockName(char *lockname, const char *locktype, const char *base, const R
         max_sample = 0;
     }
 
-    strncpy(lockname, locktype, CF_BUFSIZE / 10);
-    strcat(lockname, "_");
-    strncat(lockname, base, CF_BUFSIZE / 10);
-    strcat(lockname, "_");
+    strlcpy(lockname, locktype, CF_BUFSIZE / 10);
+    strlcat(lockname, "_", CF_BUFSIZE / 10);
+    strlcat(lockname, base, CF_BUFSIZE / 10);
+    strlcat(lockname, "_", CF_BUFSIZE / 10);
 
     for (const Rlist *rp = params; rp != NULL; rp = rp->next)
     {

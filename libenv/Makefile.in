@@ -35,6 +35,9 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 target_triplet = @target@
+@NT_FALSE@am__append_1 = \
+@NT_FALSE@	unix_iface.c
+
 subdir = libenv
 DIST_COMMON = $(srcdir)/Makefile.am $(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
@@ -58,8 +61,12 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 LTLIBRARIES = $(noinst_LTLIBRARIES)
 libenv_la_DEPENDENCIES =
+am__libenv_la_SOURCES_DIST = constants.c constants.h sysinfo.c \
+	sysinfo.h sysinfo_priv.h time_classes.c time_classes.h zones.c \
+	zones.h unix_iface.c
+@NT_FALSE@am__objects_1 = unix_iface.lo
 am_libenv_la_OBJECTS = constants.lo sysinfo.lo time_classes.lo \
-	unix_iface.lo zones.lo
+	zones.lo $(am__objects_1)
 libenv_la_OBJECTS = $(am_libenv_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -91,7 +98,7 @@ AM_V_GEN = $(am__v_GEN_@AM_V@)
 am__v_GEN_ = $(am__v_GEN_@AM_DEFAULT_V@)
 am__v_GEN_0 = @echo "  GEN   " $@;
 SOURCES = $(libenv_la_SOURCES)
-DIST_SOURCES = $(libenv_la_SOURCES)
+DIST_SOURCES = $(am__libenv_la_SOURCES_DIST)
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -147,6 +154,11 @@ LIBACL_CPPFLAGS = @LIBACL_CPPFLAGS@
 LIBACL_LDFLAGS = @LIBACL_LDFLAGS@
 LIBACL_LIBS = @LIBACL_LIBS@
 LIBACL_PATH = @LIBACL_PATH@
+LIBCURL_CFLAGS = @LIBCURL_CFLAGS@
+LIBCURL_CPPFLAGS = @LIBCURL_CPPFLAGS@
+LIBCURL_LDFLAGS = @LIBCURL_LDFLAGS@
+LIBCURL_LIBS = @LIBCURL_LIBS@
+LIBCURL_PATH = @LIBCURL_PATH@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
@@ -335,13 +347,9 @@ workdir = @workdir@
 # included file COSL.txt.
 #
 noinst_LTLIBRARIES = libenv.la
-libenv_la_SOURCES = \
-	constants.c constants.h \
-        sysinfo.c sysinfo.h sysinfo_priv.h \
-        time_classes.c time_classes.h \
-	unix_iface.c unix_iface.h \
-        zones.c zones.h
-
+libenv_la_SOURCES = constants.c constants.h sysinfo.c sysinfo.h \
+	sysinfo_priv.h time_classes.c time_classes.h zones.c zones.h \
+	$(am__append_1)
 @SOLARIS_TRUE@libenv_la_LIBADD = -lkstat
 
 # Those dependencies are ought to go away ASAP

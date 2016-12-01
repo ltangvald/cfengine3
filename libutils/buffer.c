@@ -26,6 +26,8 @@
 #include <buffer.h>
 #include <refcount.h>
 #include <misc_lib.h>
+#include <pcre_wrap.h>
+#include <string_lib.h>
 
 Buffer *BufferNewWithCapacity(unsigned int initial_capacity)
 {
@@ -245,6 +247,16 @@ void BufferAppendString(Buffer *buffer, const char *str)
     buffer->buffer[buffer->used] = '\0';
 }
 
+void BufferTrimToMaxLength(Buffer *buffer, unsigned int max)
+{
+    if (buffer->used > max)
+    {
+        buffer->used = max;
+        // no need to call ExpandIfNeeded
+        buffer->buffer[buffer->used] = '\0';
+    }
+}
+
 void BufferAppend(Buffer *buffer, const char *bytes, unsigned int length)
 {
     assert(buffer);
@@ -415,6 +427,7 @@ int BufferPrintf(Buffer *buffer, const char *format, ...)
     return printed;
 }
 
+// NB! Make sure to sanitize format if taken from user input
 int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
 {
     assert(buffer);
@@ -447,6 +460,36 @@ int BufferVPrintf(Buffer *buffer, const char *format, va_list ap)
     return printed;
 }
 
+// returns NULL on success, otherwise an error string
+const char* BufferSearchAndReplace(Buffer *buffer, const char *pattern, const char *substitute, const char *options)
+{
+    assert(buffer);
+    assert(pattern);
+    assert(substitute);
+    assert(options);
+
+    int err;
+
+    pcre_wrap_job *job = pcre_wrap_compile(pattern, substitute, options, &err);
+    if (NULL == job)
+    {
+        return pcre_wrap_strerror(err);
+    }
+
+    size_t length = BufferSize(buffer);
+    char *result;
+    if (0 > (err = pcre_wrap_execute(job, (char*)BufferData(buffer), length, &result, &length)))
+    {
+        return pcre_wrap_strerror(err);
+    }
+
+    BufferSet(buffer, result, length);
+    free(result);
+    pcre_wrap_free_job(job);
+
+    return NULL;
+}
+
 void BufferClear(Buffer *buffer)
 {
     assert(buffer);
@@ -464,6 +507,15 @@ const char *BufferData(const Buffer *buffer)
 {
     assert(buffer);
     return buffer ? buffer->buffer : NULL;
+}
+
+void BufferCanonify(Buffer *buffer)
+{
+    assert(buffer);
+    if (NULL != buffer && NULL != buffer->buffer)
+    {
+        CanonifyNameInPlace(buffer->buffer);
+    }
 }
 
 BufferBehavior BufferMode(const Buffer *buffer)
@@ -492,6 +544,37 @@ void BufferSetMode(Buffer *buffer, BufferBehavior mode)
         }
     }
     buffer->mode = mode;
+}
+
+Buffer* BufferFilter(Buffer *buffer, BufferFilterFn filter, const bool invert)
+{
+    assert(buffer);
+
+    Buffer *filtered = BufferNew();
+    for (unsigned int i = 0; i < buffer->used; ++i)
+    {
+        bool test = (*filter)(buffer->buffer[i]);
+        if (invert)
+        {
+            test = !test;
+        }
+
+        if (test)
+        {
+            BufferAppendChar(filtered, buffer->buffer[i]);
+        }
+    }
+
+    return filtered;
+}
+
+void BufferRewrite(Buffer *buffer, BufferFilterFn filter, const bool invert)
+{
+    assert(buffer);
+
+    Buffer *rewrite = BufferFilter(buffer, filter, invert);
+    BufferSet(buffer, BufferData(rewrite), BufferSize(rewrite));
+    BufferDestroy(rewrite);
 }
 
 unsigned BufferCapacity(const Buffer *buffer)

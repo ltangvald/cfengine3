@@ -80,7 +80,7 @@ static void test_insert_jumbo(void)
 
 static void test_remove(void)
 {
-    HashMap *hashmap = HashMapNew(ConstHash, (MapKeyEqualFn)StringSafeEqual, free, free);
+    HashMap *hashmap = HashMapNew(ConstHash, StringSafeEqual_untyped, free, free);
 
     HashMapInsert(hashmap, xstrdup("a"), xstrdup("b"));
 
@@ -181,7 +181,7 @@ static void test_hashmap_new_destroy(void)
 
 static void test_hashmap_degenerate_hash_fn(void)
 {
-    HashMap *hashmap = HashMapNew(ConstHash, (MapKeyEqualFn)StringSafeEqual, free, free);
+    HashMap *hashmap = HashMapNew(ConstHash, StringSafeEqual_untyped, free, free);
 
     for (int i = 0; i < 100; i++)
     {
@@ -210,8 +210,7 @@ typedef struct
  * any references in the new value are not invalid. */
 static void test_array_map_key_referenced_in_value(void)
 {
-    ArrayMap *m = ArrayMapNew((MapKeyEqualFn) StringSafeEqual,
-                              free, free);
+    ArrayMap *m = ArrayMapNew(StringSafeEqual_untyped, free, free);
 
     char      *key1 = xstrdup("blah");
     TestValue *val1 = xmalloc(sizeof(*val1));
@@ -257,8 +256,7 @@ static void test_array_map_key_referenced_in_value(void)
 /* Same purpose as the above test. */
 static void test_hash_map_key_referenced_in_value(void)
 {
-    HashMap *m = HashMapNew((MapHashFn) StringHash,
-                            (MapKeyEqualFn) StringSafeEqual,
+    HashMap *m = HashMapNew(StringHash_untyped, StringSafeEqual_untyped,
                             free, free);
     char      *key1 = xstrdup("blah");
     TestValue *val1 = xmalloc(sizeof(*val1));

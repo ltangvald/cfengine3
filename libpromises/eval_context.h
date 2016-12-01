@@ -129,7 +129,13 @@ StringSet *EvalContextClassTags(const EvalContext *ctx, const char *ns, const ch
 ClassTableIterator *EvalContextClassTableIteratorNewGlobal(const EvalContext *ctx, const char *ns, bool is_hard, bool is_soft);
 ClassTableIterator *EvalContextClassTableIteratorNewLocal(const EvalContext *ctx);
 
+// Class Logging
+const StringSet *EvalContextAllClassesGet(const EvalContext *ctx);
+void EvalContextAllClassesLoggingEnable(EvalContext *ctx, bool enable);
+
 void EvalContextClear(EvalContext *ctx);
+
+Rlist *EvalContextGetPromiseCallerMethods(EvalContext *ctx);
 
 void EvalContextStackPushBundleFrame(EvalContext *ctx, const Bundle *owner, const Rlist *args, bool inherits_previous);
 void EvalContextStackPushBodyFrame(EvalContext *ctx, const Promise *caller, const Body *body, const Rlist *args);
@@ -148,6 +154,9 @@ StringSet *EvalContextStackPromisees(const EvalContext *ctx);
 const Promise *EvalContextStackCurrentPromise(const EvalContext *ctx);
 const Bundle *EvalContextStackCurrentBundle(const EvalContext *ctx);
 const RingBuffer *EvalContextStackCurrentMessages(const EvalContext *ctx);
+
+Rlist *EvalContextGetPromiseCallerMethods(EvalContext *ctx);
+JsonElement *EvalContextGetPromiseCallers(EvalContext *ctx);
 
 bool EvalContextVariablePut(EvalContext *ctx, const VarRef *ref, const void *value, DataType type, const char *tags);
 bool EvalContextVariablePutSpecial(EvalContext *ctx, SpecialScope scope, const char *lval, const void *value, DataType type, const char *tags);
@@ -176,8 +185,17 @@ const void  *EvalContextVariableControlCommonGet(const EvalContext *ctx, CommonC
  */
 const Bundle *EvalContextResolveBundleExpression(const EvalContext *ctx, const Policy *policy,
                                                  const char *callee_reference, const char *callee_type);
-const Body *EvalContextResolveBodyExpression(const EvalContext *ctx, const Policy *policy,
-                                             const char *callee_reference, const char *callee_type);
+
+const Body *EvalContextFindFirstMatchingBody(const Policy *policy, const char *type,
+                                             const char *namespace, const char *name);
+
+/**
+  @brief Returns a Sequence of const Body* elements, first the body and then its parents
+
+  Uses `inherit_from` to figure out the parents.
+  */
+Seq *EvalContextResolveBodyExpression(const EvalContext *ctx, const Policy *policy,
+                                      const char *callee_reference, const char *callee_type);
 
 /* - Parsing/evaluating expressions - */
 void ValidateClassSyntax(const char *str);
@@ -193,7 +211,7 @@ bool GetChecksumUpdatesDefault(const EvalContext *ctx);
 
 /* IP addresses */
 Item *EvalContextGetIpAddresses(const EvalContext *ctx);
-void EvalContextAddIpAddress(EvalContext *ctx, const char *address);
+void EvalContextAddIpAddress(EvalContext *ctx, const char *address, const char *iface);
 void EvalContextDeleteIpAddresses(EvalContext *ctx);
 
 /* - Rest - */
@@ -211,6 +229,9 @@ bool MissingDependencies(EvalContext *ctx, const Promise *pp);
 void cfPS(EvalContext *ctx, LogLevel level, PromiseResult status, const Promise *pp, Attributes attr, const char *fmt, ...) FUNC_ATTR_PRINTF(6, 7);
 
 PackagePromiseContext *GetPackageDefaultsFromCtx(const EvalContext *ctx);
+
+bool EvalContextGetSelectEndMatchEof(const EvalContext *ctx);
+void EvalContextSetSelectEndMatchEof(EvalContext *ctx, bool value);
 
 void AddDefaultPackageModuleToContext(const EvalContext *ctx, char *name);
 void AddDefaultInventoryToContext(const EvalContext *ctx, Rlist *inventory);

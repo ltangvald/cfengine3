@@ -20,7 +20,7 @@ Subject: do_not_build_rpmver
  
 --- a/configure.ac
 +++ b/configure.ac
-@@ -1606,7 +1606,6 @@
+@@ -1638,7 +1638,6 @@
      cf-runagent/Makefile
      cf-serverd/Makefile
      misc/Makefile

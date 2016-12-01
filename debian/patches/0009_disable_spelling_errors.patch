@@ -35,7 +35,7 @@ Fix some spelling errors in various log messages.
          }
 --- a/cf-key/cf-key-functions.c
 +++ b/cf-key/cf-key-functions.c
-@@ -290,7 +290,7 @@
+@@ -301,7 +301,7 @@
      }
      else if (removed_input + removed_equivalent == 0)
      {
@@ -46,7 +46,7 @@ Fix some spelling errors in various log messages.
      else
 --- a/cf-runagent/cf-runagent.c
 +++ b/cf-runagent/cf-runagent.c
-@@ -599,7 +599,7 @@
+@@ -630,7 +630,7 @@
                  if (IsAbsPath(value))
                  {
                      strlcpy(OUTPUT_DIRECTORY, value, CF_BUFSIZE);

@@ -40,9 +40,8 @@ subdir = .
 DIST_COMMON = $(am__configure_deps) $(nobase_dist_masterfiles_DATA) \
 	$(srcdir)/Makefile.am $(srcdir)/Makefile.in \
 	$(srcdir)/promises.cf.in $(top_srcdir)/configure \
-	$(top_srcdir)/controls/3.5/update_def.cf.in \
 	$(top_srcdir)/controls/3.6/update_def.cf.in \
-	$(top_srcdir)/controls/3.7/update_def.cf.in config.guess \
+	$(top_srcdir)/controls/update_def.cf.in config.guess \
 	config.sub install-sh missing
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/tar.m4 \
@@ -52,8 +51,7 @@ am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 am__CONFIG_DISTCLEAN_FILES = config.status config.cache config.log \
  configure.lineno config.status.lineno
 mkinstalldirs = $(install_sh) -d
-CONFIG_CLEAN_FILES = controls/3.5/update_def.cf \
-	controls/3.6/update_def.cf controls/3.7/update_def.cf \
+CONFIG_CLEAN_FILES = controls/3.6/update_def.cf controls/update_def.cf \
 	promises.cf
 CONFIG_CLEAN_VPATH_FILES =
 AM_V_GEN = $(am__v_GEN_@AM_V@)
@@ -189,6 +187,8 @@ abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
 abs_top_builddir = @abs_top_builddir@
 abs_top_srcdir = @abs_top_srcdir@
+ac_cv_pkg_install = @ac_cv_pkg_install@
+ac_cv_shunit2 = @ac_cv_shunit2@
 am__leading_dot = @am__leading_dot@
 am__tar = @am__tar@
 am__untar = @am__untar@
@@ -243,7 +243,7 @@ SUBDIRS = modules/packages tests/unit $(am__append_1)
 # See configure.ac for MASTERFILES_INSTALL_TARGETS.
 nobase_dist_masterfiles_DATA = @MASTERFILES_INSTALL_TARGETS@
 masterfilesdir = $(datadir)
-EXTRA_DIST = README.md inventory/README.md lib/README.md CONTRIBUTING.md LICENSE
+EXTRA_DIST = README.md inventory/README.md lib/README.md lib/3.7/README.md CONTRIBUTING.md LICENSE
 
 # Do not reveal usernames of the buildslave
 TAR_OPTIONS = --owner=0 --group=0
@@ -284,11 +284,9 @@ $(top_srcdir)/configure: @MAINTAINER_MODE_TRUE@ $(am__configure_deps)
 $(ACLOCAL_M4): @MAINTAINER_MODE_TRUE@ $(am__aclocal_m4_deps)
 	$(am__cd) $(srcdir) && $(ACLOCAL) $(ACLOCAL_AMFLAGS)
 $(am__aclocal_m4_deps):
-controls/3.5/update_def.cf: $(top_builddir)/config.status $(top_srcdir)/controls/3.5/update_def.cf.in
-	cd $(top_builddir) && $(SHELL) ./config.status $@
 controls/3.6/update_def.cf: $(top_builddir)/config.status $(top_srcdir)/controls/3.6/update_def.cf.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@
-controls/3.7/update_def.cf: $(top_builddir)/config.status $(top_srcdir)/controls/3.7/update_def.cf.in
+controls/update_def.cf: $(top_builddir)/config.status $(top_srcdir)/controls/update_def.cf.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@
 promises.cf: $(top_builddir)/config.status $(srcdir)/promises.cf.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@

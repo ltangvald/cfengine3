@@ -74,8 +74,9 @@ am__libutils_la_SOURCES_DIST = alloc.c alloc.h atexit.c atexit.h \
 	csv_writer.c csv_writer.h csv_parser.c csv_parser.h \
 	xml_writer.c xml_writer.h file_lib.c file_lib.h man.c man.h \
 	rb-tree.c rb-tree.h mustache.c mustache.h cfversion.c \
-	cfversion.h unicode.c unicode.h hash.c hash.h queue.c queue.h \
-	ring_buffer.c ring_buffer.h regex.c regex.h encode.c encode.h \
+	cfversion.h passopenfile.c passopenfile.h unicode.c unicode.h \
+	hash.c hash.h queue.c queue.h ring_buffer.c ring_buffer.h \
+	regex.c regex.h encode.c encode.h pcre_wrap.c pcre_wrap.h \
 	printsize.h unix_dir.c
 @NT_FALSE@am__objects_1 = unix_dir.lo
 @CYGWIN_TRUE@am__objects_2 = unix_dir.lo
@@ -85,8 +86,9 @@ am_libutils_la_OBJECTS = alloc.lo atexit.lo hashes.lo sequence.lo \
 	ip_address.lo map.lo array_map.lo hash_map.lo misc_lib.lo \
 	writer.lo csv_writer.lo csv_parser.lo xml_writer.lo \
 	file_lib.lo man.lo rb-tree.lo mustache.lo cfversion.lo \
-	unicode.lo hash.lo queue.lo ring_buffer.lo regex.lo encode.lo \
-	$(am__objects_1) $(am__objects_2)
+	passopenfile.lo unicode.lo hash.lo queue.lo ring_buffer.lo \
+	regex.lo encode.lo pcre_wrap.lo $(am__objects_1) \
+	$(am__objects_2)
 libutils_la_OBJECTS = $(am_libutils_la_OBJECTS)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -174,6 +176,11 @@ LIBACL_CPPFLAGS = @LIBACL_CPPFLAGS@
 LIBACL_LDFLAGS = @LIBACL_LDFLAGS@
 LIBACL_LIBS = @LIBACL_LIBS@
 LIBACL_PATH = @LIBACL_PATH@
+LIBCURL_CFLAGS = @LIBCURL_CFLAGS@
+LIBCURL_CPPFLAGS = @LIBCURL_CPPFLAGS@
+LIBCURL_LDFLAGS = @LIBCURL_LDFLAGS@
+LIBCURL_LIBS = @LIBCURL_LIBS@
+LIBCURL_PATH = @LIBCURL_PATH@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
@@ -382,9 +389,10 @@ libutils_la_SOURCES = alloc.c alloc.h atexit.c atexit.h compiler.h \
 	csv_writer.h csv_parser.c csv_parser.h xml_writer.c \
 	xml_writer.h file_lib.c file_lib.h man.c man.h rb-tree.c \
 	rb-tree.h mustache.c mustache.h cfversion.c cfversion.h \
-	unicode.c unicode.h hash.c hash.h queue.c queue.h \
-	ring_buffer.c ring_buffer.h regex.c regex.h encode.c encode.h \
-	printsize.h $(am__append_1) $(am__append_2)
+	passopenfile.c passopenfile.h unicode.c unicode.h hash.c \
+	hash.h queue.c queue.h ring_buffer.c ring_buffer.h regex.c \
+	regex.h encode.c encode.h pcre_wrap.c pcre_wrap.h printsize.h \
+	$(am__append_1) $(am__append_2)
 CLEANFILES = *.gcno *.gcda
 
 #
@@ -489,6 +497,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/map.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/misc_lib.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/mustache.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/passopenfile.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pcre_wrap.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/proc_keyvalue.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/queue.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/rb-tree.Plo@am__quote@

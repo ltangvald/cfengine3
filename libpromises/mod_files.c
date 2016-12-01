@@ -71,6 +71,7 @@ static const ConstraintSyntax select_region_constraints[] =
     ConstraintSyntaxNewBool("include_end_delimiter", "Whether to include the section delimiter. Default value: false", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("select_start", CF_ANYSTRING, "Regular expression matching start of edit region", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewString("select_end", CF_ANYSTRING, "Regular expression matches end of edit region from start", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewBool("select_end_match_eof", "Whether to include EOF as end of the region. Default value: false", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewNull()
 };
 
@@ -343,6 +344,7 @@ static const ConstraintSyntax CF_FILES_BODIES[] =
     ConstraintSyntaxNewString("edit_template", CF_ABSPATHRANGE, "The name of a special CFEngine template file to expand", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBundle("edit_xml", "XML editing model for file", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBody("file_select", &file_select_body, "Choose which files select in a search", SYNTAX_STATUS_NORMAL),
+    ConstraintSyntaxNewOption("file_type", "regular,fifo", "Type of file to create. Default value: regular", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBody("link_from", &link_from_body, "Criteria for linking file from a source", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewBool("move_obstructions", "true/false whether to move obstructions to file-object creation. Default value: false", SYNTAX_STATUS_NORMAL),
     ConstraintSyntaxNewOption("pathtype", "literal,regex,guess", "Menu option for interpreting promiser file object", SYNTAX_STATUS_NORMAL),

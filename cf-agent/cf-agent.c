@@ -79,6 +79,7 @@
 #include <conn_cache.h>                 /* ConnCache_Init,ConnCache_Destroy */
 #include <net.h>
 #include <package_module.h>
+#include <string_lib.h>
 
 #include <mod_common.h>
 
@@ -134,9 +135,9 @@ static void ThisAgentInit(void);
 static GenericAgentConfig *CheckOpts(int argc, char **argv);
 static char **TranslateOldBootstrapOptionsSeparate(int *argc_new, char **argv);
 static char **TranslateOldBootstrapOptionsConcatenated(int argc, char **argv);
-static void FreeStringArray(int size, char **array);
+static void FreeFixedStringArray(int size, char **array);
 static void CheckAgentAccess(const Rlist *list, const Policy *policy);
-static void KeepControlPromises(EvalContext *ctx, const Policy *policy);
+static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericAgentConfig *config);
 static PromiseResult KeepAgentPromise(EvalContext *ctx, const Promise *pp, void *param);
 static int NewTypeContext(TypeSequence type);
 static void DeleteTypeContext(EvalContext *ctx, TypeSequence type);
@@ -168,6 +169,7 @@ static const struct option OPTIONS[] =
 {
     {"bootstrap", required_argument, 0, 'B'},
     {"bundlesequence", required_argument, 0, 'b'},
+    {"workdir", required_argument, 0, 'w'},
     {"debug", no_argument, 0, 'd'},
     {"define", required_argument, 0, 'D'},
     {"self-diagnostics", optional_argument, 0, 'x'},
@@ -191,6 +193,7 @@ static const char *const HINTS[] =
 {
     "Bootstrap CFEngine to the given policy server IP, hostname or :avahi (automatic detection)",
     "Set or override bundlesequence from command line",
+    "Override the default /var/cfengine work directory for testing (same as setting CFENGINE_TEST_OVERRIDE_WORKDIR)",
     "Enable debugging output",
     "Define a list of comma separated classes to be defined at the start of execution",
     "Run checks to diagnose a CFEngine agent installation",
@@ -214,6 +217,7 @@ static const char *const HINTS[] =
 
 int main(int argc, char *argv[])
 {
+    SetupSignalsForAgent();
 #ifdef HAVE_LIBXML2
         xmlInitParser();
 #endif
@@ -221,6 +225,10 @@ int main(int argc, char *argv[])
 
     GenericAgentConfig *config = CheckOpts(argc, argv);
     EvalContext *ctx = EvalContextNew();
+
+    // Enable only for cf-agent eval context.
+    EvalContextAllClassesLoggingEnable(ctx, true);
+
     GenericAgentConfigApply(ctx, config);
 
     GenericAgentDiscoverContext(ctx, config);
@@ -296,15 +304,9 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
     int argc_new = argc;
     char **argv_tmp = TranslateOldBootstrapOptionsSeparate(&argc_new, argv);
     char **argv_new = TranslateOldBootstrapOptionsConcatenated(argc_new, argv_tmp);
-    FreeStringArray(argc_new, argv_tmp);
+    FreeFixedStringArray(argc_new, argv_tmp);
 
-    /* true if cf-agent is executed by cf-serverd in response to a cf-runagent invocation.
-     * In that case, prohibit file-input, no-lock and dry-runs to prevent remote execution of
-     * arbitrary policy and DoS attacks.
-     */
-    bool cfruncommand = false;
-
-    while ((c = getopt_long(argc_new, argv_new, "tdvnKIf:D:N:VxMB:b:hC::ElT::",
+    while ((c = getopt_long(argc_new, argv_new, "tdvnKIf:w:D:N:VxMB:b:hC::ElT::",
                             OPTIONS, NULL))
            != -1)
     {
@@ -312,6 +314,11 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
         {
         case 't':
             TIMING = true;
+            break;
+
+        case 'w':
+            Log(LOG_LEVEL_INFO, "Setting workdir to '%s'", optarg);
+            putenv(StringConcatenate(2, "CFENGINE_TEST_OVERRIDE_WORKDIR=", optarg));
             break;
 
         case 'f':
@@ -394,7 +401,6 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
         case 'D':
             {
                 StringSet *defined_classes = StringSetFromString(optarg, ',');
-                cfruncommand = StringSetContains(defined_classes, "cfruncommand") || cfruncommand;
                 if (! config->heap_soft)
                 {
                     config->heap_soft = defined_classes;
@@ -536,24 +542,7 @@ static GenericAgentConfig *CheckOpts(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
-    if (cfruncommand)
-    {
-        /* Do not allow remote cf-agent executions that imply no-lock
-         * or execution of a file other that promises.cf.
-         */
-        if (config->ignore_locks)
-        {
-            Log(LOG_LEVEL_ERR, "Remote execution cannot ignore locks");
-            exit(EXIT_FAILURE);
-        }
-        if (MINUSF) // GenericAgentConfigSetInputFile also sets MINUSF
-        {
-            Log(LOG_LEVEL_ERR, "Specifying input files is not allowed for remote execution");
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    FreeStringArray(argc_new, argv_new);
+    FreeFixedStringArray(argc_new, argv_new);
 
     return config;
 }
@@ -657,7 +646,7 @@ static char **TranslateOldBootstrapOptionsConcatenated(int argc, char **argv)
 }
 
 
-static void FreeStringArray(int size, char **array)
+static void FreeFixedStringArray(int size, char **array)
 {
     for(int i = 0; i < size; i++)
     {
@@ -677,13 +666,6 @@ static void ThisAgentInit(void)
 #ifdef HAVE_SETSID
     setsid();
 #endif
-
-    signal(SIGINT, HandleSignalsForAgent);
-    signal(SIGTERM, HandleSignalsForAgent);
-    signal(SIGHUP, SIG_IGN);
-    signal(SIGPIPE, SIG_IGN);
-    signal(SIGUSR1, HandleSignalsForAgent);
-    signal(SIGUSR2, HandleSignalsForAgent);
 
     CFA_MAXTHREADS = 30;
     EDITFILESIZE = 100000;
@@ -707,7 +689,7 @@ static void ThisAgentInit(void)
 
 static void KeepPromises(EvalContext *ctx, const Policy *policy, GenericAgentConfig *config)
 {
-    KeepControlPromises(ctx, policy);
+    KeepControlPromises(ctx, policy, config);
     KeepPromiseBundles(ctx, policy, config);
 }
 
@@ -715,7 +697,7 @@ static void KeepPromises(EvalContext *ctx, const Policy *policy, GenericAgentCon
 /* Level 2                                                         */
 /*******************************************************************/
 
-static void KeepControlPromises(EvalContext *ctx, const Policy *policy)
+static void KeepControlPromises(EvalContext *ctx, const Policy *policy, GenericAgentConfig *config)
 {
     Seq *constraints = ControlBodyConstraints(policy, AGENT_TYPE_AGENT);
     if (constraints)
@@ -1045,6 +1027,21 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy)
 
                 continue;
             }
+            
+            if (strcmp(cp->lval, CFA_CONTROLBODY[AGENT_CONTROL_SELECT_END_MATCH_EOF].lval) == 0)
+            {
+                Log(LOG_LEVEL_VERBOSE, "SET select_end_match_eof %s", value);
+                EvalContextSetSelectEndMatchEof(ctx, BooleanFromString(value));
+            }
+
+            if (strcmp(cp->lval, CFA_CONTROLBODY[AGENT_CONTROL_REPORTCLASSLOG].lval) == 0)
+            {
+                config->agent_specific.agent.report_class_log = BooleanFromString(value);
+
+                Log(LOG_LEVEL_VERBOSE, "Setting report_class_log to %s", 
+                    config->agent_specific.agent.report_class_log? "true" : "false");
+                continue;
+            }
         }
     }
 
@@ -1090,6 +1087,14 @@ static void KeepControlPromises(EvalContext *ctx, const Policy *policy)
         }
     }
     Nova_Initialize(ctx);
+
+    // If not have been enabled above then should be disabled.
+    // By default it's enabled to catch all set classes on startup stage 
+    // before this part of the policy is processed.
+    if (!config->agent_specific.agent.report_class_log)
+    {
+        EvalContextAllClassesLoggingEnable(ctx, false);
+    }
 }
 
 /*********************************************************************/
@@ -1266,8 +1271,7 @@ PromiseResult ScheduleAgentOperations(EvalContext *ctx, const Bundle *bp)
 
     if (PROCESSREFRESH == NULL || (PROCESSREFRESH && IsRegexItemIn(ctx, PROCESSREFRESH, bp->name)))
     {
-        DeleteItemList(PROCESSTABLE);
-        PROCESSTABLE = NULL;
+        ClearProcessTable();
     }
 
     PromiseResult result = PROMISE_RESULT_SKIPPED;
@@ -1458,18 +1462,85 @@ static PromiseResult DefaultVarPromise(EvalContext *ctx, const Promise *pp)
     return VerifyVarPromise(ctx, pp, true);
 }
 
+static void LogVariableValue(const EvalContext *ctx, const Promise *pp)
+{
+    VarRef *ref = VarRefParseFromBundle(pp->promiser, PromiseGetBundle(pp));
+    char *out = NULL;
+
+    DataType type;
+    const void *var = EvalContextVariableGet(ctx, ref, &type);
+    switch (type)
+    {
+        case CF_DATA_TYPE_INT:
+        case CF_DATA_TYPE_REAL:
+        case CF_DATA_TYPE_STRING:
+            out = xstrdup((char *) var);
+            break;
+        case CF_DATA_TYPE_INT_LIST:
+        case CF_DATA_TYPE_REAL_LIST:
+        case CF_DATA_TYPE_STRING_LIST:
+        {
+            size_t siz = CF_BUFSIZE;
+            size_t len = 0;
+            out = xcalloc(1, CF_BUFSIZE);
+
+            for (Rlist *rp = (Rlist *) var; rp != NULL; rp = rp->next)
+            {
+                const char *s = (char *) rp->val.item;
+
+                if (strlen(s) + len + 3  >= siz)                // ", " + NULL
+                {
+                    out = xrealloc(out, siz + CF_BUFSIZE);
+                    siz += CF_BUFSIZE;
+                }
+
+                if (len > 0)
+                {
+                    len += strlcat(out, ", ", siz);
+                }
+
+                len += strlcat(out, s, siz);
+            }
+            break;
+        }
+        case CF_DATA_TYPE_CONTAINER:
+        {
+            Writer *w = StringWriter();
+            JsonWriteCompact(w, (JsonElement *) var);
+            out = StringWriterClose(w);
+            break;
+        }
+        default:
+            /* TODO is CF_DATA_TYPE_NONE acceptable? Today all meta variables
+             * are of this type. */
+            /* UnexpectedError("Variable '%s' is of unknown type %d", */
+            /*                 pp->promiser, type); */
+            out = xstrdup("NONE");
+            break;
+    }
+
+    Log(LOG_LEVEL_DEBUG, "V: '%s' => '%s'", pp->promiser, out);
+    free(out);
+    VarRefDestroy(ref);
+}
+
 static PromiseResult KeepAgentPromise(EvalContext *ctx, const Promise *pp, ARG_UNUSED void *param)
 {
     assert(param == NULL);
     struct timespec start = BeginMeasure();
     PromiseResult result = PROMISE_RESULT_NOOP;
 
-    if (strcmp("meta", pp->parent_promise_type->name) == 0 || strcmp("vars", pp->parent_promise_type->name) == 0)
+    if (strcmp("meta", pp->parent_promise_type->name) == 0 ||
+        strcmp("vars", pp->parent_promise_type->name) == 0)
     {
         result = VerifyVarPromise(ctx, pp, true);
         if (result != PROMISE_RESULT_FAIL)
         {
             Log(LOG_LEVEL_VERBOSE, "V:     Computing value of \"%s\"", pp->promiser);
+            if (LogGetGlobalLevel() >= LOG_LEVEL_DEBUG)
+            {
+                LogVariableValue(ctx, pp);
+            }
         }
     }
     else if (strcmp("defaults", pp->parent_promise_type->name) == 0)
@@ -1633,7 +1704,7 @@ static int NewTypeContext(TypeSequence type)
         break;
 
     case TYPE_SEQUENCE_PROCESSES:
-        if (!LoadProcessTable(&PROCESSTABLE))
+        if (!LoadProcessTable())
         {
             Log(LOG_LEVEL_ERR, "Unable to read the process table - cannot keep processes: type promises");
             return false;
@@ -1775,9 +1846,8 @@ static bool VerifyBootstrap(void)
     }
 
     // embedded failsafe.cf (bootstrap.c) contains a promise to start cf-execd (executed while running this cf-agent)
-    DeleteItemList(PROCESSTABLE);
-    PROCESSTABLE = NULL;
-    LoadProcessTable(&PROCESSTABLE);
+    ClearProcessTable();
+    LoadProcessTable();
 
     if (!IsProcessNameRunning(".*cf-execd.*"))
     {

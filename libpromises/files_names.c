@@ -428,19 +428,6 @@ bool ChopLastNode(char *str)
 
 /*********************************************************************/
 
-void CanonifyNameInPlace(char *s)
-{
-    for (; *s != '\0'; s++)
-    {
-        if (!isalnum((unsigned char) *s))
-        {
-            *s = '_';
-        }
-    }
-}
-
-/*********************************************************************/
-
 void TransformNameInPlace(char *s, char from, char to)
 {
     for (; *s != '\0'; s++)
@@ -454,7 +441,7 @@ void TransformNameInPlace(char *s, char from, char to)
 
 /*********************************************************************/
 
-/* TODO remove, kill, burn this function! */
+/* TODO remove, kill, burn this function! Replace with BufferCanonify or CanonifyNameInPlace */
 char *CanonifyName(const char *str)
 {
     static char buffer[CF_BUFSIZE]; /* GLOBAL_R, no initialization needed */
@@ -528,18 +515,25 @@ const char *ReadLastNode(const char *str)
 
 /*********************************************************************/
 
-/**
- * @TODO fix the dangerous path lengths
- */
-int CompressPath(char *dest, const char *src)
+bool CompressPath(char *dest, size_t dest_size, const char *src)
 {
     char node[CF_BUFSIZE];
     int nodelen;
     int rootlen;
 
-    memset(dest, 0, CF_BUFSIZE);
+    memset(dest, 0, dest_size);
 
     rootlen = RootDirLength(src);
+
+    if(rootlen >= dest_size)
+    {
+        Log(LOG_LEVEL_ERR,
+            "Internal limit reached in CompressPath(),"
+            "src path too long (%d bytes): '%s'",
+                rootlen, src);
+            return false;
+    }
+
     memcpy(dest, src, rootlen);
 
     for (const char *sp = src + rootlen; *sp != '\0'; sp++)
@@ -581,8 +575,7 @@ int CompressPath(char *dest, const char *src)
 
         AddSlash(dest);
 
-        /* TODO use dest_size parameter instead of CF_BUFSIZE. */
-        size_t ret = strlcat(dest, node, CF_BUFSIZE);
+        size_t ret = strlcat(dest, node, dest_size);
 
         if (ret >= CF_BUFSIZE)
         {

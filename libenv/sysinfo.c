@@ -44,11 +44,11 @@
 #include <audit.h>
 #include <pipes.h>
 #include <known_dirs.h>
-#include <unix_iface.h>
 #include <files_lib.h>
 #include <printsize.h>
 #include <cf-windows-functions.h>
 #include <ornaments.h>
+#include <feature.h>
 
 #ifdef HAVE_ZONE_H
 # include <zone.h>
@@ -144,7 +144,10 @@ static time_t GetBootTimeFromUptimeCommand(time_t now);
 
 /*****************************************************/
 
-void CalculateDomainName(const char *nodename, const char *dnsname, char *fqname, char *uqname, char *domain);
+void CalculateDomainName(const char *nodename, const char *dnsname,
+                         char *fqname, size_t fqname_size,
+                         char *uqname, size_t uqname_size,
+                         char *domain, size_t domain_size);
 
 #ifdef __linux__
 static int Linux_Fedora_Version(EvalContext *ctx);
@@ -281,22 +284,25 @@ static const char *const VEXPORTS[] =
 
 /*******************************************************************/
 
-void CalculateDomainName(const char *nodename, const char *dnsname, char *fqname, char *uqname, char *domain)
+void CalculateDomainName(const char *nodename, const char *dnsname,
+                         char *fqname, size_t fqname_size,
+                         char *uqname, size_t uqname_size,
+                         char *domain, size_t domain_size)
 {
     if (strstr(dnsname, "."))
     {
-        strlcpy(fqname, dnsname, CF_BUFSIZE);
+        strlcpy(fqname, dnsname, fqname_size);
     }
     else
     {
-        strlcpy(fqname, nodename, CF_BUFSIZE);
+        strlcpy(fqname, nodename, fqname_size);
     }
 
     if ((strncmp(nodename, fqname, strlen(nodename)) == 0) && (fqname[strlen(nodename)] == '.'))
     {
         /* If hostname is not qualified */
-        strcpy(domain, fqname + strlen(nodename) + 1);
-        strcpy(uqname, nodename);
+        strlcpy(domain, fqname + strlen(nodename) + 1, domain_size);
+        strlcpy(uqname, nodename, uqname_size);
     }
     else
     {
@@ -306,13 +312,13 @@ void CalculateDomainName(const char *nodename, const char *dnsname, char *fqname
 
         if (p != NULL)
         {
-            strlcpy(uqname, nodename, MIN(CF_BUFSIZE, p - nodename + 1));
-            strlcpy(domain, p + 1, CF_BUFSIZE);
+            strlcpy(uqname, nodename, MIN(uqname_size, p - nodename + 1));
+            strlcpy(domain, p + 1, domain_size);
         }
         else
         {
-            strcpy(uqname, nodename);
-            strcpy(domain, "");
+            strlcpy(uqname, nodename, uqname_size);
+            strlcpy(domain, "", domain_size);
         }
     }
 }
@@ -323,7 +329,7 @@ void DetectDomainName(EvalContext *ctx, const char *orig_nodename)
 {
     char nodename[CF_BUFSIZE];
 
-    strcpy(nodename, orig_nodename);
+    strlcpy(nodename, orig_nodename, sizeof(nodename));
     ToLowerStrInplace(nodename);
 
     char dnsname[CF_BUFSIZE] = "";
@@ -335,12 +341,13 @@ void DetectDomainName(EvalContext *ctx, const char *orig_nodename)
 
         if ((hp = gethostbyname(fqn)))
         {
-            strlcpy(dnsname, hp->h_name, CF_MAXVARSIZE);
+            strlcpy(dnsname, hp->h_name, sizeof(dnsname));
             ToLowerStrInplace(dnsname);
         }
     }
 
-    CalculateDomainName(nodename, dnsname, VFQNAME, VUQNAME, VDOMAIN);
+    CalculateDomainName(nodename, dnsname, VFQNAME, CF_MAXVARSIZE,
+                        VUQNAME, CF_MAXVARSIZE, VDOMAIN, CF_MAXVARSIZE);
 
 /*
  * VFQNAME = a.b.c.d ->
@@ -391,14 +398,12 @@ void DiscoverVersion(EvalContext *ctx)
         snprintf(workbuf, CF_MAXVARSIZE, "%d", patch);
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "cf_version_patch", workbuf, CF_DATA_TYPE_STRING, "source=agent");
 
-        snprintf(workbuf, CF_BUFSIZE, "%s%cinputs%clib%c%d.%d",
-                 workdir, FILE_SEPARATOR, FILE_SEPARATOR,
-                 FILE_SEPARATOR, major, minor);
+        snprintf(workbuf, CF_BUFSIZE, "%s%cinputs%clib",
+                 workdir, FILE_SEPARATOR, FILE_SEPARATOR);
 
         EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "libdir", workbuf, CF_DATA_TYPE_STRING, "source=agent");
 
-        snprintf(workbuf, CF_BUFSIZE, "lib%c%d.%d", FILE_SEPARATOR, major, minor);
-        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "local_libdir", workbuf, CF_DATA_TYPE_STRING, "source=agent");
+        EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_SYS, "local_libdir", "lib", CF_DATA_TYPE_STRING, "source=agent");
     }
     else
     {
@@ -947,15 +952,7 @@ static void BuiltinClasses(EvalContext *ctx)
     snprintf(vbuff, CF_BUFSIZE, "cfengine_%s", CanonifyName(Version()));
     CreateHardClassesFromCanonification(ctx, vbuff, "inventory,attribute_name=none,source=agent");
 
-#ifdef HAVE_LIBXML2
-    CreateHardClassesFromCanonification(ctx, "feature_xml", "source=agent");
-#endif
-
-#ifdef HAVE_LIBYAML
-    CreateHardClassesFromCanonification(ctx, "feature_yaml", "source=agent");
-#endif
-
-    CreateHardClassesFromCanonification(ctx, "feature_def_json_preparse", "source=agent");
+    CreateHardClassesFromFeatures(ctx, "source=agent");
 }
 
 /*******************************************************************/
@@ -2884,11 +2881,20 @@ static time_t GetBootTimeFromUptimeCommand(time_t now)
 
 /*****************************************************************************/
 
+void GetDefVars(EvalContext *ctx)
+{
+    EvalContextVariablePutSpecial(ctx, SPECIAL_SCOPE_DEF, "jq", "jq --compact-output --monochrome-output --ascii-output --unbuffered --sort-keys",
+                                  CF_DATA_TYPE_STRING, "invocation,source=agent,command_name=jq");
+}
+/*****************************************************************************/
+
 void DetectEnvironment(EvalContext *ctx)
 {
     GetNameInfo3(ctx);
     GetInterfacesInfo(ctx);
+    GetNetworkingInfo(ctx);
     Get3Environment(ctx);
     BuiltinClasses(ctx);
     OSClasses(ctx);
+    GetDefVars(ctx);
 }

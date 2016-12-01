@@ -125,6 +125,8 @@ abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
 abs_top_builddir = @abs_top_builddir@
 abs_top_srcdir = @abs_top_srcdir@
+ac_cv_pkg_install = @ac_cv_pkg_install@
+ac_cv_shunit2 = @ac_cv_shunit2@
 am__leading_dot = @am__leading_dot@
 am__tar = @am__tar@
 am__untar = @am__untar@
@@ -175,7 +177,7 @@ top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
 package_modulesdir = $(prefix)/modules/packages
-dist_package_modules_SCRIPTS = apt_get yum
+dist_package_modules_SCRIPTS = apt_get yum pkgsrc freebsd_ports
 all: all-am
 
 .SUFFIXES:

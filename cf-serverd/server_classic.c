@@ -126,7 +126,7 @@ static bool ResolveFilename(const char *req_path, char *res_path)
     }
 #else
     memset(res_path, 0, CF_BUFSIZE);
-    CompressPath(res_path, req_path);
+    CompressPath(res_path, CF_BUFSIZE, req_path);
 #endif
 
     /* Adjust for forward slashes */
@@ -783,14 +783,6 @@ RSA *newkey = RSA_new();
         return false;
     }
 
-    if (len_n == 0)
-    {
-        Log(LOG_LEVEL_ERR, "Authentication failure: "
-            "connection was closed while receiving public key modulus");
-        RSA_free(newkey);
-        return false;
-    }
-
     if ((newkey->n = BN_mpi2bn(recvbuffer, len_n, NULL)) == NULL)
     {
         Log(LOG_LEVEL_ERR, "Authentication failure: "
@@ -808,13 +800,6 @@ RSA *newkey = RSA_new();
     {
         Log(LOG_LEVEL_ERR, "Authentication failure: "
             "error while receiving public key exponent");
-        RSA_free(newkey);
-        return false;
-    }
-    if (len_e == 0)
-    {
-        Log(LOG_LEVEL_ERR, "Authentication failure: "
-            "connection was closed while receiving public key exponent");
         RSA_free(newkey);
         return false;
     }
@@ -929,15 +914,10 @@ RSA *newkey = RSA_new();
     int recv_len = ReceiveTransaction(conn->conn_info, recv_buf, NULL);
     if (recv_len < digestLen)
     {
-        if (recv_len < 0)
+        if (recv_len == -1)
         {
             Log(LOG_LEVEL_ERR, "Authentication failure: "
-                "error receiving counter-challenge response");
-        }
-        else if (recv_len == 0)
-        {
-            Log(LOG_LEVEL_ERR, "Authentication failure: "
-                "connection was closed while receiving counter-challenge response; "
+                "error receiving counter-challenge response; "
                 "maybe the client does not trust our key?");
         }
         else                                      /* 0 < recv_len < expected_len */
@@ -977,25 +957,18 @@ RSA *newkey = RSA_new();
         "should decrypt to %d bytes",
         keylen, session_key_size);
 
-    if ((keylen <= 0) || (keylen > CF_BUFSIZE / 2))
+    if (keylen == -1)
     {
-        if (keylen == 0)
-        {
-            Log(LOG_LEVEL_ERR, "Authentication failure: "
-                "connection was closed while receiving session key");
-        }
-        else if (keylen > CF_BUFSIZE / 2)
-        {
-            Log(LOG_LEVEL_ERR, "Authentication failure: "
-                "session key received is too long (%d bytes)",
-                keylen);
-        }
-        else                                                  /* keylen < 0 */
-        {
-            Log(LOG_LEVEL_ERR, "Authentication failure: "
-                "error receiving session key");
-        }
+        Log(LOG_LEVEL_ERR, "Authentication failure: "
+            "error receiving session key");
+        return false;
+    }
 
+    if (keylen > CF_BUFSIZE / 2)
+    {
+        Log(LOG_LEVEL_ERR, "Authentication failure: "
+            "session key received is too long (%d bytes)",
+            keylen);
         return false;
     }
 
@@ -1044,7 +1017,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
     time_t tloc, trem = 0;
     char recvbuffer[CF_BUFSIZE + CF_BUFEXT], check[CF_BUFSIZE];
     char sendbuffer[CF_BUFSIZE] = { 0 };
-    char filename[CF_BUFSIZE], buffer[CF_BUFSIZE], args[CF_BUFSIZE], out[CF_BUFSIZE];
+    char filename[CF_BUFSIZE], buffer[CF_BUFSIZE], out[CF_BUFSIZE];
     long time_no_see = 0;
     unsigned int len = 0;
     int drift, plainlen, received, encrypted = 0;
@@ -1056,7 +1029,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
     memset(&get_args, 0, sizeof(get_args));
 
     received = ReceiveTransaction(conn->conn_info, recvbuffer, NULL);
-    if (received == -1 || received == 0)
+    if (received == -1)
     {
         return false;
     }
@@ -1143,36 +1116,28 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
     switch (command)
     {
     case PROTOCOL_COMMAND_EXEC:
-        memset(args, 0, CF_BUFSIZE);
-        sscanf(recvbuffer, "EXEC %255[^\n]", args);
+    {
+        const size_t EXEC_len = strlen(PROTOCOL_CLASSIC[PROTOCOL_COMMAND_EXEC]);
+        /* Assert recvbuffer starts with EXEC. */
+        assert(strncmp(PROTOCOL_CLASSIC[PROTOCOL_COMMAND_EXEC],
+                       recvbuffer, EXEC_len) == 0);
 
-        if (!AllowedUser(conn->username))
-        {
-            Log(LOG_LEVEL_INFO, "REFUSAL due to non-allowed user");
-            RefuseAccess(conn, recvbuffer);
-            return false;
-        }
+        char *args = &recvbuffer[EXEC_len];
+        args += strspn(args, " \t");                       /* bypass spaces */
 
-        if (!AccessControl(ctx, CommandArg0(CFRUNCOMMAND), conn, false))
-        {
-            Log(LOG_LEVEL_INFO,
-                "REFUSAL due to denied access to requested object");
-            RefuseAccess(conn, recvbuffer);
-            return false;
-        }
+        Log(LOG_LEVEL_VERBOSE, "%14s %7s %s",
+            "Received:", "EXEC", args);
 
-        if (!MatchClasses(ctx, conn))
-        {
-            Log(LOG_LEVEL_INFO,
-                "REFUSAL due to failed class/context match");
-            Terminate(conn->conn_info);
-            return false;
-        }
+        bool b = DoExec2(ctx, conn, args,
+                         sendbuffer, sizeof(sendbuffer));
 
-        DoExec(conn, args);
+        /* In the end we might keep the connection open (return true) to be
+         * ready for next requests, but we must always send the TERMINATOR
+         * string so that the client can close the connection at will. */
         Terminate(conn->conn_info);
-        return false;
 
+        return b;
+    }
     case PROTOCOL_COMMAND_VERSION:
         snprintf(sendbuffer, sizeof(sendbuffer), "OK: %s", Version());
         SendTransaction(conn->conn_info, sendbuffer, 0, CF_DONE);
@@ -1229,7 +1194,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
 
         if (received != len + CF_PROTO_OFFSET)
         {
-            Log(LOG_LEVEL_VERBOSE, "Protocol error SGET");
+            Log(LOG_LEVEL_INFO, "Protocol error SGET");
             RefuseAccess(conn, recvbuffer);
             return false;
         }
@@ -1294,7 +1259,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
 
         if ((len >= sizeof(out)) || (received != (len + CF_PROTO_OFFSET)))
         {
-            Log(LOG_LEVEL_VERBOSE, "Protocol error OPENDIR: %d", len);
+            Log(LOG_LEVEL_INFO, "Protocol error OPENDIR: %d", len);
             RefuseAccess(conn, recvbuffer);
             return false;
         }
@@ -1365,7 +1330,7 @@ int BusyWithClassicConnection(EvalContext *ctx, ServerConnectionState *conn)
 
         if ((len >= sizeof(out)) || (received != (len + CF_PROTO_OFFSET)))
         {
-            Log(LOG_LEVEL_VERBOSE, "Protocol error SSYNCH: %d", len);
+            Log(LOG_LEVEL_INFO, "Protocol error SSYNCH: %d", len);
             RefuseAccess(conn, recvbuffer);
             return false;
         }

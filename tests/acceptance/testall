@@ -27,18 +27,22 @@
 # Detect and replace non-POSIX shell
 #
 try_exec() {
-  type "$1" > /dev/null 2>&1 && exec "$@"
+    type "$1" > /dev/null 2>&1 && exec "$@"
 }
 
-unset foo
-(: ${foo%%bar}) 2> /dev/null
-T1="$?"
+broken_posix_shell()
+{
+    unset foo
+    local foo=1
+    test "$foo" != "1"
+}
 
-if test "$T1" != 0; then
-  try_exec /usr/xpg4/bin/sh "$0" "$@"
-  echo "No compatible shell script interpreter found."
-  echo "Please find a POSIX shell for your system."
-  exit 42
+if broken_posix_shell >/dev/null 2>&1
+then
+    try_exec /usr/xpg4/bin/sh "$0" "$@"
+    echo "No compatible shell script interpreter found."
+    echo "Please find a POSIX shell for your system."
+    exit 42
 fi
 
 #
@@ -99,6 +103,8 @@ CF_SERVERD=${CF_SERVERD:-}
 export CF_SERVERD
 CF_KEY=${CF_KEY:-}
 export CF_KEY
+CF_RUNAGENT=${CF_RUNAGENT:-}
+export CF_RUNAGENT
 RPMVERCMP=${RPMVERCMP:-}
 export RPMVERCMP
 LIBTOOL=${LIBTOOL:-}
@@ -231,6 +237,8 @@ usage() {
     echo "           and defaults to $DEFCF_SERVERD."
     echo " --cfkey   provides a way to specify non-default cf-key location,"
     echo "           and defaults to $DEFCF_KEY."
+    echo " --cfrunagent  provides a way to specify non-default cf-runagent location,"
+    echo "           and defaults to $DEFCF_RUNAGENT."
     echo " --rpmvercmp  provides a way to specify non-default rpmvercmp location,"
     echo "           and defaults to $DEFRPMVERCMP."
     echo " --bindir  specifies the directory containing all the binaries."
@@ -260,6 +268,7 @@ usage() {
     echo " -j[n]"
     echo " -jobs=[n] Run tests in parallel, works like make -j option. Note that some"
     echo "           tests will always run one by one."
+    echo " --verbose  Run tests with verbose logging"
 }
 
 workdir() {
@@ -358,9 +367,11 @@ runtest() {
                 $LN_CMD "$CF_PROMISES" "$WORKDIR/bin"
                 $LN_CMD "$CF_SERVERD" "$WORKDIR/bin"
                 $LN_CMD "$CF_KEY" "$WORKDIR/bin"
+                $LN_CMD "$CF_RUNAGENT" "$WORKDIR/bin"
                 $LN_CMD "$RPMVERCMP" "$WORKDIR/bin"
             fi
-            for inc in $INCLUDE_IN_WORKDIR; do (
+            for inc in $INCLUDE_IN_WORKDIR
+            do (
                 # Copy directory structure, but make links inside. This allows tests to
                 # add additional files to the directory.
                 base=$(basename $inc)
@@ -374,7 +385,8 @@ runtest() {
                 do
                     $LN_CMD "$inc/$file" "$WORKDIR/$base/$file"
                 done
-            ); done
+            )
+            done
         fi
         if uname | grep MINGW > /dev/null
         then
@@ -386,8 +398,8 @@ runtest() {
         fi
 
         ( echo ----------------------------------------------------------------------
-            echo "$TEST"${EXPECTED_CRASH:+ \(expected to crash\)}${SKIPREASON:+ \($SKIPREASON\)}
-            echo ----------------------------------------------------------------------
+          echo "$TEST"${EXPECTED_CRASH:+ \(expected to crash\)}${SKIPREASON:+ \($SKIPREASON\)}
+          echo ----------------------------------------------------------------------
         ) >> "$WORKDIR/$LOG"
 
         echo "#!/bin/sh
@@ -462,11 +474,16 @@ export CFENGINE_TEST_OVERRIDE_WORKDIR TEMP CFENGINE_TEST_OVERRIDE_EXTENSION_LIBR
             ESCAPED_TEST="$(echo "($TEST|dcs.cf.sub)" | sed -e 's/\./\\./g')"
             if egrep "R: .*$ESCAPED_TEST [XS]FAIL" $OUTFILE > /dev/null && ! egrep "R: .*$ESCAPED_TEST Wait/" $OUTFILE > /dev/null
             then
-                # Check for other test case outcomes than fail. Should not happen.
-                if egrep "R: .*$ESCAPED_TEST " $OUTFILE | egrep -v "R: .*$ESCAPED_TEST [XS]?FAIL" > /dev/null
+                # Check for passed outcome, which should not happen.
+                if egrep "R: .*$ESCAPED_TEST " $OUTFILE | egrep "R: .*$ESCAPED_TEST Pass" > /dev/null
                 then
                     RESULT=FAIL
                     RESULT_MSG="${COLOR_FAILURE}FAIL (The test Passed, but failure was expected)${COLOR_NORMAL}"
+                elif egrep "R: .*$ESCAPED_TEST " $OUTFILE | egrep -v "R: .*$ESCAPED_TEST [XS]?FAIL" > /dev/null
+                then
+                    # Other test case outcomes than fail. Should not happen.
+                    RESULT=FAIL
+                    RESULT_MSG="${COLOR_FAILURE}FAIL (Failure was expected, but the test had an unexpected test outcome, check test output, Pass/FAIL need to match exactly)${COLOR_NORMAL}"
                 else
                     TICKET="$(egrep "R: .*$ESCAPED_TEST [XS]FAIL" $OUTFILE | sed -e "s,.*[XS]FAIL/\(.*\),\1,")"
                     RESULT="$(egrep "R: .*$ESCAPED_TEST [XS]FAIL" $OUTFILE | sed -e "s,.*\([XS]FAIL\).*,\1,")"
@@ -582,9 +599,9 @@ export CFENGINE_TEST_OVERRIDE_WORKDIR TEMP CFENGINE_TEST_OVERRIDE_EXTENSION_LIBR
 
         FAIL|XFAIL)
             ( echo "        <failure type=\"$RESULT\""
-                echo "                 message=\"$RESULT_MSG $TEST\">"
-                cat $OUTFILE | sed -e "s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/'/\&quot;/g"
-                echo "        </failure>"
+              echo "                 message=\"$RESULT_MSG $TEST\">"
+              cat $OUTFILE | sed -e "s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/'/\&quot;/g"
+              echo "        </failure>"
             ) >> "$WORKDIR/$XML"
             FAILED_TESTS=$(($FAILED_TESTS + 1))
             if [ "$RESULT" = "XFAIL" ]
@@ -595,16 +612,16 @@ export CFENGINE_TEST_OVERRIDE_WORKDIR TEMP CFENGINE_TEST_OVERRIDE_EXTENSION_LIBR
 
         SFAIL)
             ( echo "        <skipped type=\"$RESULT_MSG\">"
-                echo "                 message=\"$RESULT_MSG $TEST\">"
-                cat $OUTFILE | sed -e "s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/'/\&quot;/g"
-                echo "        </skipped>"
+              echo "                 message=\"$RESULT_MSG $TEST\">"
+              cat $OUTFILE | sed -e "s/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g; s/'/\&quot;/g"
+              echo "        </skipped>"
             ) >> "$WORKDIR/$XML"
             SOFT_FAILURES=$(($SOFT_FAILURES + 1))
             ;;
 
         Skip)
             ( echo "        <skipped type=\"$RESULT_MSG\">"
-                echo "        </skipped>"
+              echo "        </skipped>"
             ) >> "$WORKDIR/$XML"
             SKIPPED_TESTS=$(($SKIPPED_TESTS + 1))
             ;;
@@ -622,7 +639,7 @@ export CFENGINE_TEST_OVERRIDE_WORKDIR TEMP CFENGINE_TEST_OVERRIDE_EXTENSION_LIBR
         do
             case "$s" in
                 "$LOG"|"$SUMMARY"|"$XML")
-                    ;;
+                ;;
                 *)
                     $GAINROOT rm -fr "$WORKDIR/$s"
                     ;;
@@ -712,6 +729,8 @@ do
             CF_SERVERD=${1#--cfserverd=};;
         --cfkey=*)
             CF_KEY=${1#--cfkey=};;
+        --cfrunagent=*)
+            CF_RUNAGENT=${1#--cfrunagent=};;
         --rpmvercmp=*)
             RPMVERCMP=${1#--rpmvercmp=};;
         --bindir=*)
@@ -728,6 +747,8 @@ do
             GDB=1;;
         --no-clean)
             NO_CLEAN=1;;
+        --verbose)
+            VERBOSE="-v";;
         --stay-in-workdir)
             # Internal option. Meant to keep sub invocations from interfering by
             # writing files only into the workdir.
@@ -752,8 +773,8 @@ then
 fi
 
 if [ "$OSTYPE" = "msys" ] && [ "$TESTALL_DO_NOT_RECURSE" != 1 ] &&
-    ! "$WHOAMI" -priv | grep SeTakeOwnershipPrivilege > /dev/null
-    then
+       ! "$WHOAMI" -priv | grep SeTakeOwnershipPrivilege > /dev/null
+then
     # On Windows we run the entire test run under GAINROOT, because doing it for
     # each test is horribly slow.
     echo "export GAINROOT=" > runtests.sh
@@ -773,28 +794,19 @@ fi
 for arg in $MAKEFLAGS
 do
     case "$arg" in
-        -j|--jobs)
-            PARALLEL=1 ;;
-        -j*)
-            if [ 1 -eq "${arg#-j}" ]
-            then
-                PARALLEL=
-            else
-                PARALLEL=1
-            fi
-            ;;
-        --jobs=*)
-            if [ 1 -eq "${arg#--jobs=}" ]
-            then
-                PARALLEL=
-            else
-                PARALLEL=1
-            fi
-            ;;
+        -j|--jobs) PARALLEL=1 ;;
+        -j*) if [ 1 -eq "${arg#-j}" ]
+             then PARALLEL=
+             else PARALLEL=1
+             fi ;;
+        --jobs=*) if [ 1 -eq "${arg#--jobs=}" ]
+                  then PARALLEL=
+                  else PARALLEL=1
+                  fi ;;
     esac
 done
 
-if [ -n "$AGENT" -o -n "$CF_PROMISES" -o -n "$CF_SERVERD" -o -n "$CF_KEY" -o -n "$RPMVERCMP" ]
+if [ -n "$AGENT" -o -n "$CF_PROMISES" -o -n "$CF_SERVERD" -o -n "$CF_KEY" -o -n "$CF_RUNAGENT" -o -n "$RPMVERCMP" ]
 then
     if [ -n "$BINDIR" ]
     then
@@ -803,10 +815,14 @@ then
     fi
 fi
 
-# We assume we're running this script from $objdir, $objdir/tests/acceptance,
-# or /var/cfengine/tests/acceptance.
+# We assume we're running this script from one of the following
+#   $objdir
+#   $objdir/tests/acceptance
+#   /var/cfengine/tests/acceptance or from
+#   $core_objdir/../{enterprise,masterfiles}/tests/acceptance
 find_default_binary()
 {
+    [ -x "`pwd`/../../../core/$2/$2" ] && eval $1=\""`pwd`/../../../core/$2/$2"\"
     [ -x "`pwd`/../../ext/$2" ] && eval $1=\""`pwd`/../../ext/$2"\"
     [ -x "`pwd`/../../bin/$2" ] && eval $1=\""`pwd`/../../bin/$2"\"
     [ -x "`pwd`/../../$2/$2" ] && eval $1=\""`pwd`/../../$2/$2"\"
@@ -817,6 +833,7 @@ find_default_binary DEFAGENT cf-agent
 find_default_binary DEFCF_PROMISES cf-promises
 find_default_binary DEFCF_SERVERD cf-serverd
 find_default_binary DEFCF_KEY cf-key
+find_default_binary DEFCF_RUNAGENT cf-runagent
 find_default_binary DEFRPMVERCMP rpmvercmp
 
 [ -x "`pwd`/libtool" ] && DEFLIBTOOL="`pwd`/libtool"
@@ -826,12 +843,21 @@ AGENT=${AGENT:-${DEFAGENT}}
 CF_PROMISES=${CF_PROMISES:-${DEFCF_PROMISES}}
 CF_SERVERD=${CF_SERVERD:-${DEFCF_SERVERD}}
 CF_KEY=${CF_KEY:-${DEFCF_KEY}}
+CF_RUNAGENT=${CF_RUNAGENT:-${DEFCF_RUNAGENT}}
 RPMVERCMP=${RPMVERCMP:-${DEFRPMVERCMP}}
 LIBTOOL=${LIBTOOL:-${DEFLIBTOOL}}
 
-if [ ! -x "$AGENT" -o ! -x "$CF_PROMISES" -o ! -x "$CF_SERVERD" -o ! -x "$CF_KEY" -o ! -x "$RPMVERCMP" ]
+if [ ! -x "$AGENT" -o ! -x "$CF_PROMISES" -o ! -x "$CF_SERVERD" -o ! -x "$CF_KEY" -o ! -x "$CF_RUNAGENT" -o ! -x "$RPMVERCMP" ]
 then
-    echo "ERROR can't find cf-agent or other binary. Are you sure you're running this from OBJDIR or OBJDIR/tests/acceptance?  Check '$AGENT', '$CF_PROMISES', '$CF_SERVERD', '$CF_KEY' and '$RPMVERCMP'"
+    echo "ERROR: can't find cf-agent or other binary;"     \
+         " Are you sure you're running this from OBJDIR"   \
+         " or {core,masterfiles,enterprise}_OBJDIR/tests/acceptance ?"
+    echo '$AGENT        =' "$AGENT"
+    echo '$CF_PROMISES  =' "$CF_PROMISES"
+    echo '$CF_SERVERD   =' "$CF_SERVERD"
+    echo '$CF_KEY       =' "$CF_KEY"
+    echo '$CF_RUNAGENT  =' "$CF_RUNAGENT"
+    echo '$RPMVERCMP    =' "$RPMVERCMP"
     exit 1
 fi
 
@@ -893,7 +919,6 @@ do
         eval TESTS_$TEST_INDEX="$addtest"
         TEST_INDEX=$(($TEST_INDEX+1))
     fi
-
 done
 
 TESTS_NORMAL_COUNT=$TEST_INDEX
@@ -913,20 +938,20 @@ fi
 
 print_header() {
     ( echo ======================================================================
-        echo Testsuite started at $(date "+%Y-%m-%d %T")
-        echo ----------------------------------------------------------------------
-        echo Total tests: $TESTS_COUNT
-        echo
-        for feature in CRASHING_TESTS NETWORK_TESTS STAGING_TESTS UNSAFE_TESTS LIBXML2_TESTS
-        do
-            if eval "[ \${$feature} -ne 0 ]"
-            then
-                echo $feature: enabled
-            else
-                echo $feature: disabled
-            fi
-        done
-        echo
+      echo Testsuite started at $(date "+%Y-%m-%d %T")
+      echo ----------------------------------------------------------------------
+      echo Total tests: $TESTS_COUNT
+      echo
+      for feature in CRASHING_TESTS NETWORK_TESTS STAGING_TESTS UNSAFE_TESTS LIBXML2_TESTS
+      do
+          if eval "[ \${$feature} -ne 0 ]"
+          then
+              echo $feature: enabled
+          else
+              echo $feature: disabled
+          fi
+      done
+      echo
     ) | tee "$LOG" | tee "$SUMMARY" >&7
 }
 
@@ -939,22 +964,22 @@ print_footer() {
     SKIPPED_TESTS=`egrep '^Skip ' $SUMMARY | wc -l | tr -d ' '`
 
     ( echo
-        echo ======================================================================
-        echo "Testsuite finished at $(date  "+%F %T") ($(($END_TIME - $START_TIME)) seconds)"
+      echo ======================================================================
+      echo "Testsuite finished at $(date  "+%F %T") ($(($END_TIME - $START_TIME)) seconds)"
     ) | tee -a "$LOG" | tee -a "$SUMMARY" >&7
 
     ( echo
-        echo   "Passed tests:  $PASSED_TESTS"
-        printf "Failed tests:  $FAILED_TESTS"
-        if [ $SUPPRESSED_FAILURES -gt 0 ]
-        then
-            echo " ($SUPPRESSED_FAILURES are known and suppressed)"
-        else
-            echo
-        fi
-        echo   "Skipped tests: $SKIPPED_TESTS"
-        echo   "Soft failures: $SOFT_FAILURES"
-        echo   "Total tests:   $TESTS_COUNT"
+      echo   "Passed tests:  $PASSED_TESTS"
+      printf "Failed tests:  $FAILED_TESTS"
+      if [ $SUPPRESSED_FAILURES -gt 0 ]
+      then
+          echo " ($SUPPRESSED_FAILURES are known and suppressed)"
+      else
+          echo
+      fi
+      echo   "Skipped tests: $SKIPPED_TESTS"
+      echo   "Soft failures: $SOFT_FAILURES"
+      echo   "Total tests:   $TESTS_COUNT"
     ) | tee -a "$LOG" | tee -a "$SUMMARY"
 
     if [ -n "$PRINTLOG" ]
@@ -976,8 +1001,8 @@ finish_xml() {
            skipped="$SKIPPED_TESTS"
            time="$(($END_TIME - $START_TIME)) seconds">
 EOF
-    cat xml.tmp
-    cat <<EOF
+        cat xml.tmp
+        cat <<EOF
 </testsuite>
 EOF
     ) > "$XML"
@@ -988,7 +1013,7 @@ collect_results()
 {
     if [ -n "$STAY_IN_WORKDIR" ]
     then
-        return 0;
+        return 0
     fi
 
     WORKDIR="$(workdir "$1")"

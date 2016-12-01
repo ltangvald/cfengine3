@@ -43,8 +43,6 @@ int CF_PERSISTENCE = 10; /* GLOBAL_P */
 
 AgentType THIS_AGENT_TYPE; /* GLOBAL_C, initialized later */
 
-Item *PROCESSTABLE = NULL; /* GLOBAL_X */
-
 /*****************************************************************************/
 /* Internal data structures                                                  */
 /*****************************************************************************/
@@ -59,6 +57,7 @@ char POLICY_SERVER[CF_MAX_IP_LEN] = ""; /* GLOBAL_X */
 
 bool DONTDO = false; /* GLOBAL_A */
 
+/* NB! Check use before changing sizes */
 char VFQNAME[CF_MAXVARSIZE] = ""; /* GLOBAL_E GLOBAL_P */
 char VUQNAME[CF_MAXVARSIZE] = ""; /* GLOBAL_E */
 char VDOMAIN[CF_MAXVARSIZE] = ""; /* GLOBAL_E GLOBAL_P */

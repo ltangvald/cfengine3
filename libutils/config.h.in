@@ -71,6 +71,9 @@
 /* Define to 1 if you have the `closefrom' function. */
 #undef HAVE_CLOSEFROM
 
+/* Define to 1 if you have the <curl/curl.h> header file. */
+#undef HAVE_CURL_CURL_H
+
 /* Define to 1 if you have the declaration of `alarm', and to 0 if you don't.
    */
 #undef HAVE_DECL_ALARM
@@ -445,6 +448,9 @@
 /* Define to 1 if you have the `crypto' library (-lcrypto). */
 #undef HAVE_LIBCRYPTO
 
+/* Define to 1 if you have the `curl' library (-lcurl). */
+#undef HAVE_LIBCURL
+
 /* Define to 1 if you have the `dgc' library (-ldgc). */
 #undef HAVE_LIBDGC
 
@@ -556,6 +562,12 @@
 /* Define to 1 if you have the `mkfifo' function. */
 #undef HAVE_MKFIFO
 
+/* Define to 1 if BSD .msg_accrights supported */
+#undef HAVE_MSGHDR_ACCRIGHTS
+
+/* Define to 1 if SCM_RIGHTS supported */
+#undef HAVE_MSGHDR_MSG_CONTROL
+
 /* Define to 1 if you have the <mysql.h> header file. */
 #undef HAVE_MYSQL_H
 
@@ -582,6 +594,12 @@
 
 /* Define to 1 if you have the <nlist.h> header file. */
 #undef HAVE_NLIST_H
+
+/* Define to 1 if no BSD .msg_accrights support */
+#undef HAVE_NO_MSGHDR_ACCRIGHTS
+
+/* Define to 1 if SCM_RIGHTS support */
+#undef HAVE_NO_MSGHDR_MSG_CONTROL
 
 /* Define to 1 if you have the `openat' function. */
 #undef HAVE_OPENAT

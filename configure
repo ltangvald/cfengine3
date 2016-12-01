@@ -685,6 +685,11 @@ LIBYAML_LDFLAGS
 LIBYAML_CFLAGS
 LIBYAML_CPPFLAGS
 LIBYAML_PATH
+LIBCURL_LIBS
+LIBCURL_LDFLAGS
+LIBCURL_CFLAGS
+LIBCURL_CPPFLAGS
+LIBCURL_PATH
 LIBACL_LIBS
 LIBACL_LDFLAGS
 LIBACL_CFLAGS
@@ -895,6 +900,7 @@ with_openssl
 with_pcre
 with_libvirt
 with_libacl
+with_libcurl
 with_libyaml
 with_libxml2
 enable_largefile
@@ -1589,6 +1595,7 @@ Optional Packages:
   --with-pcre[=PATH]      Specify PCRE path
   --with-libvirt[=PATH]   support virtual machine management
   --with-libacl[=PATH]    Specify libacl path
+  --with-libcurl[=PATH]   Specify libcurl path
   --with-libyaml[=PATH]   Specify libyaml path
   --with-libxml2[=PATH]   Specify libxml2 path
 
@@ -3190,7 +3197,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=cfengine
- VERSION=3.7.4
+ VERSION=3.9.1
 
 
 cat >>confdefs.h <<_ACEOF
@@ -14393,6 +14400,143 @@ done
 
 
 
+# Check whether --with-libcurl was given.
+if test "${with_libcurl+set}" = set; then :
+  withval=$with_libcurl;
+else
+  with_libcurl=check
+fi
+
+
+if test "x$with_libcurl" != xno; then
+
+
+
+  #
+  # Populate ${LIBRARY}_{PATH,CFLAGS,LDFLAGS} according to arguments
+  #
+  if test "x$with_libcurl" != xyes && test "x$with_libcurl" != xcheck && test "x$with_libcurl" != x; then
+    test -z "$LIBCURL_PATH" && LIBCURL_PATH="$with_libcurl"
+    if test "x$with_libcurl" != x/usr && test "x$with_libcurl" != x/; then
+      test -z "$LIBCURL_CFLAGS" && LIBCURL_CFLAGS=""
+      test -z "$LIBCURL_CPPFLAGS" && LIBCURL_CPPFLAGS="-I$with_libcurl/include"
+      test -z "$LIBCURL_LDFLAGS" && LIBCURL_LDFLAGS="-L$with_libcurl/lib"
+    fi
+  else
+    LIBCURL_PATH="default path"
+  fi
+
+  #
+  # Save old environment
+  #
+  save_CFLAGS="$CFLAGS"
+  save_CPPFLAGS="$CPPFLAGS"
+  save_LDFLAGS="$LDFLAGS"
+  save_LIBS="$LIBS"
+
+  CFLAGS="$CFLAGS $LIBCURL_CFLAGS"
+  CPPFLAGS="$CPPFLAGS $LIBCURL_CPPFLAGS"
+  LDFLAGS="$LDFLAGS $LIBCURL_LDFLAGS"
+
+  #
+  # Run checks passed as argument
+  #
+
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for curl_global_init in -lcurl" >&5
+$as_echo_n "checking for curl_global_init in -lcurl... " >&6; }
+if ${ac_cv_lib_curl_curl_global_init+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcurl  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char curl_global_init ();
+int
+main ()
+{
+return curl_global_init ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_curl_curl_global_init=yes
+else
+  ac_cv_lib_curl_curl_global_init=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_curl_curl_global_init" >&5
+$as_echo "$ac_cv_lib_curl_curl_global_init" >&6; }
+if test "x$ac_cv_lib_curl_curl_global_init" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBCURL 1
+_ACEOF
+
+  LIBS="-lcurl $LIBS"
+
+else
+  if test "x$with_libcurl" != xcheck; then as_fn_error $? "Cannot find libcurl library" "$LINENO" 5; fi
+fi
+
+    for ac_header in curl/curl.h
+do :
+  ac_fn_c_check_header_mongrel "$LINENO" "curl/curl.h" "ac_cv_header_curl_curl_h" "$ac_includes_default"
+if test "x$ac_cv_header_curl_curl_h" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_CURL_CURL_H 1
+_ACEOF
+ libcurl_header_found=yes
+fi
+
+done
+
+    if test "x$libcurl_header_found" != "xyes" && test "x$with_libcurl" != xcheck; then as_fn_error $? "Cannot find libcurl library headers" "$LINENO" 5; fi
+
+
+  #
+  # Pick up any libraries added by tests
+  #
+  test -z "$LIBCURL_LIBS" && LIBCURL_LIBS="$LIBS"
+
+  #
+  # libtool understands -R$path, but we are not using libtool in configure
+  # snippets, so -R$path goes to $pkg_LDFLAGS only after autoconf tests
+  #
+  if test "x$with_libcurl" != xyes && test "x$with_libcurl" != xcheck; then
+    if test "x$with_libcurl" != x/usr && test "x$with_libcurl" != x/; then
+      LIBCURL_LDFLAGS="$LIBCURL_LDFLAGS -R$with_libcurl/lib"
+    fi
+  fi
+
+  #
+  # Restore pristine environment
+  #
+  CFLAGS="$save_CFLAGS"
+  CPPFLAGS="$save_CPPFLAGS"
+  LDFLAGS="$save_LDFLAGS"
+  LIBS="$save_LIBS"
+
+
+
+
+
+
+
+ fi
+
+
+
 # Check whether --with-libyaml was given.
 if test "${with_libyaml+set}" = set; then :
   withval=$with_libyaml;
@@ -20965,10 +21109,10 @@ fi
 
 
 
-CORE_CPPFLAGS="$LMDB_CPPFLAGS $TOKYOCABINET_CPPFLAGS $QDBM_CPPFLAGS $PCRE_CPPFLAGS $OPENSSL_CPPFLAGS $SQLITE3_CPPFLAGS $LIBACL_CPPFLAGS $LIBYAML_CPPFLAGS $POSTGRESQL_CPPFLAGS $MYSQL_CPPFLAGS $LIBXML2_CPPFLAGS $CPPFLAGS"
-CORE_CFLAGS="$LMDB_CFLAGS $TOKYOCABINET_CFLAGS $QDBM_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $LIBACL_CFLAGS $LIBYAML_CFLAGS $POSTGRESQL_CFLAGS $MYSQL_CFLAGS $LIBXML2_CFLAGS $CFLAGS"
-CORE_LDFLAGS="$LMDB_LDFLAGS $TOKYOCABINET_LDFLAGS $QDBM_LDFLAGS $PCRE_LDFLAGS $OPENSSL_LDFLAGS $SQLITE3_LDFLAGS $LIBACL_LDFLAGS $LIBYAML_LDFLAGS $POSTGRESQL_LDFLAGS $MYSQL_LDFLAGS $LIBXML2_LDFLAGS $LDFLAGS"
-CORE_LIBS="$LMDB_LIBS $TOKYOCABINET_LIBS $QDBM_LIBS $PCRE_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $LIBACL_LIBS $LIBYAML_LIBS $POSTGRESQL_LIBS $MYSQL_LIBS $LIBXML2_LIBS $LIBS"
+CORE_CPPFLAGS="$LMDB_CPPFLAGS $TOKYOCABINET_CPPFLAGS $QDBM_CPPFLAGS $PCRE_CPPFLAGS $OPENSSL_CPPFLAGS $SQLITE3_CPPFLAGS $LIBACL_CPPFLAGS $LIBCURL_CPPFLAGS $LIBYAML_CPPFLAGS $POSTGRESQL_CPPFLAGS $MYSQL_CPPFLAGS $LIBXML2_CPPFLAGS $CPPFLAGS"
+CORE_CFLAGS="$LMDB_CFLAGS $TOKYOCABINET_CFLAGS $QDBM_CFLAGS $PCRE_CFLAGS $OPENSSL_CFLAGS $SQLITE3_CFLAGS $LIBACL_CFLAGS $LIBCURL_CFLAGS $LIBYAML_CFLAGS $POSTGRESQL_CFLAGS $MYSQL_CFLAGS $LIBXML2_CFLAGS $CFLAGS"
+CORE_LDFLAGS="$LMDB_LDFLAGS $TOKYOCABINET_LDFLAGS $QDBM_LDFLAGS $PCRE_LDFLAGS $OPENSSL_LDFLAGS $SQLITE3_LDFLAGS $LIBACL_LDFLAGS $LIBCURL_LDFLAGS $LIBYAML_LDFLAGS $POSTGRESQL_LDFLAGS $MYSQL_LDFLAGS $LIBXML2_LDFLAGS $LDFLAGS"
+CORE_LIBS="$LMDB_LIBS $TOKYOCABINET_LIBS $QDBM_LIBS $PCRE_LIBS $OPENSSL_LIBS $SQLITE3_LIBS $LIBACL_LIBS $LIBCURL_LIBS $LIBYAML_LIBS $POSTGRESQL_LIBS $MYSQL_LIBS $LIBXML2_LIBS $LIBS"
 
 
 
@@ -21685,6 +21829,34 @@ fi
 
 
 
+ac_fn_c_check_member "$LINENO" "struct msghdr" "msg_control" "ac_cv_member_struct_msghdr_msg_control" "#include <sys/types.h>
+                  #include <sys/socket.h>
+"
+if test "x$ac_cv_member_struct_msghdr_msg_control" = xyes; then :
+
+$as_echo "#define HAVE_MSGHDR_MSG_CONTROL 1" >>confdefs.h
+
+else
+
+$as_echo "#define HAVE_NO_MSGHDR_MSG_CONTROL 1" >>confdefs.h
+
+fi
+
+
+ac_fn_c_check_member "$LINENO" "struct msghdr" "msg_accrights" "ac_cv_member_struct_msghdr_msg_accrights" "#include <sys/types.h>
+                  #include <sys/socket.h>
+"
+if test "x$ac_cv_member_struct_msghdr_msg_accrights" = xyes; then :
+
+$as_echo "#define HAVE_MSGHDR_ACCRIGHTS 1" >>confdefs.h
+
+else
+
+$as_echo "#define HAVE_NO_MSGHDR_ACCRIGHTS 1" >>confdefs.h
+
+fi
+
+
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: " >&5
 $as_echo "" >&6; }
@@ -21752,6 +21924,14 @@ $as_echo "-> libacl: $LIBACL_PATH" >&6; }
 else
   { $as_echo "$as_me:${as_lineno-$LINENO}: result: -> libacl: disabled" >&5
 $as_echo "-> libacl: disabled" >&6; }
+fi
+
+if test "x$ac_cv_lib_curl_curl_global_init" = xyes; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: -> libcurl: $LIBCURL_PATH" >&5
+$as_echo "-> libcurl: $LIBCURL_PATH" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: -> libcurl: disabled" >&5
+$as_echo "-> libcurl: disabled" >&6; }
 fi
 
 if test "x$ac_cv_lib_yaml_yaml_parser_initialize" = xyes; then
@@ -21826,9 +22006,7 @@ $as_echo "-> Statedir: $STATEDIR" >&6; }
 $as_echo "" >&6; }
 
 
-
-
-ac_config_files="$ac_config_files Makefile libcompat/Makefile libutils/Makefile libutils/config.post.h libcfnet/Makefile libenv/Makefile libpromises/Makefile cf-agent/Makefile cf-promises/Makefile cf-execd/Makefile cf-key/Makefile cf-monitord/Makefile cf-upgrade/Makefile cf-runagent/Makefile cf-serverd/Makefile misc/Makefile ext/Makefile examples/Makefile tests/Makefile tests/acceptance/Makefile tests/unit/Makefile tests/load/Makefile"
+ac_config_files="$ac_config_files Makefile libcompat/Makefile libutils/Makefile libutils/config.post.h libcfnet/Makefile libenv/Makefile libpromises/Makefile cf-agent/Makefile cf-promises/Makefile cf-execd/Makefile cf-key/Makefile cf-monitord/Makefile cf-upgrade/Makefile cf-runagent/Makefile cf-serverd/Makefile misc/Makefile ext/Makefile examples/Makefile tests/Makefile tests/acceptance/Makefile tests/acceptance/25_cf-execd/Makefile tests/unit/Makefile tests/load/Makefile"
 
 
 cat >confcache <<\_ACEOF
@@ -22953,6 +23131,7 @@ do
     "examples/Makefile") CONFIG_FILES="$CONFIG_FILES examples/Makefile" ;;
     "tests/Makefile") CONFIG_FILES="$CONFIG_FILES tests/Makefile" ;;
     "tests/acceptance/Makefile") CONFIG_FILES="$CONFIG_FILES tests/acceptance/Makefile" ;;
+    "tests/acceptance/25_cf-execd/Makefile") CONFIG_FILES="$CONFIG_FILES tests/acceptance/25_cf-execd/Makefile" ;;
     "tests/unit/Makefile") CONFIG_FILES="$CONFIG_FILES tests/unit/Makefile" ;;
     "tests/load/Makefile") CONFIG_FILES="$CONFIG_FILES tests/load/Makefile" ;;
 

@@ -59,12 +59,12 @@
 #include <verify_vars.h>
 #include <timeout.h>
 #include <time_classes.h>
-#include <unix_iface.h>
 #include <constants.h>
 #include <ornaments.h>
 #include <cf-windows-functions.h>
 #include <loading.h>
 #include <iteration.h>
+#include <signals.h>
 
 static pthread_once_t pid_cleanup_once = PTHREAD_ONCE_INIT; /* GLOBAL_T */
 
@@ -991,10 +991,6 @@ void GenericAgentInitialize(EvalContext *ctx, GenericAgentConfig *config)
              statedir, FILE_SEPARATOR, FILE_SEPARATOR);
     MakeParentDirectory(ebuff, force);
 
-    snprintf(ebuff, sizeof(ebuff), "%s%cpromise_log%c",
-            statedir, FILE_SEPARATOR, FILE_SEPARATOR);
-    MakeParentDirectory(ebuff, force);
-
     OpenNetwork();
     CryptoInitialize();
 
@@ -1113,7 +1109,7 @@ static bool GeneratePolicyReleaseIDFromGit(char *release_id_out,
             }
             else
             {
-                /* We didnt find a commit sha in .git/HEAD, so we assume the
+                /* We didn't find a commit sha in .git/HEAD, so we assume the
                  * git information is invalid. */
                 git_file = NULL;
             }
@@ -1812,6 +1808,9 @@ GenericAgentConfig *GenericAgentConfigNewDefault(AgentType agent_type, bool tty_
     /* By default we trust the network when bootstrapping. */
     config->agent_specific.agent.bootstrap_trust_server = true;
 
+    /* Log classes */
+    config->agent_specific.agent.report_class_log = false;
+
     switch (agent_type)
     {
     case AGENT_TYPE_COMMON:
@@ -1967,4 +1966,14 @@ bool GenericAgentPostLoadInit(const EvalContext *ctx)
         EvalContextVariableControlCommonGet(ctx, COMMON_CONTROL_TLS_MIN_VERSION);
 
     return cfnet_init(tls_min_version, tls_ciphers);
+}
+
+void SetupSignalsForAgent(void)
+{
+    signal(SIGINT, HandleSignalsForAgent);
+    signal(SIGTERM, HandleSignalsForAgent);
+    signal(SIGHUP, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
+    signal(SIGUSR1, HandleSignalsForAgent);
+    signal(SIGUSR2, HandleSignalsForAgent);
 }

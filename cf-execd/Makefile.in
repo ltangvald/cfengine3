@@ -59,13 +59,20 @@ CONFIG_HEADER = $(top_builddir)/libutils/config.h
 CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 LTLIBRARIES = $(noinst_LTLIBRARIES)
+libcf_execd_test_la_DEPENDENCIES = $(libcf_execd_la_LIBADD)
+am__objects_1 = libcf_execd_test_la-cf-execd.lo \
+	libcf_execd_test_la-cf-execd-runner.lo \
+	libcf_execd_test_la-exec-config.lo \
+	libcf_execd_test_la-execd-config.lo
+am_libcf_execd_test_la_OBJECTS = $(am__objects_1)
+libcf_execd_test_la_OBJECTS = $(am_libcf_execd_test_la_OBJECTS)
+AM_V_lt = $(am__v_lt_@AM_V@)
+am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
+am__v_lt_0 = --silent
 libcf_execd_la_DEPENDENCIES = ../libpromises/libpromises.la
 am_libcf_execd_la_OBJECTS = cf-execd.lo cf-execd-runner.lo \
 	exec-config.lo execd-config.lo
 libcf_execd_la_OBJECTS = $(am_libcf_execd_la_OBJECTS)
-AM_V_lt = $(am__v_lt_@AM_V@)
-am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
-am__v_lt_0 = --silent
 am__installdirs = "$(DESTDIR)$(sbindir)"
 PROGRAMS = $(sbin_PROGRAMS)
 cf_execd_SOURCES = cf-execd.c
@@ -100,8 +107,10 @@ am__v_CCLD_0 = @echo "  CCLD  " $@;
 AM_V_GEN = $(am__v_GEN_@AM_V@)
 am__v_GEN_ = $(am__v_GEN_@AM_DEFAULT_V@)
 am__v_GEN_0 = @echo "  GEN   " $@;
-SOURCES = $(libcf_execd_la_SOURCES) cf-execd.c
-DIST_SOURCES = $(libcf_execd_la_SOURCES) cf-execd.c
+SOURCES = $(libcf_execd_test_la_SOURCES) $(libcf_execd_la_SOURCES) \
+	cf-execd.c
+DIST_SOURCES = $(libcf_execd_test_la_SOURCES) \
+	$(libcf_execd_la_SOURCES) cf-execd.c
 ETAGS = etags
 CTAGS = ctags
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -157,6 +166,11 @@ LIBACL_CPPFLAGS = @LIBACL_CPPFLAGS@
 LIBACL_LDFLAGS = @LIBACL_LDFLAGS@
 LIBACL_LIBS = @LIBACL_LIBS@
 LIBACL_PATH = @LIBACL_PATH@
+LIBCURL_CFLAGS = @LIBCURL_CFLAGS@
+LIBCURL_CPPFLAGS = @LIBCURL_CPPFLAGS@
+LIBCURL_LDFLAGS = @LIBCURL_LDFLAGS@
+LIBCURL_LIBS = @LIBCURL_LIBS@
+LIBCURL_PATH = @LIBCURL_PATH@
 LIBOBJS = @LIBOBJS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
@@ -344,7 +358,7 @@ workdir = @workdir@
 # (COSL) may apply to this file if you as a licensee so wish it. See
 # included file COSL.txt.
 #
-noinst_LTLIBRARIES = libcf-execd.la
+noinst_LTLIBRARIES = libcf-execd.la libcf-execd-test.la
 AM_CPPFLAGS = \
 	$(OPENSSL_CPPFLAGS) \
 	-I$(srcdir)/../libpromises \
@@ -365,6 +379,9 @@ libcf_execd_la_SOURCES = \
         exec-config.c exec-config.h \
         execd-config.c execd-config.h
 
+libcf_execd_test_la_SOURCES = $(libcf_execd_la_SOURCES)
+libcf_execd_test_la_LIBADD = $(libcf_execd_la_LIBADD)
+libcf_execd_test_la_CPPFLAGS = $(AM_CPPFLAGS) -DTEST_CF_EXECD
 @BUILTIN_EXTENSIONS_FALSE@cf_execd_CFLAGS = $(AM_CFLAGS)
 @BUILTIN_EXTENSIONS_FALSE@cf_execd_LDADD = libcf-execd.la
 CLEANFILES = *.gcno *.gcda
@@ -416,6 +433,8 @@ clean-noinstLTLIBRARIES:
 	  echo "rm -f \"$${dir}/so_locations\""; \
 	  rm -f "$${dir}/so_locations"; \
 	done
+libcf-execd-test.la: $(libcf_execd_test_la_OBJECTS) $(libcf_execd_test_la_DEPENDENCIES) $(EXTRA_libcf_execd_test_la_DEPENDENCIES) 
+	$(AM_V_CCLD)$(LINK)  $(libcf_execd_test_la_OBJECTS) $(libcf_execd_test_la_LIBADD) $(LIBS)
 libcf-execd.la: $(libcf_execd_la_OBJECTS) $(libcf_execd_la_DEPENDENCIES) $(EXTRA_libcf_execd_la_DEPENDENCIES) 
 	$(AM_V_CCLD)$(LINK)  $(libcf_execd_la_OBJECTS) $(libcf_execd_la_LIBADD) $(LIBS)
 install-sbinPROGRAMS: $(sbin_PROGRAMS)
@@ -476,6 +495,10 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf_execd-cf-execd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/exec-config.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/execd-config.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libcf_execd_test_la-cf-execd-runner.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libcf_execd_test_la-cf-execd.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libcf_execd_test_la-exec-config.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/libcf_execd_test_la-execd-config.Plo@am__quote@
 
 .c.o:
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(COMPILE) -MT $@ -MD -MP -MF $(DEPDIR)/$*.Tpo -c -o $@ $<
@@ -497,6 +520,34 @@ distclean-compile:
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='$<' object='$@' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LTCOMPILE) -c -o $@ $<
+
+libcf_execd_test_la-cf-execd.lo: cf-execd.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libcf_execd_test_la-cf-execd.lo -MD -MP -MF $(DEPDIR)/libcf_execd_test_la-cf-execd.Tpo -c -o libcf_execd_test_la-cf-execd.lo `test -f 'cf-execd.c' || echo '$(srcdir)/'`cf-execd.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libcf_execd_test_la-cf-execd.Tpo $(DEPDIR)/libcf_execd_test_la-cf-execd.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='cf-execd.c' object='libcf_execd_test_la-cf-execd.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libcf_execd_test_la-cf-execd.lo `test -f 'cf-execd.c' || echo '$(srcdir)/'`cf-execd.c
+
+libcf_execd_test_la-cf-execd-runner.lo: cf-execd-runner.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libcf_execd_test_la-cf-execd-runner.lo -MD -MP -MF $(DEPDIR)/libcf_execd_test_la-cf-execd-runner.Tpo -c -o libcf_execd_test_la-cf-execd-runner.lo `test -f 'cf-execd-runner.c' || echo '$(srcdir)/'`cf-execd-runner.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libcf_execd_test_la-cf-execd-runner.Tpo $(DEPDIR)/libcf_execd_test_la-cf-execd-runner.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='cf-execd-runner.c' object='libcf_execd_test_la-cf-execd-runner.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libcf_execd_test_la-cf-execd-runner.lo `test -f 'cf-execd-runner.c' || echo '$(srcdir)/'`cf-execd-runner.c
+
+libcf_execd_test_la-exec-config.lo: exec-config.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libcf_execd_test_la-exec-config.lo -MD -MP -MF $(DEPDIR)/libcf_execd_test_la-exec-config.Tpo -c -o libcf_execd_test_la-exec-config.lo `test -f 'exec-config.c' || echo '$(srcdir)/'`exec-config.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libcf_execd_test_la-exec-config.Tpo $(DEPDIR)/libcf_execd_test_la-exec-config.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='exec-config.c' object='libcf_execd_test_la-exec-config.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libcf_execd_test_la-exec-config.lo `test -f 'exec-config.c' || echo '$(srcdir)/'`exec-config.c
+
+libcf_execd_test_la-execd-config.lo: execd-config.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT libcf_execd_test_la-execd-config.lo -MD -MP -MF $(DEPDIR)/libcf_execd_test_la-execd-config.Tpo -c -o libcf_execd_test_la-execd-config.lo `test -f 'execd-config.c' || echo '$(srcdir)/'`execd-config.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/libcf_execd_test_la-execd-config.Tpo $(DEPDIR)/libcf_execd_test_la-execd-config.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='execd-config.c' object='libcf_execd_test_la-execd-config.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(libcf_execd_test_la_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o libcf_execd_test_la-execd-config.lo `test -f 'execd-config.c' || echo '$(srcdir)/'`execd-config.c
 
 cf_execd-cf-execd.o: cf-execd.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(cf_execd_CFLAGS) $(CFLAGS) -MT cf_execd-cf-execd.o -MD -MP -MF $(DEPDIR)/cf_execd-cf-execd.Tpo -c -o cf_execd-cf-execd.o `test -f 'cf-execd.c' || echo '$(srcdir)/'`cf-execd.c

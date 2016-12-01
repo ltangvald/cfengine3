@@ -37,7 +37,8 @@ typedef struct
     size_t len;
 } StringRef;
 
-unsigned int StringHash(const char *str, unsigned int seed, unsigned int max);
+unsigned int StringHash        (const char *str, unsigned int seed, unsigned int max);
+unsigned int StringHash_untyped(const void *str, unsigned int seed, unsigned int max);
 
 char ToLower(char ch);
 char ToUpper(char ch);
@@ -61,7 +62,9 @@ char *SafeStringDuplicate(const char *str);
 char *SafeStringNDuplicate(const char *str, size_t size);
 int SafeStringLength(const char *str);
 int StringSafeCompare(const char *a, const char *b);
-bool StringSafeEqual(const char *a, const char *b);
+
+bool StringSafeEqual        (const char *a, const char *b);
+bool StringSafeEqual_untyped(const void *a, const void *b);
 
 char *StringConcatenate(size_t count, const char *first, ...);
 char *StringSubstring(const char *source, size_t source_len, int start, int len);
@@ -194,8 +197,13 @@ bool StringAppendPromise(char *dst, const char *str, size_t n);
 bool StringAppendAbbreviatedPromise(char *dst, const char *str, size_t n, const size_t max_fragment);
 
 char *StringCanonify(char *dst, const char *src);
-bool StringAppendDelimited(char *dst, size_t *dst_len, size_t dst_size,
-                           const char *src, char sep);
 bool PathAppend(char *path, size_t path_size, const char *leaf, char sep);
+
+void StrCat(char *dst, size_t dst_size, size_t *dst_len,
+            const char *src, size_t src_len);
+void StrCatDelim(char *dst, size_t dst_size, size_t *dst_len,
+                 const char *src, char sep);
+
+void CanonifyNameInPlace(char *str);
 
 #endif

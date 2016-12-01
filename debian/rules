@@ -10,12 +10,13 @@ export DEB_BUILD_MAINT_OPTIONS = hardening=+all
 %:
 	dh $@ --with quilt
 
+# TODO(antonio): disable sql in experimental as postgresql is not ready for
+# openssl1.1 transition, re-enable once it becomes ready.
 override_dh_auto_configure:
 	dh_autoreconf
 	./configure 	--prefix=/usr \
 			--with-sql=yes \
-			--with-mysql \
-			--with-postgresql \
+			--without-sql \
 			--with-libvirt \
 			--with-lmdb \
 			--with-libxml2 \

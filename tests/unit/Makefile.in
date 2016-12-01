@@ -53,13 +53,12 @@ check_PROGRAMS = arg_split_test$(EXEEXT) assoc_test$(EXEEXT) \
 	package_versions_compare_test$(EXEEXT) files_lib_test$(EXEEXT) \
 	file_lib_test$(EXEEXT) map_test$(EXEEXT) \
 	parsemode_test$(EXEEXT) parser_test$(EXEEXT) \
-	policy_test$(EXEEXT) sort_test$(EXEEXT) \
-	file_name_test$(EXEEXT) logging_test$(EXEEXT) \
-	logging_timestamp_test$(EXEEXT) granules_test$(EXEEXT) \
-	scope_test$(EXEEXT) conversion_test$(EXEEXT) \
-	files_interfaces_test$(EXEEXT) refcount_test$(EXEEXT) \
-	list_test$(EXEEXT) buffer_test$(EXEEXT) \
-	cf_key_functions_test$(EXEEXT) \
+	passopenfile_test$(EXEEXT) policy_test$(EXEEXT) \
+	sort_test$(EXEEXT) file_name_test$(EXEEXT) \
+	logging_test$(EXEEXT) logging_timestamp_test$(EXEEXT) \
+	granules_test$(EXEEXT) scope_test$(EXEEXT) \
+	conversion_test$(EXEEXT) files_interfaces_test$(EXEEXT) \
+	refcount_test$(EXEEXT) list_test$(EXEEXT) buffer_test$(EXEEXT) \
 	connection_management_test$(EXEEXT) expand_test$(EXEEXT) \
 	string_expressions_test$(EXEEXT) var_expressions_test$(EXEEXT) \
 	process_terminate_unix_test$(EXEEXT) process_test$(EXEEXT) \
@@ -150,8 +149,8 @@ libdb_la_LINK = $(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(libdb_la_CFLAGS) \
 	$(CFLAGS) $(AM_LDFLAGS) $(LDFLAGS) -o $@
 libstr_la_DEPENDENCIES = libtest.la
-am_libstr_la_OBJECTS = buffer.lo encode.lo logging.lo misc_lib.lo \
-	regex.lo sequence.lo string_lib.lo writer.lo
+am_libstr_la_OBJECTS = buffer.lo pcre_wrap.lo encode.lo logging.lo \
+	misc_lib.lo regex.lo sequence.lo string_lib.lo writer.lo
 libstr_la_OBJECTS = $(am_libstr_la_OBJECTS)
 libtest_la_DEPENDENCIES = ../../libcompat/libcompat.la
 am_libtest_la_OBJECTS = cmockery.lo test.lo alloc.lo patches.lo \
@@ -219,12 +218,6 @@ am_buffer_test_OBJECTS = buffer_test-buffer_test.$(OBJEXT) \
 buffer_test_OBJECTS = $(am_buffer_test_OBJECTS)
 buffer_test_LDADD = $(LDADD)
 buffer_test_DEPENDENCIES = ../../libpromises/libpromises.la libtest.la
-am_cf_key_functions_test_OBJECTS = cf_key_functions_test.$(OBJEXT) \
-	cf-key-functions.$(OBJEXT)
-cf_key_functions_test_OBJECTS = $(am_cf_key_functions_test_OBJECTS)
-cf_key_functions_test_LDADD = $(LDADD)
-cf_key_functions_test_DEPENDENCIES = ../../libpromises/libpromises.la \
-	libtest.la
 am_cf_upgrade_test_OBJECTS =  \
 	cf_upgrade_test-cf_upgrade_test.$(OBJEXT) \
 	cf_upgrade_test-alloc-mini.$(OBJEXT) \
@@ -490,6 +483,11 @@ parser_test_SOURCES = parser_test.c
 parser_test_OBJECTS = parser_test.$(OBJEXT)
 parser_test_LDADD = $(LDADD)
 parser_test_DEPENDENCIES = ../../libpromises/libpromises.la libtest.la
+passopenfile_test_SOURCES = passopenfile_test.c
+passopenfile_test_OBJECTS = passopenfile_test.$(OBJEXT)
+passopenfile_test_LDADD = $(LDADD)
+passopenfile_test_DEPENDENCIES = ../../libpromises/libpromises.la \
+	libtest.la
 persistent_lock_test_SOURCES = persistent_lock_test.c
 persistent_lock_test_OBJECTS = persistent_lock_test.$(OBJEXT)
 persistent_lock_test_LDADD = $(LDADD)
@@ -667,9 +665,8 @@ SOURCES = $(cfengine_enterprise_la_SOURCES) $(libdb_la_SOURCES) \
 	$(aix_process_test_SOURCES) alloc_test.c arg_split_test.c \
 	assoc_test.c $(atexit_test_SOURCES) \
 	$(avahi_config_test_SOURCES) $(buffer_test_SOURCES) \
-	$(cf_key_functions_test_SOURCES) $(cf_upgrade_test_SOURCES) \
-	changes_migration_test.c class_test.c \
-	$(connection_management_test_SOURCES) \
+	$(cf_upgrade_test_SOURCES) changes_migration_test.c \
+	class_test.c $(connection_management_test_SOURCES) \
 	$(conversion_test_SOURCES) crypto_symmetric_test.c \
 	$(csv_parser_test_SOURCES) $(csv_writer_test_SOURCES) \
 	$(db_concurrent_test_SOURCES) $(db_test_SOURCES) \
@@ -690,10 +687,10 @@ SOURCES = $(cfengine_enterprise_la_SOURCES) $(libdb_la_SOURCES) \
 	$(mon_load_test_SOURCES) $(mon_processes_test_SOURCES) \
 	mustache_test.c new_packages_promise_test.c \
 	$(package_versions_compare_test_SOURCES) parsemode_test.c \
-	parser_test.c persistent_lock_test.c policy_test.c \
-	$(process_terminate_unix_test_SOURCES) process_test.c \
-	$(protocol_test_SOURCES) $(queue_test_SOURCES) rb-tree-test.c \
-	$(refcount_test_SOURCES) $(regex_test_SOURCES) \
+	parser_test.c passopenfile_test.c persistent_lock_test.c \
+	policy_test.c $(process_terminate_unix_test_SOURCES) \
+	process_test.c $(protocol_test_SOURCES) $(queue_test_SOURCES) \
+	rb-tree-test.c $(refcount_test_SOURCES) $(regex_test_SOURCES) \
 	ring_buffer_test.c $(rlist_test_SOURCES) scope_test.c \
 	sequence_test.c $(set_domainname_test_SOURCES) set_test.c \
 	$(solaris_process_test_SOURCES) $(sort_test_SOURCES) \
@@ -709,9 +706,8 @@ DIST_SOURCES = $(am__cfengine_enterprise_la_SOURCES_DIST) \
 	$(am__aix_process_test_SOURCES_DIST) alloc_test.c \
 	arg_split_test.c assoc_test.c $(atexit_test_SOURCES) \
 	$(am__avahi_config_test_SOURCES_DIST) $(buffer_test_SOURCES) \
-	$(cf_key_functions_test_SOURCES) $(cf_upgrade_test_SOURCES) \
-	changes_migration_test.c class_test.c \
-	$(connection_management_test_SOURCES) \
+	$(cf_upgrade_test_SOURCES) changes_migration_test.c \
+	class_test.c $(connection_management_test_SOURCES) \
 	$(conversion_test_SOURCES) crypto_symmetric_test.c \
 	$(csv_parser_test_SOURCES) $(csv_writer_test_SOURCES) \
 	$(db_concurrent_test_SOURCES) $(db_test_SOURCES) \
@@ -734,10 +730,10 @@ DIST_SOURCES = $(am__cfengine_enterprise_la_SOURCES_DIST) \
 	$(mon_processes_test_SOURCES) mustache_test.c \
 	new_packages_promise_test.c \
 	$(package_versions_compare_test_SOURCES) parsemode_test.c \
-	parser_test.c persistent_lock_test.c policy_test.c \
-	$(process_terminate_unix_test_SOURCES) process_test.c \
-	$(protocol_test_SOURCES) $(queue_test_SOURCES) rb-tree-test.c \
-	$(refcount_test_SOURCES) $(regex_test_SOURCES) \
+	parser_test.c passopenfile_test.c persistent_lock_test.c \
+	policy_test.c $(process_terminate_unix_test_SOURCES) \
+	process_test.c $(protocol_test_SOURCES) $(queue_test_SOURCES) \
+	rb-tree-test.c $(refcount_test_SOURCES) $(regex_test_SOURCES) \
 	ring_buffer_test.c $(rlist_test_SOURCES) scope_test.c \
 	sequence_test.c $(set_domainname_test_SOURCES) set_test.c \
 	$(am__solaris_process_test_SOURCES_DIST) $(sort_test_SOURCES) \
@@ -804,6 +800,11 @@ LIBACL_CPPFLAGS = @LIBACL_CPPFLAGS@
 LIBACL_LDFLAGS = @LIBACL_LDFLAGS@
 LIBACL_LIBS = @LIBACL_LIBS@
 LIBACL_PATH = @LIBACL_PATH@
+LIBCURL_CFLAGS = @LIBCURL_CFLAGS@
+LIBCURL_CPPFLAGS = @LIBCURL_CPPFLAGS@
+LIBCURL_LDFLAGS = @LIBCURL_LDFLAGS@
+LIBCURL_LIBS = @LIBCURL_LIBS@
+LIBCURL_PATH = @LIBCURL_PATH@
 LIBOBJS = @LIBOBJS@
 
 # automake does not support "maude_LIBS" variables. We can only alter
@@ -1028,6 +1029,7 @@ libtest_la_SOURCES = cmockery.c cmockery.h schema.h test.c test.h \
 libtest_la_LIBADD = ../../libcompat/libcompat.la
 libstr_la_SOURCES = \
 	../../libutils/buffer.c \
+	../../libutils/pcre_wrap.c \
 	../../libutils/encode.c \
 	../../libutils/logging.c \
 	../../libutils/misc_lib.c \
@@ -1049,7 +1051,8 @@ libdb_la_LIBADD = libstr.la ../../libutils/libutils.la
 # Make sure that source files are compiled to separate object files libdb_la-file.o
 libdb_la_CFLAGS = $(AM_CFLAGS)
 check_SCRIPTS = bootstrap_inc_uptodate_test.sh \
-	dynamic_dependency_test.sh $(am__append_3)
+	dynamic_dependency_test.sh tar_portability_test.sh \
+	$(am__append_3)
 TESTS = $(check_PROGRAMS) $(check_SCRIPTS)
 
 #
@@ -1073,7 +1076,7 @@ str_test_SOURCES = str_test.c
 str_test_LDADD = libstr.la
 xml_writer_test_SOURCES = xml_writer_test.c ../../libutils/xml_writer.c
 xml_writer_test_LDADD = libtest.la libstr.la
-list_test_SOURCES = list_test.c 
+list_test_SOURCES = list_test.c
 refcount_test_SOURCES = refcount_test.c ../../libutils/refcount.c
 buffer_test_SOURCES = buffer_test.c ../../libutils/buffer.c
 # Workaround for object file basename conflicts, search the web for
@@ -1082,8 +1085,7 @@ buffer_test_CPPFLAGS = $(AM_CPPFLAGS)
 csv_parser_test_SOURCES = csv_parser_test.c ../../libutils/csv_parser.c
 csv_parser_test_LDADD = libtest.la ../../libutils/libutils.la
 regex_test_SOURCES = regex_test.c ../../cf-agent/match_scope.c
-cf_key_functions_test_SOURCES = cf_key_functions_test.c ../../cf-key/cf-key-functions.c
-ipaddress_test_SOURCES = ipaddress_test.c 
+ipaddress_test_SOURCES = ipaddress_test.c
 protocol_test_SOURCES = protocol_test.c \
 	../../cf-serverd/server_common.c \
 	../../cf-serverd/server_tls.c \
@@ -1300,9 +1302,6 @@ avahi_config_test$(EXEEXT): $(avahi_config_test_OBJECTS) $(avahi_config_test_DEP
 buffer_test$(EXEEXT): $(buffer_test_OBJECTS) $(buffer_test_DEPENDENCIES) $(EXTRA_buffer_test_DEPENDENCIES) 
 	@rm -f buffer_test$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(buffer_test_OBJECTS) $(buffer_test_LDADD) $(LIBS)
-cf_key_functions_test$(EXEEXT): $(cf_key_functions_test_OBJECTS) $(cf_key_functions_test_DEPENDENCIES) $(EXTRA_cf_key_functions_test_DEPENDENCIES) 
-	@rm -f cf_key_functions_test$(EXEEXT)
-	$(AM_V_CCLD)$(LINK) $(cf_key_functions_test_OBJECTS) $(cf_key_functions_test_LDADD) $(LIBS)
 cf_upgrade_test$(EXEEXT): $(cf_upgrade_test_OBJECTS) $(cf_upgrade_test_DEPENDENCIES) $(EXTRA_cf_upgrade_test_DEPENDENCIES) 
 	@rm -f cf_upgrade_test$(EXEEXT)
 	$(AM_V_CCLD)$(cf_upgrade_test_LINK) $(cf_upgrade_test_OBJECTS) $(cf_upgrade_test_LDADD) $(LIBS)
@@ -1450,6 +1449,9 @@ parsemode_test$(EXEEXT): $(parsemode_test_OBJECTS) $(parsemode_test_DEPENDENCIES
 parser_test$(EXEEXT): $(parser_test_OBJECTS) $(parser_test_DEPENDENCIES) $(EXTRA_parser_test_DEPENDENCIES) 
 	@rm -f parser_test$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(parser_test_OBJECTS) $(parser_test_LDADD) $(LIBS)
+passopenfile_test$(EXEEXT): $(passopenfile_test_OBJECTS) $(passopenfile_test_DEPENDENCIES) $(EXTRA_passopenfile_test_DEPENDENCIES) 
+	@rm -f passopenfile_test$(EXEEXT)
+	$(AM_V_CCLD)$(LINK) $(passopenfile_test_OBJECTS) $(passopenfile_test_LDADD) $(LIBS)
 persistent_lock_test$(EXEEXT): $(persistent_lock_test_OBJECTS) $(persistent_lock_test_DEPENDENCIES) $(EXTRA_persistent_lock_test_DEPENDENCIES) 
 	@rm -f persistent_lock_test$(EXEEXT)
 	$(AM_V_CCLD)$(LINK) $(persistent_lock_test_OBJECTS) $(persistent_lock_test_LDADD) $(LIBS)
@@ -1559,10 +1561,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/buffer.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/buffer_test-buffer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/buffer_test-buffer_test.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf-key-functions.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf-serverd-enterprise-stubs.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf-serverd-functions.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf_key_functions_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf_upgrade_test-alloc-mini.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf_upgrade_test-cf_upgrade_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cf_upgrade_test-command_line.Po@am__quote@
@@ -1662,7 +1662,9 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/package_versions_compare_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/parsemode_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/parser_test.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/passopenfile_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/patches.Plo@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pcre_wrap.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/persistent_lock_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/policy_test.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/process_aix.Po@am__quote@
@@ -1824,6 +1826,13 @@ buffer.lo: ../../libutils/buffer.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='../../libutils/buffer.c' object='buffer.lo' libtool=yes @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o buffer.lo `test -f '../../libutils/buffer.c' || echo '$(srcdir)/'`../../libutils/buffer.c
+
+pcre_wrap.lo: ../../libutils/pcre_wrap.c
+@am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT pcre_wrap.lo -MD -MP -MF $(DEPDIR)/pcre_wrap.Tpo -c -o pcre_wrap.lo `test -f '../../libutils/pcre_wrap.c' || echo '$(srcdir)/'`../../libutils/pcre_wrap.c
+@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/pcre_wrap.Tpo $(DEPDIR)/pcre_wrap.Plo
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='../../libutils/pcre_wrap.c' object='pcre_wrap.lo' libtool=yes @AMDEPBACKSLASH@
+@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
+@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o pcre_wrap.lo `test -f '../../libutils/pcre_wrap.c' || echo '$(srcdir)/'`../../libutils/pcre_wrap.c
 
 encode.lo: ../../libutils/encode.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(LIBTOOL) $(AM_V_lt) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) --mode=compile $(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT encode.lo -MD -MP -MF $(DEPDIR)/encode.Tpo -c -o encode.lo `test -f '../../libutils/encode.c' || echo '$(srcdir)/'`../../libutils/encode.c
@@ -2111,20 +2120,6 @@ buffer_test-buffer.obj: ../../libutils/buffer.c
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='../../libutils/buffer.c' object='buffer_test-buffer.obj' libtool=no @AMDEPBACKSLASH@
 @AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
 @am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(buffer_test_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o buffer_test-buffer.obj `if test -f '../../libutils/buffer.c'; then $(CYGPATH_W) '../../libutils/buffer.c'; else $(CYGPATH_W) '$(srcdir)/../../libutils/buffer.c'; fi`
-
-cf-key-functions.o: ../../cf-key/cf-key-functions.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT cf-key-functions.o -MD -MP -MF $(DEPDIR)/cf-key-functions.Tpo -c -o cf-key-functions.o `test -f '../../cf-key/cf-key-functions.c' || echo '$(srcdir)/'`../../cf-key/cf-key-functions.c
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/cf-key-functions.Tpo $(DEPDIR)/cf-key-functions.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='../../cf-key/cf-key-functions.c' object='cf-key-functions.o' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o cf-key-functions.o `test -f '../../cf-key/cf-key-functions.c' || echo '$(srcdir)/'`../../cf-key/cf-key-functions.c
-
-cf-key-functions.obj: ../../cf-key/cf-key-functions.c
-@am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -MT cf-key-functions.obj -MD -MP -MF $(DEPDIR)/cf-key-functions.Tpo -c -o cf-key-functions.obj `if test -f '../../cf-key/cf-key-functions.c'; then $(CYGPATH_W) '../../cf-key/cf-key-functions.c'; else $(CYGPATH_W) '$(srcdir)/../../cf-key/cf-key-functions.c'; fi`
-@am__fastdepCC_TRUE@	$(AM_V_at)$(am__mv) $(DEPDIR)/cf-key-functions.Tpo $(DEPDIR)/cf-key-functions.Po
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	$(AM_V_CC)source='../../cf-key/cf-key-functions.c' object='cf-key-functions.obj' libtool=no @AMDEPBACKSLASH@
-@AMDEP_TRUE@@am__fastdepCC_FALSE@	DEPDIR=$(DEPDIR) $(CCDEPMODE) $(depcomp) @AMDEPBACKSLASH@
-@am__fastdepCC_FALSE@	$(AM_V_CC@am__nodep@)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(AM_CFLAGS) $(CFLAGS) -c -o cf-key-functions.obj `if test -f '../../cf-key/cf-key-functions.c'; then $(CYGPATH_W) '../../cf-key/cf-key-functions.c'; else $(CYGPATH_W) '$(srcdir)/../../cf-key/cf-key-functions.c'; fi`
 
 cf_upgrade_test-cf_upgrade_test.o: cf_upgrade_test.c
 @am__fastdepCC_TRUE@	$(AM_V_CC)$(CC) $(DEFS) $(DEFAULT_INCLUDES) $(INCLUDES) $(AM_CPPFLAGS) $(CPPFLAGS) $(cf_upgrade_test_CFLAGS) $(CFLAGS) -MT cf_upgrade_test-cf_upgrade_test.o -MD -MP -MF $(DEPDIR)/cf_upgrade_test-cf_upgrade_test.Tpo -c -o cf_upgrade_test-cf_upgrade_test.o `test -f 'cf_upgrade_test.c' || echo '$(srcdir)/'`cf_upgrade_test.c

@@ -73,6 +73,7 @@ Attributes GetFilesAttributes(const EvalContext *ctx, const Promise *pp)
     attr.transformer = PromiseGetConstraintAsRval(pp, "transformer", RVAL_TYPE_SCALAR);
     attr.move_obstructions = PromiseGetConstraintAsBoolean(ctx, "move_obstructions", pp);
     attr.pathtype = PromiseGetConstraintAsRval(pp, "pathtype", RVAL_TYPE_SCALAR);
+    attr.file_type = PromiseGetConstraintAsRval(pp, "file_type", RVAL_TYPE_SCALAR);
 
     attr.acl = GetAclConstraints(ctx, pp);
     attr.perms = GetPermissionConstraints(ctx, pp);
@@ -208,6 +209,7 @@ Attributes GetExecAttributes(const EvalContext *ctx, const Promise *pp)
     attr.havecontain = PromiseGetConstraintAsBoolean(ctx, "contain", pp);
 
     attr.args = PromiseGetConstraintAsRval(pp, "args", RVAL_TYPE_SCALAR);
+    attr.arglist = PromiseGetConstraintAsList(ctx, "arglist", pp);
     attr.module = PromiseGetConstraintAsBoolean(ctx, "module", pp);
 
 /* Common ("included") */
@@ -1055,9 +1057,11 @@ Packages GetPackageConstraints(const EvalContext *ctx, const Promise *pp)
     {
         /* Check if we have generic package_method. */
         const Policy *policy = PolicyFromPromise(pp);
-        const Body *bp = EvalContextResolveBodyExpression(ctx, policy, "generic", "package_method");
-        if (bp)
+        Seq *bodies_and_args = EvalContextResolveBodyExpression(ctx, policy, "generic", "package_method");; // at position 0 we'll have the body, then its rval, then the same for each of its inherit_from parents
+        if (NULL != bodies_and_args &&
+            SeqLength(bodies_and_args) > 0)
         {
+            const Body *bp = SeqAt(bodies_and_args, 0); // guaranteed to be non-NULL
             CopyBodyConstraintsToPromise((EvalContext*)ctx, (Promise*)pp, bp);
             has_generic_package_method = true;
         }
@@ -1492,6 +1496,24 @@ EditRegion GetRegionConstraints(const EvalContext *ctx, const Promise *pp)
     e.select_end = PromiseGetConstraintAsRval(pp, "select_end", RVAL_TYPE_SCALAR);
     e.include_start = PromiseGetConstraintAsBoolean(ctx, "include_start_delimiter", pp);
     e.include_end = PromiseGetConstraintAsBoolean(ctx, "include_end_delimiter", pp);
+    
+    // set the value based on body agent control
+    char *local_select_end = PromiseGetConstraintAsRval(pp,  "select_end_match_eof", RVAL_TYPE_SCALAR);
+    if (local_select_end != NULL)
+    {
+        if (strcmp(local_select_end, "true") == 0) 
+        {
+            e.select_end_match_eof = true;
+        }
+        else
+        {
+            e.select_end_match_eof = false;
+        }
+    }
+    else
+    {
+        e.select_end_match_eof = EvalContextGetSelectEndMatchEof(ctx);
+    }
     return e;
 }
 

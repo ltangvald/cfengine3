@@ -84,11 +84,18 @@ bundle common G
     any::
       "paths_indices" slist => getindices("paths");
 
+      # dereferenced path of the executable
+      "deref_paths[$(paths[$(paths_indices)])][$(cmds)]" string =>
+          filestat("$(paths[$(paths_indices)])$(const.dirsep)$(cmds)$(exeext)",
+                   "linktarget");
+
   classes:
       # General commands.
-      "$(paths_indices)_$(cmds)$(exeext)" expression => fileexists("$(paths[$(paths_indices)])$(const.dirsep)$(cmds)$(exeext)");
-      "has_$(cmds)"                       expression => fileexists("$(paths[$(paths_indices)])$(const.dirsep)$(cmds)$(exeext)"),
-      scope => "namespace";
+      "$(paths_indices)_$(cmds)$(exeext)" expression =>
+          fileexists("$(deref_paths[$(paths[$(paths_indices)])][$(cmds)])");
+      "has_$(cmds)"                       expression =>
+          fileexists("$(deref_paths[$(paths[$(paths_indices)])][$(cmds)])"),
+          scope => "namespace";
 
       # Special cases.
       "$(paths_indices)_$(make_cmds)$(exeext)" expression => fileexists("$(paths[$(paths_indices)])$(const.dirsep)$(make_cmds)$(exeext)");
@@ -119,22 +126,23 @@ bundle common G
       "temp_declared" not => strcmp(getenv("TEMP", "65536"), "");
 
   vars:
-      "etc" string => "$(this.promise_dirname)$(const.dirsep)dummy_etc";
-      "etc_motd" string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)motd";
-      "etc_passwd" string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)passwd";
-      "etc_shadow" string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)shadow";
-      "etc_group" string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)group";
+      "etc"           string => "$(this.promise_dirname)$(const.dirsep)dummy_etc";
+      "etc_motd"      string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)motd";
+      "etc_passwd"    string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)passwd";
+      "etc_shadow"    string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)shadow";
+      "etc_group"     string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)group";
       # Use instead of /dev/null when you need a real empty file to open.
-      "etc_null" string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)null";
+      "etc_null"      string => "$(this.promise_dirname)$(const.dirsep)dummy_etc$(const.dirsep)null";
+      "write_args_sh" string => "$(this.promise_dirname)/write_args.sh";
 
     temp_declared::
       "testroot" string => getenv("TEMP", "65535");
-      "testdir" string => concat(getenv("TEMP", "65535"), "$(const.dirsep)TEST.cfengine");
+      "testdir" string => concat(getenv("TEMP", "65535"), "$(const.dirsep)TESTDIR.cfengine");
       "testfile" string => concat(getenv("TEMP", "65535"), "$(const.dirsep)TEST.cfengine");
 
     !temp_declared::
       "testroot" string => "$(const.dirsep)tmp";
-      "testdir" string => "$(const.dirsep)tmp$(const.dirsep)TEST.cfengine";
+      "testdir" string => "$(const.dirsep)tmp$(const.dirsep)TESTDIR.cfengine";
       "testfile" string => "$(const.dirsep)tmp$(const.dirsep)TEST.cfengine";
 
   classes:
@@ -161,13 +169,13 @@ END";
 END";
 }
 
-bundle common paths_init(filename)
+bundle agent paths_init(filename)
 {
   classes:
       "filename_absolute" expression => regcmp("/.*", "$(filename)");
 }
 
-bundle common paths_absolute(filename)
+bundle agent paths_absolute(filename)
 {
   vars:
     filename_absolute::
@@ -182,14 +190,19 @@ bundle agent default(filename)
 {
   classes:
       "have_test_run_$(bundles)" expression => "any";
+
   vars:
 
       "tests" slist => { "default:init",
                          "default:test",
-                         "default:check"
+                         "default:check",
+                         "default:destroy"
       };
 
-      "bundles" slist => bundlesmatching("default:(init|test|check)");
+      "bundles" slist => bundlesmatching("default:(init|test|check|destroy)");
+
+  files:
+      "$(G.testdir)/."    create => "true";
 
   methods:
       "any" usebundle => collect_stories_metadata;
@@ -805,6 +818,24 @@ bundle agent generate_key
         create => "true",
         copy_from => dcs_sync("$(this.promise_dirname)/root-MD5=617eb383deffef843ea856b129d0a423.priv");
       "$(sys.workdir)/ppkeys/localhost.pub"
+        create => "true",
+        copy_from => dcs_sync("$(this.promise_dirname)/root-MD5=617eb383deffef843ea856b129d0a423.pub");
+}
+
+bundle agent trust_key
+{
+  classes:
+    nova::
+      "key_exists" expression => fileexists("$(sys.workdir)/ppkeys/root-SHA=ba71659fc294990d4f61ec1734515f89ce24524fbaeebad5b3f76da532da7390.pub");
+    !nova::
+      "key_exists" expression => fileexists("$(sys.workdir)/ppkeys/root-MD5=617eb383deffef843ea856b129d0a423.pub");
+  files:
+    !key_exists.nova::
+      "$(sys.workdir)/ppkeys/root-SHA=ba71659fc294990d4f61ec1734515f89ce24524fbaeebad5b3f76da532da7390.pub"
+        create => "true",
+        copy_from => dcs_sync("$(this.promise_dirname)/root-MD5=617eb383deffef843ea856b129d0a423.pub");
+    !key_exists.!nova::
+      "$(sys.workdir)/ppkeys/root-MD5=617eb383deffef843ea856b129d0a423.pub"
         create => "true",
         copy_from => dcs_sync("$(this.promise_dirname)/root-MD5=617eb383deffef843ea856b129d0a423.pub");
 }

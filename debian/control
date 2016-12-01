@@ -2,9 +2,9 @@ Source: cfengine3
 Section: admin
 Priority: optional
 Maintainer: Antonio Radici <antonio@debian.org>
-Build-Depends: debhelper (>= 7.0.50), autotools-dev, libssl-dev,
- libpq-dev, flex, bison, libpcre3-dev, dh-autoreconf, libvirt-dev, libacl1-dev,
- liblmdb-dev, libmysqlclient-dev, libpq-dev, libxml2-dev, quilt, libpam0g-dev
+Build-Depends: debhelper (>= 7.0.50), autotools-dev, libssl-dev (>= 1.1),
+ flex, bison, libpcre3-dev, dh-autoreconf, libvirt-dev, libacl1-dev,
+ liblmdb-dev, libmysqlclient-dev, libxml2-dev, quilt, libpam0g-dev
 Standards-Version: 3.9.8
 Homepage: http://www.cfengine.org/
 Vcs-Git: https://anonscm.debian.org/git/collab-maint/cfengine3.git

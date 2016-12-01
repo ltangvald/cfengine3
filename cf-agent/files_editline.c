@@ -266,7 +266,7 @@ Bundle *MakeTemporaryBundleFromTemplate(EvalContext *ctx, Policy *policy, Attrib
                 }
 
                 int nl = StripTrailingNewline(promiser, size);
-                assert(nl != -1);
+                CF_ASSERT(nl != -1, "StripTrailingNewline failure");
 
                 np = PromiseTypeAppendPromise(tp, promiser, (Rval) { NULL, RVAL_TYPE_NOPROMISEE }, context, NULL);
                 np->offset.line = lineno;
@@ -387,7 +387,7 @@ static PromiseResult VerifyLineDeletions(EvalContext *ctx, const Promise *pp, Ed
         result = PromiseResultUpdate(result, PROMISE_RESULT_INTERRUPTED);
         return result;
     }
-    if (!end_ptr && a.region.select_end)
+    if (!end_ptr && a.region.select_end && !a.region.select_end_match_eof)
     {
         cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_INTERRUPTED, pp, a,
             "The promised end pattern '%s' was not found when selecting region to delete in '%s'",
@@ -682,6 +682,15 @@ static PromiseResult VerifyLineInsertions(EvalContext *ctx, const Promise *pp, E
              edcontext->filename);
         result = PromiseResultUpdate(result, PROMISE_RESULT_INTERRUPTED);
         return result;
+    }
+    
+    if (!end_ptr && a.region.select_end && !a.region.select_end_match_eof)
+    {
+        cfPS(ctx, LOG_LEVEL_VERBOSE, PROMISE_RESULT_INTERRUPTED, pp, a,
+            "The promised end pattern '%s' was not found when selecting region to insert in '%s'",
+             a.region.select_end, edcontext->filename);
+        result = PromiseResultUpdate(result, PROMISE_RESULT_INTERRUPTED);
+        return false;
     }
 
     if (allow_multi_lines)

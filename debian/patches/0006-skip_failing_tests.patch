@@ -21,7 +21,7 @@ Fails during reproducibility testing on amd64:
  # included file COSL.txt.
  #
 -SUBDIRS = unit load acceptance
-+SUBDIRS = unit load
++SUBDIRS = unit
 --- a/tests/acceptance/01_vars/02_functions/network/008.cf
 +++ /dev/null
 @@ -1,66 +0,0 @@
@@ -140,7 +140,7 @@ Fails during reproducibility testing on amd64:
 -}
 --- a/tests/unit/Makefile.am
 +++ b/tests/unit/Makefile.am
-@@ -98,7 +98,6 @@
+@@ -99,7 +99,6 @@
  	atexit_test \
  	csv_writer_test \
  	item_test \
@@ -148,15 +148,15 @@ Fails during reproducibility testing on amd64:
  	domainname_test \
  	set_test \
  	set_domainname_test \
-@@ -140,7 +139,6 @@
+@@ -142,7 +141,6 @@
  	files_interfaces_test \
  	refcount_test \
  	list_test \
 -	buffer_test \
- 	cf_key_functions_test \
  	connection_management_test \
  	expand_test \
-@@ -157,7 +155,6 @@
+ 	string_expressions_test \
+@@ -158,7 +156,6 @@
  	rb-tree-test \
  	variable_test \
  	protocol_test \
@@ -164,7 +164,7 @@ Fails during reproducibility testing on amd64:
  	mon_load_test \
  	mon_processes_test \
  	mustache_test \
-@@ -217,11 +214,8 @@
+@@ -219,11 +216,8 @@
  conversion_test_SOURCES = conversion_test.c ../../libpromises/conversion.c
  
  if !BUILTIN_EXTENSIONS
