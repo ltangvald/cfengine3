@@ -1,3 +1,11 @@
+cfengine3 (3.9.1-4.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Switch Build-Depends to default-libmysqlclient-dev.  (Closes: #845829)
+  * cfengine3: Add dependency on lsb-base, thanks to lintian.
+
+ -- Andreas Beckmann <anbe@debian.org>  Wed, 18 Jan 2017 15:09:03 +0100
+
 cfengine3 (3.9.1-4) unstable; urgency=medium
 
   * Uploading the experimental package to unstable (Closes: 828263).
