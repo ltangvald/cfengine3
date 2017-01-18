@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Antonio Radici <antonio@debian.org>
 Build-Depends: debhelper (>= 7.0.50), autotools-dev, libssl-dev (>= 1.1),
  flex, bison, libpcre3-dev, dh-autoreconf, libvirt-dev, libacl1-dev,
- liblmdb-dev, libmysqlclient-dev, libxml2-dev, quilt, libpam0g-dev
+ liblmdb-dev, default-libmysqlclient-dev, libxml2-dev, quilt, libpam0g-dev
 Standards-Version: 3.9.8
 Homepage: http://www.cfengine.org/
 Vcs-Git: https://anonscm.debian.org/git/collab-maint/cfengine3.git
@@ -12,7 +12,7 @@ Vcs-Browser: https://anonscm.debian.org/cgit/collab-maint/cfengine3.git
 
 Package: cfengine3
 Architecture: any
-Depends: ${shlibs:Depends}, ${misc:Depends}
+Depends: lsb-base (>= 3.0-6), ${shlibs:Depends}, ${misc:Depends}
 Recommends: python
 Description: tool for configuring and maintaining network machines
  Cfengine is a suite of programs for integrated autonomic management
