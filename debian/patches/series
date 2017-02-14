@@ -6,4 +6,3 @@
 0007-fix_kfreebsd_build.patch
 0009_disable_spelling_errors.patch
 0010_disable_date_annotation.patch
-0011_build_with_openssl_1.1.patch
