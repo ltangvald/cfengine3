@@ -1,0 +1,30 @@
+Description: Disables hanging test tls_generic_test
+ The test case hangs both during the build and when run manually.
+ It is also disabled in Debian Stretch packaging as part of the patch
+ to make it build with SSL 1.1
+Author: Lars Tangvald <lars.tangvald@oracle.com>
+Bug: https://tracker.mender.io/browse/CFE-2584
+Forwarded: not-needed
+Last-Update: 2017-02-14
+
+--- cfengine3-3.9.1.orig/tests/unit/Makefile.am
++++ cfengine3-3.9.1/tests/unit/Makefile.am
+@@ -394,18 +394,6 @@ mon_load_test_LDADD = ../../libpromises/
+ mon_processes_test_SOURCES = mon_processes_test.c ../../cf-monitord/mon.h ../../cf-monitord/mon_processes.c
+ mon_processes_test_LDADD = ../../libpromises/libpromises.la libtest.la
+ 
+-# tls_generic_test uses stub functions interposition which does not work (yet)
+-# under OS X. Another way of stubbing functions from libpromises is needed.
+-if !XNU
+-check_PROGRAMS += tls_generic_test
+-tls_generic_test_SOURCES = tls_generic_test.c
+-tls_generic_test_LDADD = libtest.la \
+-	../../libutils/libutils.la \
+-	../../libpromises/libpromises.la \
+-	../../libcfnet/libcfnet.la \
+-	../../cf-serverd/libcf-serverd.la
+-endif
+-
+ version_test_SOURCES = version_test.c
+ 
+ hash_test_SOURCES = hash_test.c
