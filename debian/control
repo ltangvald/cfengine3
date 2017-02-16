@@ -1,7 +1,8 @@
 Source: cfengine3
 Section: admin
 Priority: optional
-Maintainer: Antonio Radici <antonio@debian.org>
+Maintainer: Ubuntu Developers <ubuntu-devel-discuss@lists.ubuntu.com>
+XSBC-Original-Maintainer: Antonio Radici <antonio@debian.org>
 Build-Depends: debhelper (>= 7.0.50), autotools-dev, libssl-dev (>= 1.0.2g),
  flex, bison, libpcre3-dev, dh-autoreconf, libvirt-dev, libacl1-dev,
  liblmdb-dev, default-libmysqlclient-dev, libxml2-dev, quilt, libpam0g-dev
